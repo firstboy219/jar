@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Create/refresh Nginx Proxy Manager proxy hosts via its API (idempotent per domain).
+# Requests a Let's Encrypt cert when LETSENCRYPT_EMAIL is set in .env.
+# WebSocket upgrade is enabled (BRD §4: proxy_set_header Upgrade/Connection).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+set -a; . ./.env; set +a
+
+API=http://127.0.0.1:81/api
+TOKEN=$(curl -sf -X POST "$API/tokens" -H 'Content-Type: application/json' \
+  -d "{\"identity\":\"$NPM_ADMIN_EMAIL\",\"secret\":\"$NPM_ADMIN_PASSWORD\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+auth=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
+
+# domain -> container:port
+upsert() {
+  local domain=$1 host=$2 port=$3 cert_id=0 ssl=false
+  if [[ -n "${LETSENCRYPT_EMAIL:-}" ]]; then
+    cert_id=$(curl -sf "${auth[@]}" "$API/nginx/certificates" | python3 -c "
+import sys,json
+print(next((c['id'] for c in json.load(sys.stdin) if '$domain' in c['domain_names']), ''))")
+    if [[ -z "$cert_id" ]]; then
+      cert_id=$(curl -sf "${auth[@]}" -X POST "$API/nginx/certificates" -d "{
+        \"provider\":\"letsencrypt\",\"domain_names\":[\"$domain\"],
+        \"meta\":{\"letsencrypt_email\":\"$LETSENCRYPT_EMAIL\",\"letsencrypt_agree\":true,\"dns_challenge\":false}}" \
+        | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+    fi
+    ssl=true
+  fi
+
+  local body="{
+    \"domain_names\":[\"$domain\"],\"forward_scheme\":\"http\",
+    \"forward_host\":\"$host\",\"forward_port\":$port,
+    \"allow_websocket_upgrade\":true,\"block_exploits\":true,\"caching_enabled\":false,
+    \"access_list_id\":0,\"certificate_id\":$cert_id,
+    \"ssl_forced\":$ssl,\"http2_support\":$ssl,\"hsts_enabled\":false,\"hsts_subdomains\":false,
+    \"advanced_config\":\"proxy_read_timeout 3600s;\\nproxy_send_timeout 3600s;\",\"meta\":{},\"locations\":[]}"
+
+  local id
+  id=$(curl -sf "${auth[@]}" "$API/nginx/proxy-hosts" | python3 -c "
+import sys,json
+print(next((h['id'] for h in json.load(sys.stdin) if '$domain' in h['domain_names']), ''))")
+  if [[ -n "$id" ]]; then
+    curl -sf "${auth[@]}" -X PUT "$API/nginx/proxy-hosts/$id" -d "$body" >/dev/null
+  else
+    curl -sf "${auth[@]}" -X POST "$API/nginx/proxy-hosts" -d "$body" >/dev/null
+  fi
+  echo "$domain -> $host:$port (ssl=$ssl)"
+}
+
+# Backend: Hermes OpenAI-compatible API (bearer HERMES_API_KEY required)
+upsert "$BACKEND_DOMAIN" jarvis-brain 8642
+# Frontend (jar1) is added once the web/admin frontend exists.

@@ -1,0 +1,122 @@
+# JARVIS — server stack (Milestone 1)
+# Based on BRD §FSD-2, with these deliberate deviations (see docs/decisions.md):
+#   - all secrets come from .env (never committed)
+#   - image tags are pinned; no :latest
+#   - only 80/443 are public; admin UIs bind to 127.0.0.1 (use an SSH tunnel)
+#   - OpenClaw is deferred; Hermes Agent runs alone first
+#
+# Usage:  cd infra && ./scripts/init-env.sh && docker compose up -d
+
+name: jarvis
+
+networks:
+  jarvis-network:
+    driver: bridge
+
+services:
+  # 1. REVERSE PROXY & SSL TERMINATION
+  nginx-proxy-manager:
+    image: jc21/nginx-proxy-manager:2.16.0
+    container_name: jarvis-proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:81:81" # admin UI: ssh -L 8181:localhost:81
+    volumes:
+      - ./data/npm:/data
+      - ./data/letsencrypt:/etc/letsencrypt
+    networks:
+      - jarvis-network
+
+  # 2. REASONING ENGINE (Hermes Agent, includes Playwright/Chromium)
+  hermes-agent:
+    image: nousresearch/hermes-agent:v0.22.2
+    container_name: jarvis-brain
+    restart: always
+    command: ["gateway", "run"]
+    shm_size: "1gb" # Chromium needs more than the 64MB default; safer than BRD's ipc: host
+    volumes:
+      - ./data/hermes:/opt/data
+      # Cross-app visibility (FS-104), read-only
+      - ./data/npm/logs:/opt/external/proxy_logs:ro
+    environment:
+      - HERMES_UID=${HOST_UID:-1000}
+      - HERMES_GID=${HOST_GID:-1000}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - HERMES_INFERENCE_PROVIDER=openrouter
+      - HERMES_INFERENCE_MODEL=${JARVIS_DEFAULT_MODEL}
+      - JARVIS_CODER_MODEL=${JARVIS_CODER_MODEL}
+      # OpenAI-compatible API, reachable only inside jarvis-network (via the proxy)
+      - API_SERVER_HOST=0.0.0.0
+      - API_SERVER_KEY=${HERMES_API_KEY}
+      - N8N_API_URL=http://jarvis-executor:5678/api/v1
+      - N8N_API_KEY=${N8N_API_KEY}
+      - QDRANT_URL=http://jarvis-memory:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+    networks:
+      - jarvis-network
+    depends_on:
+      - qdrant
+      - n8n
+
+  # 3. WORKFLOW AUTOMATION
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.43.7
+    container_name: jarvis-executor
+    restart: always
+    ports:
+      - "127.0.0.1:5678:5678" # editor UI: ssh -L 5678:localhost:5678
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=jarvis-db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - GENERIC_TIMEZONE=${TZ}
+      - TZ=${TZ}
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_RUNNERS_ENABLED=true
+    volumes:
+      - ./data/n8n:/home/node/.n8n
+    networks:
+      - jarvis-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+
+  # 4. SEMANTIC MEMORY (vector DB)
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    container_name: jarvis-memory
+    restart: always
+    ports:
+      - "127.0.0.1:6333:6333" # dashboard: ssh -L 6333:localhost:6333
+    environment:
+      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
+      - QDRANT__TELEMETRY_DISABLED=true
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    networks:
+      - jarvis-network
+
+  # 5. RELATIONAL PERSISTENCE
+  postgres-db:
+    image: postgres:16.15-alpine
+    container_name: jarvis-db
+    restart: always
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=n8n
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d n8n"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jarvis-network
