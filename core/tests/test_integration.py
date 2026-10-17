@@ -89,10 +89,10 @@ async def test_expired_approval_cannot_be_approved(pool):
 async def test_chat_core_route_and_privacy_gate(pool, monkeypatch):
     from app import chat, hermes
 
-    async def no_hermes(*a, **k):
+    def no_hermes(*a, **k):
         raise AssertionError("must not reach Hermes / cloud")
 
-    monkeypatch.setattr(hermes, "chat", no_hermes)
+    monkeypatch.setattr(hermes, "stream", no_hermes)
     t = await chat.handle("bantuan", "s1", actor="test")
     assert t.route == "core" and "Perintah cepat" in t.reply
     t = await chat.handle("simpan ini ya, password: hunter2", "s1", actor="test")
@@ -107,17 +107,26 @@ async def test_chat_free_text_goes_to_hermes(pool, monkeypatch):
     from app import chat, hermes
 
     async def fake(text, session_id):
-        return hermes.HermesReply("Halo, saya JARVIS.", 100, 5, 42)
+        yield {"type": "thought", "text": "User menyapa."}
+        yield {"type": "tool", "id": "c1", "name": "memory_search", "title": "Mencari di memori",
+               "label": "sapaan", "emoji": "", "status": "running"}
+        yield {"type": "delta", "text": "Halo, saya JARVIS."}
+        yield {"type": "done", "reply": hermes.HermesReply("Halo, saya JARVIS.", 100, 5, 42)}
 
-    monkeypatch.setattr(hermes, "chat", fake)
-    states = []
+    async def no_context(query):
+        return {"type": "context", "source": "memory", "query": query, "items": []}
 
-    async def emit(s):
-        states.append(s)
+    monkeypatch.setattr(hermes, "stream", fake)
+    monkeypatch.setattr(chat, "_memory_context", no_context)
+    events = []
+
+    async def emit(e):
+        events.append(e)
 
     t = await chat.handle("halo", "s2", actor="test", emit=emit)
     assert (t.route, t.reply) == ("hermes", "Halo, saya JARVIS.")
-    assert states == ["thinking", "completed"]
+    assert [e["type"] for e in events] == ["status", "thought", "tool", "context", "delta", "status"]
+    assert events[0]["state"] == "thinking" and events[-1]["state"] == "completed"
     row = await pool.fetchrow("SELECT prompt_tokens, latency_ms FROM messages WHERE role='assistant'")
     assert (row["prompt_tokens"], row["latency_ms"]) == (100, 42)
 

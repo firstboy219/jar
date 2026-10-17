@@ -155,6 +155,35 @@
   {% else %}<p class="hint">Belum ada perangkat.</p>{% endfor %}
 </section>
 
+{% elif tab == 'app' %}
+<section class="card">
+  <h2>Aplikasi Android</h2>
+  {% if releases %}
+  {% set r = releases[0] %}
+  <div class="row">
+    <div><strong>JARVIS {{ r.version }}</strong> <span class="pill completed">terbaru</span><br>
+      <small>{{ r.date[:16]|replace('T',' ') }} UTC · {{ (r.size / 1048576)|round(1) }} MB · build {{ r.code }}</small></div>
+    <a class="button" href="/releases/{{ r.file }}">Download APK</a>
+  </div>
+  {% if r.notes %}<p>{{ r.notes }}</p>{% endif %}
+  <p class="hint">Pasang: buka file APK di HP → izinkan "Instal aplikasi tidak dikenal" untuk browser bila diminta.
+    Lalu buat token di tab <a href="/?tab=devices">Perangkat</a> dan tempel di Pengaturan aplikasi.</p>
+  <details><summary>SHA-256</summary><code>{{ r.sha256 }}</code></details>
+  {% else %}<p class="hint">Belum ada rilis. Build dengan <code>infra/scripts/build-apk.sh &lt;versi&gt; "catatan"</code>.</p>{% endif %}
+</section>
+{% if releases|length > 1 %}
+<section class="card">
+  <h2>Versi sebelumnya</h2>
+  <table>
+    <tr><th>Versi</th><th>Tanggal</th><th>Ukuran</th><th>Catatan</th><th></th></tr>
+    {% for r in releases[1:] %}
+    <tr><td>{{ r.version }} ({{ r.code }})</td><td>{{ r.date[:10] }}</td><td>{{ (r.size / 1048576)|round(1) }} MB</td>
+        <td>{{ r.notes }}</td><td><a href="/releases/{{ r.file }}">download</a></td></tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+
 {% elif tab == 'audit' %}
 <section class="card">
   <h2>Audit log <small>(100 terakhir)</small></h2>

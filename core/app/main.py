@@ -2,7 +2,7 @@
 
 Device API (APK, bearer device token):
   POST /api/v1/chat                {"user_command", "session_id"} -> {"reply", "route"}
-  WS   /ws                         same payload, plus status events (FS-101 downstream)
+  WS   /ws                         same payload, plus live thought/tool/context/delta events (FS-101)
   GET  /api/v1/deepgram/token      short-lived Deepgram token
 Admin API (web admin only: X-Admin-Token, and never through the public proxy):
   /admin/...                       status, approvals, memories, devices, usage, audit
@@ -95,6 +95,7 @@ async def ws(websocket: WebSocket):
     await websocket.accept()
     device = await devices.authenticate(_bearer(websocket.headers.get("authorization")))
     send_lock = asyncio.Lock()
+    tasks: set[asyncio.Task] = set()
 
     async def send(obj: dict) -> None:
         async with send_lock:
@@ -113,17 +114,15 @@ async def ws(websocket: WebSocket):
                 return
             await send({"type": "auth_ok"})
 
-        tasks: set[asyncio.Task] = set()
-
         async def run(cmd: Command) -> None:
-            async def emit(state: str) -> None:
-                await send({"type": "status", "state": state, "session_id": cmd.session_id})
+            async def emit(event: dict) -> None:
+                await send({**event, "session_id": cmd.session_id})
             try:
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
                                          device_id=device["id"], emit=emit)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "session_id": cmd.session_id})
-            except WebSocketDisconnect:
-                pass
+            except (WebSocketDisconnect, RuntimeError):
+                pass  # socket gone mid-turn; the task is cancelled below anyway
             except Exception:
                 log.exception("chat turn failed")
                 await send({"type": "error", "message": "internal error", "session_id": cmd.session_id})
@@ -148,6 +147,11 @@ async def ws(websocket: WebSocket):
             task.add_done_callback(tasks.discard)
     except WebSocketDisconnect:
         pass
+    finally:
+        # Client gone: cancelling closes the Hermes stream, which interrupts the agent run
+        # (no orphaned background turns burning tokens or creating duplicate side effects).
+        for task in list(tasks):
+            task.cancel()
 
 
 # ---------- admin API ----------

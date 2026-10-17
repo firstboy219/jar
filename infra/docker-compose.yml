@@ -42,6 +42,7 @@ services:
     volumes:
       - ./.env:/config/.env
       - ./data/admin:/status:ro
+      - ./data/releases:/releases:ro
     environment:
       - ADMIN_PUBLIC_ORIGIN=https://${FRONTEND_DOMAIN}
     networks:

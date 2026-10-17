@@ -61,9 +61,26 @@ stores devices, messages, approvals, memories and the audit log. Hermes gets too
 risky actions become approval requests, and n8n workflows are created inactive with an activation
 approval (ADR-003). Hermes' API is no longer public; `vis1` points to jarvis-core.
 
+## ADR-009 — Native Android app (Kotlin + Compose) (2026-10-17)
+Owner asked for a native APK (KB suggested Flutter). Stack: Kotlin 2.0, Jetpack Compose (BOM 2024.12),
+OkHttp WebSockets, EncryptedSharedPreferences for the device token, minSdk 26 / target 35.
+- Walkie-talkie screen shows JARVIS' live "thought stream": jarvis-core relays Hermes' streamed reasoning,
+  tool lifecycle and answer deltas over WSS, and re-runs Hermes' memory queries locally to show which
+  memories it is looking at (context cards).
+- Voice: AudioRecord Linear16 16 kHz mono, 100 ms chunks → Deepgram `nova-3` (`language=id`) with a
+  60-second token from jarvis-core; KeepAlive every 5 s (FS-101). Replies are spoken with on-device
+  Android TTS (id-ID) — free and no extra round trip, unlike the BRD's OpenAI TTS.
+- Built in Docker (`infra/android-builder`), signed with a server-side keystore, published to the web admin.
+
+## ADR-010 — Hermes built-in memory disabled (2026-10-17)
+Hermes was writing its own MEMORY.md/USER.md entries alongside the jarvis memory. Two unmanaged stores
+violate "memory is visible/editable by the owner", so `memory.memory_enabled` and
+`user_profile_enabled` are off; all long-term memory goes through the jarvis MCP tools.
+
 ## Known gap — latency vs BR-001
 Measured end-to-end: tier-1 commands ~0.1 s; Hermes turns 6–23 s (cloud model + 13k-token agent prompt +
-tool calls). BR-001's < 1.5 s target is not met for agent answers. Options to evaluate with the APK:
+tool calls). BR-001's < 1.5 s target is not met for agent answers. Since streaming (ADR-009) the first
+visible sign of thinking arrives in ~3 s and the answer streams as it is written. Options to evaluate with the APK:
 stream partial text over WSS, a faster tier-2 model, prompt caching, trimming Hermes toolsets.
 
 ## Known risk

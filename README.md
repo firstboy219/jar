@@ -14,6 +14,7 @@ APK ──wss/https──▶ jarvis-core (vis1)
 
 ## Layout
 ```
+android/                native APK (Kotlin + Jetpack Compose): walkie-talkie with live thought stream, chat, settings
 core/                   jarvis-core (FastAPI) + jarvis-tools (MCP server for Hermes), tests
 infra/                  Docker Compose stack for the Lightsail server
   docker-compose.yml
@@ -21,6 +22,8 @@ infra/                  Docker Compose stack for the Lightsail server
   scripts/init-env.sh   creates .env with random secrets
   scripts/npm-proxy-hosts.sh  configures Nginx Proxy Manager hosts (+ Let's Encrypt)
   scripts/test-core.sh  runs core tests against throwaway Postgres + Qdrant
+  scripts/build-apk.sh  tests, builds, signs and publishes an APK release (→ web admin "Aplikasi")
+  android-builder/      Docker image with JDK 17 + Android SDK 35 (no Android Studio needed)
   hermes/               Hermes persona (SOUL.md) + config sync on container start
   admin/                web admin (jar1)
   data/                 container volumes (git-ignored)
@@ -69,9 +72,24 @@ curl https://vis1.cosger.online/api/v1/chat -H "Authorization: Bearer jdv_…" \
 ```
 Or use **Tes chat** on the admin dashboard.
 
+## Android app
+```bash
+sudo infra/scripts/build-apk.sh 0.2.0 "Catatan rilis"   # unit + screenshot tests, signed release
+```
+Releases land in `infra/data/releases/` and appear in the web admin → **Aplikasi** (download needs the
+admin login). Install on the phone, create a device token in **Perangkat**, paste it in the app's
+**Pengaturan**. The signing keystore is `infra/data/android/release.keystore` (password
+`ANDROID_KEYSTORE_PASSWORD` in `.env`) — it is in the nightly backup; **losing it means the app can no
+longer be updated in place**.
+
+UI is checked without an emulator via Paparazzi screenshots (`android/app/src/test/snapshots/images/`);
+after an intentional UI change, re-record with `./gradlew recordPaparazziDebug` inside the builder.
+
 ## Tests
 `sudo infra/scripts/test-core.sh` — unit + integration tests (approvals, devices, privacy gate, routing,
 memory with real embeddings) against throwaway containers; never touches live data.
+Android: protocol parsing, turn-state reducer, WebSocket auto-reconnect (MockWebServer), TTS text cleanup,
+and screenshot tests — run by `build-apk.sh`.
 
 ## Operations
 - Logs: `docker compose logs -f <service>`; Hermes: `infra/data/hermes/logs/`

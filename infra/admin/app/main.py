@@ -6,13 +6,14 @@ Everything else goes through jarvis-core's internal /admin API (X-Admin-Token fr
 This container has no Docker socket and no database access.
 """
 
+import json
 import os
 import re
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -21,6 +22,8 @@ from .envfile import EnvFile
 
 ENV = EnvFile(os.getenv("JARVIS_ENV_FILE", "/config/.env"))
 APPLY_LOG = Path(os.getenv("JARVIS_APPLY_LOG", "/status/apply.log"))
+RELEASES = Path(os.getenv("JARVIS_RELEASES", "/releases"))  # written by infra/scripts/build-apk.sh
+APK_NAME = re.compile(r"^jarvis-\d+\.\d+\.\d+\.apk$")
 PUBLIC_ORIGIN = os.getenv("ADMIN_PUBLIC_ORIGIN", "")
 COOKIE = "jarvis_admin"
 CORE = "http://jarvis-core:8000"
@@ -42,7 +45,7 @@ SETTINGS = [
      "Untuk voice di APK. APK hanya menerima token berumur pendek dari server."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"),
-        ("devices", "Perangkat"), ("audit", "Audit"), ("settings", "Pengaturan")]
+        ("devices", "Perangkat"), ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
 
@@ -91,6 +94,14 @@ def mask(value: str) -> str:
     return f"••••{value[-4:]}" if len(value) > 8 else ("••••" if value else "")
 
 
+def load_releases() -> list[dict]:
+    try:
+        releases = json.loads((RELEASES / "releases.json").read_text())
+    except (OSError, ValueError):
+        return []
+    return [r for r in releases if APK_NAME.match(r.get("file", ""))]
+
+
 def apply_log_tail(lines: int = 8) -> str:
     try:
         return "\n".join(APPLY_LOG.read_text().splitlines()[-lines:])
@@ -114,6 +125,8 @@ async def _tab_data(tab: str, request: Request) -> dict:
         return {"devices": await core("GET", "/admin/devices")}
     if tab == "audit":
         return {"events": await core("GET", "/admin/audit")}
+    if tab == "app":
+        return {"releases": load_releases()}
     if tab == "settings":
         env = ENV.read()
         return {"fields": [{"key": k, "label": label, "secret": secret, "help": help_,
@@ -305,6 +318,16 @@ async def chat(request: Request, message: str = Form(...)):
     except CoreError as e:
         reply = f"[error] {e}"
     return await render(request, "dashboard", chat_message=message, chat_reply=reply)
+
+
+@app.get("/releases/{name}")
+async def download_release(request: Request, name: str):
+    """APK download for the owner (session required; never a public link)."""
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
+    if not APK_NAME.match(name) or name not in {r["file"] for r in load_releases()}:
+        return HTMLResponse("Not found", status_code=404)
+    return FileResponse(RELEASES / name, media_type="application/vnd.android.package-archive", filename=name)
 
 
 @app.get("/healthz")

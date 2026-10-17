@@ -90,6 +90,17 @@ def test_extract_json_from_fenced_reply():
     assert _extract_json('Berikut:\n```json\n{"name": "x", "nodes": []}\n```') == {"name": "x", "nodes": []}
 
 
+def test_parse_sse_frames():
+    assert hermes.parse_sse(['event: hermes.tool.progress', 'data: {"tool": "x"}']) == ("hermes.tool.progress", {"tool": "x"})
+    assert hermes.parse_sse(['data: [DONE]']) == (None, None)
+    assert hermes.parse_sse(['data: {"choices": []}']) == (None, {"choices": []})
+
+
+def test_tool_event_friendly_name():
+    ev = hermes.tool_event({"tool": "mcp__jarvis__memory_search", "label": "proyek", "toolCallId": "c", "status": "running"})
+    assert ev["name"] == "memory_search" and ev["title"] == "Mencari di memori" and ev["label"] == "proyek"
+
+
 def test_hermes_session_header_sanitized():
     assert hermes.session_header("abc/../../etc") == "jarvis-abc....etc"
     assert len(hermes.session_header("x" * 500)) == len("jarvis-") + 64

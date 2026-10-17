@@ -26,6 +26,13 @@ if env("JARVIS_EXPERT_MODEL"):
 delegation["max_concurrent_children"] = 2
 delegation["subagent_auto_approve"] = False  # dangerous commands in subagents are denied, never auto-run
 
+# Long-term memory lives in jarvis-core (Postgres + Qdrant), reached via the jarvis MCP tools.
+# Hermes' built-in MEMORY.md/USER.md would be a second, unmanaged source of truth.
+mem = cfg.setdefault("memory", {})
+mem["memory_enabled"] = False
+mem["user_profile_enabled"] = False
+mem["nudge_interval"] = 0
+
 # Bound one turn's cost/time (default 500 tool-calling iterations).
 cfg.setdefault("agent", {})["max_turns"] = 30
 

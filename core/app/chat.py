@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from . import approvals, audit, db, hermes, memory, n8n, sensitive, status
 from .router import HELP, Intent, parse
 
-Emit = Callable[[str], Awaitable[None]]  # agent status updates for the UI: thinking, executing, ...
+# Live events for the UI (WSS): {"type": "status"|"thought"|"tool"|"context"|"delta", ...}
+Emit = Callable[[dict], Awaitable[None]]
 
 
 @dataclass
@@ -54,6 +55,16 @@ async def _run_intent(intent: Intent, actor: str) -> str:
     raise ValueError(intent.name)
 
 
+async def _memory_context(query: str) -> dict:
+    """What Hermes is looking at: re-run its memory query locally (CPU embeddings, cheap) for the UI."""
+    try:
+        hits = await memory.search(query, limit=4)
+    except Exception:
+        hits = []
+    return {"type": "context", "source": "memory", "query": query,
+            "items": [{"text": m["text"][:240], "category": m["category"], "score": m["score"]} for m in hits]}
+
+
 async def _log(session_id: str, device_id, role: str, content: str, route: str, **kw) -> None:
     await db.pool().execute(
         """INSERT INTO messages (session_id, device_id, role, content, route, model,
@@ -64,9 +75,12 @@ async def _log(session_id: str, device_id, role: str, content: str, route: str, 
 
 
 async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None) -> Turn:
-    async def say(state: str) -> None:
+    async def send(event: dict) -> None:
         if emit:
-            await emit(state)
+            await emit(event)
+
+    async def say(state: str) -> None:
+        await send({"type": "status", "state": state})
 
     text = text.strip()
     intent = parse(text)
@@ -92,7 +106,14 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
     else:
         await say("thinking")
         try:
-            r = await hermes.chat(text, session_id)
+            r = None
+            async for ev in hermes.stream(text, session_id):
+                if ev["type"] == "done":
+                    r = ev["reply"]
+                    continue
+                await send(ev)
+                if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
+                    await send(await _memory_context(ev["label"]))
             await _log(session_id, device_id, "assistant", r.text, "hermes", model="hermes-agent",
                        prompt_tokens=r.prompt_tokens, completion_tokens=r.completion_tokens,
                        latency_ms=r.latency_ms)

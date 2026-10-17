@@ -20,6 +20,7 @@ sed \
   -e "s|^JARVIS_DB_PASSWORD=$|JARVIS_DB_PASSWORD=$(gen)|" \
   -e "s|^CORE_ADMIN_TOKEN=$|CORE_ADMIN_TOKEN=$(gen)|" \
   -e "s|^MCP_TOKEN=$|MCP_TOKEN=$(gen)|" \
+  -e "s|^ANDROID_KEYSTORE_PASSWORD=$|ANDROID_KEYSTORE_PASSWORD=$(gen)|" \
   -e "s|^HOST_UID=.*|HOST_UID=$(id -u)|" \
   -e "s|^HOST_GID=.*|HOST_GID=$(id -g)|" \
   .env.example > .env

@@ -3,7 +3,7 @@
 # Produces infra/backups/<timestamp>/ with:
 #   postgres.sql.gz   pg_dumpall (n8n + jarvis databases)
 #   qdrant.snapshot   full-storage snapshot downloaded through the Qdrant API
-#   files.tar.gz      hermes, n8n, npm, letsencrypt data + .env (secrets! dir is mode 700)
+#   files.tar.gz      hermes, n8n, npm, letsencrypt data, APK signing keystore + releases, .env (secrets! mode 700)
 # Keeps the newest $KEEP backups. Restore steps: README.md → "Backup & restore".
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,7 +28,8 @@ log "files"
 tar -czf "$DEST/files.tar.gz" \
   --exclude='data/hermes/cache' --exclude='data/hermes/image_cache' --exclude='data/hermes/audio_cache' \
   --exclude='data/hermes/logs' --exclude='data/npm/logs' --exclude='*.sock' \
-  .env data/hermes data/n8n data/npm data/letsencrypt
+  --exclude='data/android/gradle-cache' \
+  .env data/hermes data/n8n data/npm data/letsencrypt data/android data/releases
 
 log "prune (keep $KEEP)"
 ls -1dt backups/*/ | tail -n +$((KEEP + 1)) | xargs -r rm -rf

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Arc-reactor style mark: outer ring, inner ring, core. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#FF39C6FF" android:strokeWidth="3"
+        android:pathData="M54,26 a28,28 0 1,0 0.01,0 Z" />
+    <path android:strokeColor="#9939C6FF" android:strokeWidth="2"
+        android:pathData="M54,36 a18,18 0 1,0 0.01,0 Z" />
+    <path android:fillColor="#FFB8ECFF"
+        android:pathData="M54,46 a8,8 0 1,0 0.01,0 Z" />
+</vector>

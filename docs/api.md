@@ -16,13 +16,21 @@ Client → server
 ```
 `session_id`: stable per conversation (Hermes keeps history per id). Max 128 chars; `user_command` max 8000.
 
-Server → client
+Server → client (live "thought stream" while Hermes works, then the reply)
 ```json
-{"type": "status", "state": "thinking|executing|completed|failed", "session_id": "…"}
-{"type": "reply", "text": "…", "route": "core|hermes|blocked|error", "session_id": "…"}
-{"type": "error", "message": "…", "session_id": "…"}
+{"type": "status",  "state": "thinking|executing|completed|failed", "session_id": "…"}
+{"type": "thought", "text": "The user is asking…", "session_id": "…"}            // reasoning delta
+{"type": "tool",    "id": "call_…", "name": "memory_search", "title": "Mencari di memori",
+                    "label": "proyek autotoko", "emoji": "⚡", "status": "running|completed", "session_id": "…"}
+{"type": "context", "source": "memory", "query": "proyek autotoko",
+                    "items": [{"text": "…", "category": "project", "score": 0.82}], "session_id": "…"}
+{"type": "delta",   "text": "Autotoko minggu…", "session_id": "…"}               // answer delta
+{"type": "reply",   "text": "…full answer…", "route": "core|hermes|blocked|error", "session_id": "…"}
+{"type": "error",   "message": "…", "session_id": "…"}
 {"type": "pong"}
 ```
+`reply` is authoritative (it may differ slightly from the concatenated deltas). Closing the socket
+mid-turn cancels the agent run on the server.
 Several commands may be in flight on one socket; match replies by `session_id`.
 Fail-safe auto-reconnect (BRD §4): reconnect with exponential backoff (1 s → 30 s) on any close except 4401,
 send `ping` every 20 s, and treat 2 missed `pong`s as a dead connection.
