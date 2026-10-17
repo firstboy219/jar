@@ -17,7 +17,7 @@ import logging
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from . import approvals, audit, chat, db, deepgram, devices, memory, status, usage
+from . import approvals, audit, chat, db, deepgram, devices, hub, memory, reports, status, usage, workers
 from .config import settings
 from .location import Location
 
@@ -31,11 +31,20 @@ async def lifespan(app: FastAPI):
         await memory.ensure_collection()
     except Exception as e:  # Qdrant down must not keep chat from starting
         log.warning("memory collection not ready: %s", e)
+    resumed = await workers.resume_after_restart()
+    if resumed:
+        log.info("resumed %d interrupted worker task(s)", resumed)
+    ticker = asyncio.create_task(reports.run_forever())
     yield
+    ticker.cancel()
     await db.close()
 
 
 app = FastAPI(title="JARVIS core", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def jsonable(obj):
+    return json.loads(json.dumps(obj, default=str))
 
 
 # ---------- auth ----------
@@ -98,6 +107,7 @@ async def ws(websocket: WebSocket):
     device = await devices.authenticate(_bearer(websocket.headers.get("authorization")))
     send_lock = asyncio.Lock()
     tasks: set[asyncio.Task] = set()
+    client_id: int | None = None
 
     async def send(obj: dict) -> None:
         async with send_lock:
@@ -115,6 +125,10 @@ async def ws(websocket: WebSocket):
                 await websocket.close(code=4401)
                 return
             await send({"type": "auth_ok"})
+
+        client_id = hub.register(send)
+        await send({"type": "tasks", "items": jsonable(await workers.active())})
+        await reports.on_connect(send)
 
         async def run(cmd: Command) -> None:
             async def emit(event: dict) -> None:
@@ -136,8 +150,21 @@ async def ws(websocket: WebSocket):
             except ValueError:
                 await send({"type": "error", "message": "invalid JSON"})
                 continue
-            if msg.get("type") == "ping":
+            kind = msg.get("type")
+            if kind == "ping":
                 await send({"type": "pong"})
+                continue
+            if kind in ("ack", "report_spoken", "cancel_task"):
+                try:
+                    ref = int(msg.get("report_id") or msg.get("task_id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if kind == "ack":
+                    await reports.acknowledge([ref], "tap")
+                elif kind == "report_spoken":
+                    await reports.spoken(ref)
+                else:
+                    await workers.cancel(ref, f"device:{device['name']}")
                 continue
             try:
                 cmd = Command(user_command=msg.get("user_command", ""), session_id=msg.get("session_id", ""),
@@ -151,8 +178,9 @@ async def ws(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
-        # Client gone: cancelling closes the Hermes stream, which interrupts the agent run
-        # (no orphaned background turns burning tokens or creating duplicate side effects).
+        if client_id is not None:
+            hub.unregister(client_id)
+        # Client gone: abandon the main-agent turns in flight. Workers are independent and keep going.
         for task in list(tasks):
             task.cancel()
 
@@ -248,6 +276,21 @@ async def admin_device_revoke(device_id: str, actor: str = admin):
 @app.get("/admin/usage")
 async def admin_usage(_: str = admin):
     return {"local": await usage.local_summary(), "openrouter": await usage.openrouter_summary()}
+
+
+@app.get("/admin/tasks")
+async def admin_tasks(_: str = admin):
+    return {"tasks": await workers.recent(), "reports": await reports.recent()}
+
+
+@app.post("/admin/tasks/{task_id}/cancel")
+async def admin_task_cancel(task_id: int, actor: str = admin):
+    return {"cancelled": await workers.cancel(task_id, actor)}
+
+
+@app.post("/admin/reports/{report_id}/ack")
+async def admin_report_ack(report_id: int, actor: str = admin):
+    return {"acknowledged": await reports.acknowledge([report_id], "admin")}
 
 
 @app.get("/admin/audit")

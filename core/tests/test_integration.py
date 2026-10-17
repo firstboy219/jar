@@ -103,32 +103,117 @@ async def test_chat_core_route_and_privacy_gate(pool, monkeypatch):
     assert "hunter2" not in " ".join(logged)
 
 
-async def test_chat_free_text_goes_to_hermes(pool, monkeypatch):
-    from app import chat, hermes
+def _fake_llm(monkeypatch, script):
+    """script: list of rounds; each round = (text, [(tool_name, args), ...])."""
+    from app import llm
+    rounds = iter(script)
 
-    async def fake(text, session_id):
-        yield {"type": "thought", "text": "User menyapa."}
-        yield {"type": "tool", "id": "c1", "name": "memory_search", "title": "Mencari di memori",
-               "label": "sapaan", "emoji": "", "status": "running"}
-        yield {"type": "delta", "text": "Halo, saya JARVIS."}
-        yield {"type": "done", "reply": hermes.HermesReply("Halo, saya JARVIS.", 100, 5, 42)}
+    async def fake_stream(messages, tools=None, model=None, max_tokens=400, temperature=0.6):
+        text, calls = next(rounds)
+        if text:
+            yield {"type": "delta", "text": text}
+        yield {"type": "done", "completion": llm.Completion(
+            text=text, tool_calls=[llm.ToolCall(f"c{i}", n, a) for i, (n, a) in enumerate(calls)],
+            prompt_tokens=50, completion_tokens=5)}
 
-    async def no_context(query):
-        return {"type": "context", "source": "memory", "query": query, "items": []}
+    async def fake_complete(messages, model=None, max_tokens=300):
+        return "Harga emas Antam hari ini Rp1,9 juta per gram. Sudah kedengaran?"
 
-    monkeypatch.setattr(hermes, "stream", fake)
-    monkeypatch.setattr(chat, "_memory_context", no_context)
+    monkeypatch.setattr(llm, "stream_chat", fake_stream)
+    monkeypatch.setattr(llm, "complete", fake_complete)
+
+
+async def _no_memory(*a, **k):
+    return []
+
+
+async def test_main_agent_answers_without_workers(pool, monkeypatch):
+    from app import chat, hermes, memory
+    monkeypatch.setattr(memory, "search", _no_memory)
+    monkeypatch.setattr(hermes, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no worker")))
+    _fake_llm(monkeypatch, [("Kopi, biar melek.", [])])
     events = []
 
     async def emit(e):
         events.append(e)
 
-    t = await chat.handle("halo", "s2", actor="test", emit=emit)
-    assert (t.route, t.reply) == ("hermes", "Halo, saya JARVIS.")
-    assert [e["type"] for e in events] == ["status", "thought", "tool", "context", "delta", "status"]
-    assert events[0]["state"] == "thinking" and events[-1]["state"] == "completed"
-    row = await pool.fetchrow("SELECT prompt_tokens, latency_ms FROM messages WHERE role='assistant'")
-    assert (row["prompt_tokens"], row["latency_ms"]) == (100, 42)
+    t = await chat.handle("kopi atau teh?", "s2", actor="test", emit=emit)
+    assert (t.route, t.reply) == ("assistant", "Kopi, biar melek.")
+    assert [e["type"] for e in events] == ["status", "delta", "status"]
+
+
+async def test_delegation_runs_worker_and_reports_back(pool, monkeypatch):
+    import asyncio
+    from app import chat, hermes, hub, memory, reports, workers
+    hub.reset()
+    monkeypatch.setattr(memory, "search", _no_memory)
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    hub.register(phone)
+    worker_prompts = []
+
+    async def fake_worker(text, session_id):
+        worker_prompts.append((text, session_id))
+        yield {"type": "thought", "text": "Cari harga emas."}
+        yield {"type": "done", "reply": hermes.HermesReply("Antam Rp1.900.000/gram (logammulia.com)", 900, 40, 5)}
+
+    monkeypatch.setattr(hermes, "stream", fake_worker)
+    # round 1: tool call without text -> round 2: the spoken sentence
+    _fake_llm(monkeypatch, [("", [("spawn_task", {"title": "Cek harga emas", "instruction": "Cari harga emas Antam hari ini"})]),
+                            ("Siap, lagi aku cek ya.", [])])
+
+    t = await chat.handle("cek harga emas antam dong", "s3", actor="test")
+    assert t.reply == "Siap, lagi aku cek ya."  # the owner gets an answer before the work is done
+    for _ in range(50):
+        if any(e["type"] == "report" for e in pushed):
+            break
+        await asyncio.sleep(0.05)
+    assert worker_prompts[0][1] == "task-1" and "WORKER JARVIS" in worker_prompts[0][0]
+    task = await pool.fetchrow("SELECT status, result FROM tasks WHERE id = 1")
+    assert (task["status"], task["result"]) == ("completed", "Antam Rp1.900.000/gram (logammulia.com)")
+    kinds = [e["type"] for e in pushed]
+    assert kinds[:2] == ["task", "task"] and "task_event" in kinds and kinds[-1] == "report"
+    report = pushed[-1]
+    assert report["text"].startswith("Harga emas Antam") and report["attempt"] == 1
+    assert (await reports.unconfirmed())[0]["status"] == "pending"
+    hub.reset()
+
+
+async def test_report_repeats_until_acknowledged_then_gives_up(pool, monkeypatch):
+    from app import config, hub, reports
+    hub.reset()
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    monkeypatch.setattr(config.settings, "report_ack_timeout_s", 0)
+    r = await reports._create(None, "s4", "Laporan uji.")
+    hub.register(phone)
+    for attempt in range(1, 4):
+        await reports.spoken(r["id"])           # phone said it out loud
+        reports._last_sent.clear()              # pretend enough time passed
+        await pool.execute("UPDATE reports SET delivered_at = now() - interval '1 second' WHERE id = $1", r["id"])
+        await reports.tick()
+    row = await pool.fetchrow("SELECT status, attempts FROM reports WHERE id = $1", r["id"])
+    assert (row["status"], row["attempts"]) == ("unheard", 3)
+    assert [e.get("repeat") for e in pushed if e["type"] == "report"] == [True, True]
+    assert pushed[-1] == {"type": "report_unheard", "id": r["id"]}
+    hub.reset()
+
+
+async def test_voice_acknowledgement_via_main_agent(pool, monkeypatch):
+    from app import chat, memory, reports
+    monkeypatch.setattr(memory, "search", _no_memory)
+    r = await reports._create(None, "s5", "Server aman semua.")
+    await reports.spoken(r["id"])
+    _fake_llm(monkeypatch, [("Sip.", [("acknowledge_reports", {"report_ids": [r["id"]]})])])
+    await chat.handle("oke makasih", "s5", actor="test")
+    row = await pool.fetchrow("SELECT status, acked_by FROM reports WHERE id = $1", r["id"])
+    assert (row["status"], row["acked_by"]) == ("acknowledged", "voice")
 
 
 @pytest.mark.skipif(not os.getenv("TEST_QDRANT_URL"), reason="needs TEST_QDRANT_URL")
@@ -170,7 +255,7 @@ async def test_n8n_draft_is_idempotent_while_pending(pool, monkeypatch):
 
 
 async def test_location_whereami_and_agent_context(pool, monkeypatch):
-    from app import chat, hermes
+    from app import chat
     from app.location import Location, last
 
     t = await chat.handle("di mana saya", "s9", actor="test")
@@ -181,15 +266,18 @@ async def test_location_whereami_and_agent_context(pool, monkeypatch):
     assert "Kelapa Gading" in t.reply and "maps.google.com" in t.reply
     assert (await last())["address"] == "Kelapa Gading, Jakarta Utara"
 
+    from app import llm, memory
     seen = {}
 
-    async def fake(text, session_id):
-        seen["text"] = text
-        yield {"type": "done", "reply": hermes.HermesReply("Cerah.", 1, 1, 1)}
+    async def fake(messages, tools=None, model=None, max_tokens=400, temperature=0.6):
+        seen["situation"] = messages[1]["content"]
+        seen["user"] = messages[-1]["content"]
+        yield {"type": "done", "completion": llm.Completion(text="Cerah.")}
 
-    monkeypatch.setattr(hermes, "stream", fake)
+    monkeypatch.setattr(llm, "stream_chat", fake)
+    monkeypatch.setattr(memory, "search", _no_memory)
     await chat.handle("cuaca di sini gimana?", "s9", actor="test", location=loc)
-    assert seen["text"].startswith("[Konteks perangkat") and "Kelapa Gading" in seen["text"]
-    assert seen["text"].endswith("cuaca di sini gimana?")
+    assert seen["situation"].startswith("[Konteks perangkat") and "Kelapa Gading" in seen["situation"]
+    assert seen["user"] == "cuaca di sini gimana?"
     logged = await pool.fetchval("SELECT content FROM messages WHERE role='user' ORDER BY id DESC LIMIT 1")
     assert logged == "cuaca di sini gimana?"  # context is not written into the message log

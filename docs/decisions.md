@@ -95,10 +95,31 @@ log keeps the raw text — answers `di mana saya` without AI, and keeps only the
 (`settings_kv.last_location`) for future proactive features. Note: it is sent to the cloud model as part
 of the prompt when Hermes handles the message.
 
+## ADR-012 — Main agent vs workers; mute/unmute listening (2026-10-17)
+Owner: the agent that talks must not wait for the agent that works; workers unlimited; results must be
+told and confirmed as heard, like a human assistant.
+- **Main agent** (`assistant.py`): fast model (`JARVIS_CHAT_MODEL`, default `anthropic/claude-haiku-5.5`,
+  chosen by benchmark: ~0.7 s to first token, reliable delegation, natural Indonesian; gpt-5-nano and
+  glm-5.3-flash rejected — mandatory reasoning) with a small prompt: history, active tasks, unconfirmed
+  reports, top memory hits, device context. Tools: spawn_task, acknowledge_reports, cancel_task, remember.
+  Measured live: replies in 1.2–2.5 s while workers run.
+- **Workers** (`workers.py`): one Hermes session per task (`task-<id>`), unlimited queue in Postgres,
+  `WORKER_CONCURRENCY` (default 6) at once, independent of the phone connection, resumed after restart.
+  Live progress is broadcast to all owner devices (`hub.py`).
+- **Reports** (`reports.py`): result → reworded for speech → pushed; the phone confirms it was spoken
+  (`report_spoken`); if not acknowledged (tap, or the main agent recognising "oke/sip/makasih…") within
+  `REPORT_ACK_TIMEOUT_S` (90 s) it is repeated, max 3×, then marked 'unheard' and kept visible.
+- **Listening**: push-to-talk replaced by mute/unmute continuous streaming (Deepgram VAD: endpointing
+  700 ms, UtteranceEnd 1.5 s). Readiness indicator: Mic mati / Menyiapkan / Siap — silakan bicara /
+  Mendengarkan / JARVIS bicara. Audio is buffered while preparing; input is dropped while JARVIS speaks
+  (no self-transcription); a foreground service keeps the mic alive with the screen off; auto-mute after
+  5 min of silence. Cost: Deepgram bills streamed audio (~$0.26/hour unmuted).
+
 ## Known gap — latency vs BR-001
 Measured end-to-end: tier-1 commands ~0.1 s; Hermes turns 6–23 s (cloud model + 13k-token agent prompt +
 tool calls). BR-001's < 1.5 s target is not met for agent answers. Since streaming (ADR-009) the first
-visible sign of thinking arrives in ~3 s and the answer streams as it is written. Options to evaluate with the APK:
+visible sign of thinking arrives in ~3 s and the answer streams as it is written. Since ADR-012 the owner
+talks to a fast main agent (1–2.5 s end-to-end); only delegated work takes longer, in the background. Options to evaluate with the APK:
 stream partial text over WSS, a faster tier-2 model, prompt caching, trimming Hermes toolsets.
 
 ## Known risk

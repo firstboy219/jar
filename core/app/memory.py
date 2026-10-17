@@ -143,3 +143,13 @@ async def search(query: str, limit: int = 5, include_stale: bool = False) -> lis
     rows = await db.pool().fetch("SELECT * FROM memories WHERE id = ANY($1::uuid[])", list(scores))
     found = [dict(r) | {"score": round(scores[str(r["id"])], 3)} for r in rows]
     return sorted(found, key=lambda m: m["score"], reverse=True)
+
+
+async def context_event(query: str) -> dict:
+    """What an agent is looking at: re-run its memory query locally (CPU embeddings, cheap) for the UI."""
+    try:
+        hits = await search(query, limit=4)
+    except Exception:
+        hits = []
+    return {"type": "context", "source": "memory", "query": query,
+            "items": [{"text": m["text"][:240], "category": m["category"], "score": m["score"]} for m in hits]}

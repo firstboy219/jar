@@ -9,10 +9,13 @@ class JarvisApp : Application() {
         private set
     lateinit var location: LocationProvider
         private set
+    lateinit var engine: JarvisEngine
+        private set
 
     override fun onCreate() {
         super.onCreate()
         settings = SecureSettings(this)
         location = LocationProvider(this)
+        engine = JarvisEngine(this, settings, location)
     }
 }

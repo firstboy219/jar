@@ -3,8 +3,10 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import approvals, audit, db, hermes, memory, n8n, sensitive, status
-from .location import Location, context_prefix, remember_last
+import time
+
+from . import approvals, assistant, audit, db, llm, memory, n8n, sensitive, status, workers
+from .location import Location, remember_last
 from .router import HELP, Intent, parse
 
 # Live events for the UI (WSS): {"type": "status"|"thought"|"tool"|"context"|"delta", ...}
@@ -14,7 +16,7 @@ Emit = Callable[[dict], Awaitable[None]]
 @dataclass
 class Turn:
     reply: str
-    route: str  # core | hermes | blocked | error
+    route: str  # core | assistant | blocked | error
 
 
 def _fmt_approval(a: dict) -> str:
@@ -53,22 +55,17 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
             if not hits:
                 return "Saya belum punya memori yang relevan."
             return "\n".join(f"• {m['text']}  ({m['category']}, {m['score']}, id {m['id']})" for m in hits)
+        case "tasks":
+            active = await workers.active()
+            if not active:
+                return "Tidak ada tugas worker yang sedang berjalan."
+            return "Tugas worker:\n" + "\n".join(f"• #{t['id']} {t['title']} — {t['status']}" for t in active)
         case "workflows":
             flows = await n8n.list_workflows()
             if not flows:
                 return "Belum ada workflow di n8n."
             return "\n".join(f"• {w['name']} (id {w['id']}) — {'aktif' if w['active'] else 'nonaktif'}" for w in flows)
     raise ValueError(intent.name)
-
-
-async def _memory_context(query: str) -> dict:
-    """What Hermes is looking at: re-run its memory query locally (CPU embeddings, cheap) for the UI."""
-    try:
-        hits = await memory.search(query, limit=4)
-    except Exception:
-        hits = []
-    return {"type": "context", "source": "memory", "query": query,
-            "items": [{"text": m["text"][:240], "category": m["category"], "score": m["score"]} for m in hits]}
 
 
 async def _log(session_id: str, device_id, role: str, content: str, route: str, **kw) -> None:
@@ -98,7 +95,7 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
 
     # Never persist secrets verbatim, even in our own message log.
     logged = text if not found else f"[disensor: {', '.join(found)}]"
-    await _log(session_id, device_id, "user", logged, "core" if intent else ("blocked" if private or found else "hermes"))
+    await _log(session_id, device_id, "user", logged, "core" if intent else ("blocked" if private or found else "assistant"))
 
     if intent:
         await say("executing")
@@ -113,24 +110,18 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
             + " Perintah cepat tetap bisa dipakai — ketik 'bantuan'."), "blocked"
         await audit.record(actor, "chat.blocked", f"session:{session_id}", reasons=found or ["private"])
     else:
+        # Main agent answers right away; real work is delegated to workers (see assistant.py).
         await say("thinking")
+        started = time.monotonic()
         try:
-            r = None
-            # Device context (time, opt-in location) goes to the agent only; the log keeps the raw text.
-            async for ev in hermes.stream(context_prefix(location) + text, session_id):
-                if ev["type"] == "done":
-                    r = ev["reply"]
-                    continue
-                await send(ev)
-                if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
-                    await send(await _memory_context(ev["label"]))
-            await _log(session_id, device_id, "assistant", r.text, "hermes", model="hermes-agent",
-                       prompt_tokens=r.prompt_tokens, completion_tokens=r.completion_tokens,
-                       latency_ms=r.latency_ms)
+            a = await assistant.respond(text, session_id, actor, device_id, send, location)
+            await _log(session_id, device_id, "assistant", a.text, "assistant", model="main-agent",
+                       prompt_tokens=a.prompt_tokens, completion_tokens=a.completion_tokens,
+                       latency_ms=int((time.monotonic() - started) * 1000))
             await say("completed")
-            return Turn(r.text, "hermes")
-        except hermes.HermesError as e:
-            reply, route = f"Maaf, JARVIS sedang bermasalah: {e}", "error"
+            return Turn(a.text, "assistant")
+        except llm.LLMError as e:
+            reply, route = f"Maaf, aku sedang tidak bisa berpikir: {e}", "error"
 
     await _log(session_id, device_id, "assistant", reply, route)
     await say("completed" if route != "error" else "failed")

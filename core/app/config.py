@@ -19,6 +19,13 @@ class Settings:
     qdrant_api_key: str = field(default_factory=lambda: _env("QDRANT_API_KEY"))
     openrouter_api_key: str = field(default_factory=lambda: _env("OPENROUTER_API_KEY"))
     coder_model: str = field(default_factory=lambda: _env("JARVIS_CODER_MODEL", "qwen/qwen3-coder-next"))
+    # Main agent ("agen utama"): fast conversational model; benchmarked ~0.7 s to first token (ADR-012).
+    chat_model: str = field(default_factory=lambda: _env("JARVIS_CHAT_MODEL", "anthropic/claude-haiku-5.5"))
+    # Workers run on Hermes. Tasks are unlimited (queued); this caps how many run at the same time.
+    worker_concurrency: int = field(default_factory=lambda: int(_env("WORKER_CONCURRENCY", "6") or 6))
+    # Re-deliver a spoken report if the owner has not confirmed hearing it within this many seconds.
+    report_ack_timeout_s: int = field(default_factory=lambda: int(_env("REPORT_ACK_TIMEOUT_S", "90") or 90))
+    report_max_attempts: int = 3
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
     # Benchmarked 2026-10-17 on Indonesian commands: nova-2 WER 12-15% vs nova-3 19-22% (docs/decisions.md).
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", "nova-2"))

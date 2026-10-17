@@ -129,3 +129,17 @@ def test_location_rejects_out_of_range():
     import pydantic, pytest
     with pytest.raises(pydantic.ValidationError):
         Location(lat=123, lon=0)
+
+
+def test_tasks_command():
+    assert parse("tugas") == Intent("tasks")
+    assert parse("daftar tugas aktif") == Intent("tasks")
+
+
+def test_tool_call_fragments_are_merged():
+    from app import llm
+    acc = {}
+    llm._merge_tool_deltas(acc, [{"index": 0, "id": "c1", "function": {"name": "spawn_", "arguments": '{"title": "Cek'}}])
+    llm._merge_tool_deltas(acc, [{"index": 0, "function": {"name": "task", "arguments": ' emas"}'}}])
+    [call] = llm._finish_tools(acc)
+    assert (call.id, call.name, call.arguments) == ("c1", "spawn_task", {"title": "Cek emas"})

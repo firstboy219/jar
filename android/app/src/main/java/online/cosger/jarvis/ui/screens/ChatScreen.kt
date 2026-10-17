@@ -104,6 +104,7 @@ private fun Bubble(m: ChatMessage) {
 
 private fun routeLabel(route: String?): String? = when (route) {
     "core" -> "perintah cepat · tanpa AI"
+    "report" -> "laporan hasil kerja"
     "blocked" -> "ditahan · tidak dikirim ke cloud"
     "error" -> "gagal"
     else -> null

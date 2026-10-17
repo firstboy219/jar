@@ -7,6 +7,10 @@
     <!-- Opt-in (Pengaturan → Bagikan lokasi): position sent with each command as context for JARVIS -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Keep listening while unmuted, also with the screen off -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".JarvisApp"
@@ -28,6 +32,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".voice.ListeningService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
     </application>
 
     <queries>
