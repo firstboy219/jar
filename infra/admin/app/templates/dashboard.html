@@ -3,21 +3,170 @@
 <form method="post" action="/logout"><button class="ghost" type="submit">Keluar</button></form>
 {% endblock %}
 {% block content %}
+<nav class="tabs">
+  {% for key, label in tabs %}
+  <a href="/?tab={{ key }}" class="{{ 'active' if key == tab }}">{{ label }}{% if key == 'approvals' and pending %} <span class="badge">{{ pending|length }}</span>{% endif %}</a>
+  {% endfor %}
+</nav>
+
 {% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
 {% for e in errors or [] %}<p class="alert error">{{ e }}</p>{% endfor %}
 
+{% macro approval_card(a, back_tab) %}
+<div class="item">
+  <div class="row"><strong>#{{ a.id }} {{ a.title }}</strong><span class="pill {{ a.status }}">{{ a.status }}</span></div>
+  <small>{{ a.kind }} · risiko {{ a.risk }} · oleh {{ a.requested_by }} · {{ a.created_at[:16]|replace('T',' ') }}</small>
+  {% if a.detail %}<pre>{{ a.detail | tojson(indent=2) }}</pre>{% endif %}
+  {% if a.error %}<p class="alert error">{{ a.error }}</p>{% endif %}
+  {% if a.status == 'awaiting_approval' %}
+  <form method="post" action="/approvals/{{ a.id }}" class="inline">
+    <input type="hidden" name="tab" value="{{ back_tab }}">
+    <button name="decision" value="approve" type="submit"
+      {% if a.risk == 'high' %}onclick="return confirm('Tindakan berisiko tinggi. Yakin setujui #{{ a.id }}?')"{% endif %}>Setujui</button>
+    <button name="decision" value="reject" type="submit" class="danger">Tolak</button>
+  </form>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% if tab == 'dashboard' %}
 <section class="card">
   <h2>Status layanan</h2>
   <ul class="status">
-    {% for s in status %}
+    {% for s in status or [] %}
     <li><span class="dot {{ 'up' if s.ok else 'down' }}"></span>{{ s.name }} <small>{{ s.detail }}</small></li>
     {% endfor %}
   </ul>
-  {% if apply_log %}
-  <details><summary>Log penerapan terakhir</summary><pre>{{ apply_log }}</pre></details>
+</section>
+
+{% if pending %}
+<section class="card">
+  <h2>Menunggu persetujuan</h2>
+  {% for a in pending %}{{ approval_card(a, 'dashboard') }}{% endfor %}
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Pemakaian</h2>
+  {% set o = usage.openrouter if usage else {} %}
+  {% if o.error %}<p class="hint">{{ o.error }}</p>{% else %}
+  <div class="stats">
+    <div><span>Hari ini</span><b>${{ '%.4f'|format(o.usage_daily or 0) }}</b></div>
+    <div><span>Minggu ini</span><b>${{ '%.4f'|format(o.usage_weekly or 0) }}</b></div>
+    <div><span>Bulan ini</span><b>${{ '%.4f'|format(o.usage_monthly or 0) }}</b></div>
+    <div><span>Sisa limit</span><b>{{ '$%.2f'|format(o.limit_remaining) if o.limit_remaining is not none else '—' }}</b></div>
+  </div>
+  <p class="hint">Biaya OpenRouter (USD) untuk key ini. Target BRD: &lt; $20/bulan.</p>
+  {% endif %}
+  {% if usage and usage.local.days %}
+  <table>
+    <tr><th>Tanggal</th><th>Pesan</th><th>Cepat</th><th>Hermes</th><th>Diblokir</th><th>Token in/out</th><th>Latensi</th></tr>
+    {% for d in usage.local.days %}
+    <tr><td>{{ d.day }}</td><td>{{ d.messages }}</td><td>{{ d.core }}</td><td>{{ d.hermes }}</td><td>{{ d.blocked }}</td>
+        <td>{{ d.prompt_tokens }}/{{ d.completion_tokens }}</td><td>{{ (d.avg_latency_ms / 1000)|round(1) ~ ' s' if d.avg_latency_ms else '—' }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="hint">"Cepat" = dijawab jarvis-core tanpa model AI (tier 1).</p>
   {% endif %}
 </section>
 
+<section class="card">
+  <h2>Tes chat</h2>
+  <form method="post" action="/chat">
+    <textarea name="message" rows="3" required placeholder="Coba: status · bantuan · Halo JARVIS">{{ chat_message or '' }}</textarea>
+    <button type="submit">Kirim</button>
+  </form>
+  {% if chat_reply %}<pre class="reply">{{ chat_reply }}</pre>{% endif %}
+</section>
+
+{% elif tab == 'approvals' %}
+<section class="card">
+  <h2>Antrean persetujuan</h2>
+  {% for a in approvals or [] %}{{ approval_card(a, 'approvals') }}{% else %}<p class="hint">Belum ada.</p>{% endfor %}
+</section>
+
+{% elif tab == 'memory' %}
+<section class="card">
+  <h2>Cari memori</h2>
+  <form method="get" action="/" class="inline wrap">
+    <input type="hidden" name="tab" value="memory">
+    <input type="text" name="q" value="{{ q }}" placeholder="kata kunci (pencarian semantik)">
+    <select name="category"><option value="">semua kategori</option>
+      {% for c in categories %}<option {{ 'selected' if c == category }}>{{ c }}</option>{% endfor %}</select>
+    <button type="submit">Cari</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Tambah memori</h2>
+  <form method="post" action="/memory">
+    <textarea name="text" rows="2" required placeholder="Satu fakta/preferensi yang berdiri sendiri"></textarea>
+    <div class="inline wrap">
+      <select name="category">{% for c in categories %}<option>{{ c }}</option>{% endfor %}</select>
+      <select name="kind">{% for k in kinds %}<option>{{ k }}</option>{% endfor %}</select>
+      <button type="submit">Simpan</button>
+    </div>
+  </form>
+</section>
+<section class="card">
+  <h2>Isi memori {% if q %}<small>— hasil untuk "{{ q }}"</small>{% endif %}</h2>
+  {% for m in memories or [] %}
+  <div class="item {{ 'stale' if m.stale }}">
+    <form method="post" action="/memory/{{ m.id }}">
+      <textarea name="text" rows="2">{{ m.text }}</textarea>
+      <small>{{ m.kind }} · {{ m.category }} · sumber {{ m.source }} · {{ m.updated_at[:16]|replace('T',' ') }}{% if m.score %} · skor {{ m.score }}{% endif %}{% if m.stale %} · <b>usang</b>{% endif %}</small>
+      <div class="inline wrap">
+        <select name="category">{% for c in categories %}<option {{ 'selected' if c == m.category }}>{{ c }}</option>{% endfor %}</select>
+        <select name="kind">{% for k in kinds %}<option {{ 'selected' if k == m.kind }}>{{ k }}</option>{% endfor %}</select>
+        <button name="action" value="save" type="submit">Simpan</button>
+        <button name="action" value="{{ 'fresh' if m.stale else 'stale' }}" type="submit" class="ghost">{{ 'Masih berlaku' if m.stale else 'Tandai usang' }}</button>
+        <button name="action" value="delete" type="submit" class="danger" onclick="return confirm('Hapus memori ini?')">Hapus</button>
+      </div>
+    </form>
+  </div>
+  {% else %}<p class="hint">Belum ada memori.</p>{% endfor %}
+</section>
+
+{% elif tab == 'devices' %}
+{% if new_device %}
+<section class="card">
+  <h2>Token untuk "{{ new_device.name }}"</h2>
+  <p class="alert ok">Salin sekarang — token ini hanya ditampilkan sekali.</p>
+  <pre>{{ new_device.token }}</pre>
+  <p class="hint">APK: kirim sebagai header <code>Authorization: Bearer &lt;token&gt;</code> ke <code>{{ backend_url }}</code> (<code>/ws</code> atau <code>/api/v1/chat</code>).</p>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Tambah perangkat</h2>
+  <form method="post" action="/devices" class="inline wrap">
+    <input type="text" name="name" required maxlength="80" placeholder="mis. HP Android Ilham">
+    <button type="submit">Buat token</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Perangkat</h2>
+  {% for d in devices or [] %}
+  <div class="item row">
+    <div><strong>{{ d.name }}</strong><br>
+      <small>dibuat {{ d.created_at[:16]|replace('T',' ') }} · terakhir aktif {{ d.last_seen_at[:16]|replace('T',' ') if d.last_seen_at else 'belum pernah' }}</small></div>
+    {% if d.revoked_at %}<span class="pill rejected">dicabut</span>{% else %}
+    <form method="post" action="/devices/{{ d.id }}/revoke"><button class="danger" type="submit" onclick="return confirm('Cabut token {{ d.name }}?')">Cabut</button></form>
+    {% endif %}
+  </div>
+  {% else %}<p class="hint">Belum ada perangkat.</p>{% endfor %}
+</section>
+
+{% elif tab == 'audit' %}
+<section class="card">
+  <h2>Audit log <small>(100 terakhir)</small></h2>
+  <table>
+    <tr><th>Waktu</th><th>Aktor</th><th>Aksi</th><th>Target</th></tr>
+    {% for e in events or [] %}
+    <tr><td>{{ e.at[:19]|replace('T',' ') }}</td><td>{{ e.actor }}</td><td>{{ e.action }}</td><td>{{ e.target or '' }}</td></tr>
+    {% endfor %}
+  </table>
+</section>
+
+{% elif tab == 'settings' %}
 <section class="card">
   <h2>Pengaturan</h2>
   <p class="hint">Kolom rahasia tidak pernah ditampilkan. Kosongkan untuk mempertahankan nilai saat ini.</p>
@@ -34,18 +183,8 @@
     {% endfor %}
     <button type="submit">Simpan & terapkan</button>
   </form>
+  {% if apply_log %}<details><summary>Log penerapan terakhir</summary><pre>{{ apply_log }}</pre></details>{% endif %}
 </section>
-
-<section class="card">
-  <h2>Tes chat</h2>
-  <form method="post" action="/chat">
-    <textarea name="message" rows="3" required placeholder="Halo JARVIS, siapa kamu?">{{ chat_message or '' }}</textarea>
-    <button type="submit">Kirim</button>
-  </form>
-  {% if chat_reply %}<pre class="reply">{{ chat_reply }}</pre>{% endif %}
-  <p class="hint">Endpoint backend: <code>{{ backend_url }}/v1/chat/completions</code></p>
-</section>
-
 <section class="card">
   <h2>Ganti password admin</h2>
   <form method="post" action="/password">
@@ -54,4 +193,5 @@
     <button type="submit">Ganti password</button>
   </form>
 </section>
+{% endif %}
 {% endblock %}

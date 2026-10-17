@@ -42,6 +42,30 @@ Auth: scrypt password hash in `.env`, HMAC-signed HttpOnly/Secure/SameSite=Stric
 invalidated on password change), Origin check on POSTs, 5 failed logins / 15 min per IP.
 Secrets are write-only in the UI (only the last 4 chars are shown).
 
+## ADR-007 — Tiered routing; no local LLM on this server (2026-10-17)
+The owner does not want every chat sent straight to OpenRouter. A local model was benchmarked here
+(qwen3:4b, Ollama, 4 vCPU Xeon 8175M, no GPU): ~13 tok/s prompt processing, 4.5 tok/s generation —
+a single Hermes turn (≈13k-token prompt) would take ~17 minutes. So, chosen by the owner:
+1. **Tier 1 — jarvis-core rules**: quick commands answered with no model at all.
+2. **Privacy gate**: messages with secrets (API keys, passwords, private keys, Luhn-valid card numbers)
+   or prefixed `/privat` are never sent to a cloud model; the stored log is redacted.
+3. **Tier 2 — Hermes on a cheap model** (`JARVIS_DEFAULT_MODEL`).
+4. **Tier 3 — `delegate_task`** to `JARVIS_EXPERT_MODEL`, only when Hermes judges it necessary (SOUL.md).
+Embeddings for memory run locally on CPU (fastembed multilingual MiniLM), so memory text is not sent
+out just to be indexed. A GPU host can later be plugged in as Hermes' main provider.
+
+## ADR-008 — jarvis-core owns state; Hermes acts through MCP tools (2026-10-17)
+KB: the agent runtime must not be the source of truth. jarvis-core (FastAPI, `jarvis` Postgres db)
+stores devices, messages, approvals, memories and the audit log. Hermes gets tools only via the
+`jarvis-tools` MCP server and holds no n8n/Qdrant credentials, so every side effect is policy-checked:
+risky actions become approval requests, and n8n workflows are created inactive with an activation
+approval (ADR-003). Hermes' API is no longer public; `vis1` points to jarvis-core.
+
+## Known gap — latency vs BR-001
+Measured end-to-end: tier-1 commands ~0.1 s; Hermes turns 6–23 s (cloud model + 13k-token agent prompt +
+tool calls). BR-001's < 1.5 s target is not met for agent answers. Options to evaluate with the APK:
+stream partial text over WSS, a faster tier-2 model, prompt caching, trimming Hermes toolsets.
+
 ## Known risk
 Hermes' terminal backend is `local`, i.e. commands run inside the `jarvis-brain` container. The
 container is the sandbox for now; revisit (`terminal.backend: docker`) before enabling Execute-level tools.

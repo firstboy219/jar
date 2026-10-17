@@ -17,6 +17,9 @@ sed \
   -e "s|^POSTGRES_PASSWORD=$|POSTGRES_PASSWORD=$(gen)|" \
   -e "s|^N8N_ENCRYPTION_KEY=$|N8N_ENCRYPTION_KEY=$(gen)|" \
   -e "s|^QDRANT_API_KEY=$|QDRANT_API_KEY=$(gen)|" \
+  -e "s|^JARVIS_DB_PASSWORD=$|JARVIS_DB_PASSWORD=$(gen)|" \
+  -e "s|^CORE_ADMIN_TOKEN=$|CORE_ADMIN_TOKEN=$(gen)|" \
+  -e "s|^MCP_TOKEN=$|MCP_TOKEN=$(gen)|" \
   -e "s|^HOST_UID=.*|HOST_UID=$(id -u)|" \
   -e "s|^HOST_GID=.*|HOST_GID=$(id -g)|" \
   .env.example > .env
@@ -31,4 +34,4 @@ sed -i \
 mkdir -p data/{npm/logs,letsencrypt,hermes,n8n,qdrant,postgres,admin}
 echo "Created .env (mode 600)."
 echo "Web admin password (shown once, change it after first login): $admin_pw"
-echo "Fill the rest from the web admin: OpenRouter key, n8n API key, Let's Encrypt email."
+echo "Fill the rest from the web admin: OpenRouter, n8n and Deepgram keys."

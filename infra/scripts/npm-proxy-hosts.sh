@@ -44,8 +44,8 @@ print(next((h['id'] for h in json.load(sys.stdin) if '$domain' in h['domain_name
   echo "$domain -> $host:$port (ssl=$ssl)"
 }
 
-# Backend: Hermes OpenAI-compatible API (bearer HERMES_API_KEY required)
-upsert "$BACKEND_DOMAIN" jarvis-brain 8642
+# Backend: jarvis-core (device tokens; Hermes itself stays internal)
+upsert "$BACKEND_DOMAIN" jarvis-core 8000
 # Frontend: web admin panel (FS-105)
 upsert "$FRONTEND_DOMAIN" jarvis-admin 8000
 # n8n editor + webhooks (n8n's own owner login protects the UI)

@@ -1,8 +1,9 @@
-"""JARVIS Web Admin (FS-105, first slice): settings, service status, test chat.
+"""JARVIS Web Admin (FS-105): dashboard, approval queue, memory, devices, usage, audit, settings, chat.
 
 Settings are written to the stack's .env; a host systemd path unit
 (infra/systemd/jarvis-apply.*) notices the change and runs `docker compose up -d`.
-This container has no Docker socket.
+Everything else goes through jarvis-core's internal /admin API (X-Admin-Token from .env).
+This container has no Docker socket and no database access.
 """
 
 import os
@@ -22,27 +23,53 @@ ENV = EnvFile(os.getenv("JARVIS_ENV_FILE", "/config/.env"))
 APPLY_LOG = Path(os.getenv("JARVIS_APPLY_LOG", "/status/apply.log"))
 PUBLIC_ORIGIN = os.getenv("ADMIN_PUBLIC_ORIGIN", "")
 COOKIE = "jarvis_admin"
+CORE = "http://jarvis-core:8000"
 
-HERMES = "http://jarvis-brain:8642"
-N8N = "http://jarvis-executor:5678"
-QDRANT = "http://jarvis-memory:6333"
-
+MODEL = r"^[a-z0-9._-]+/[A-Za-z0-9._:-]+$"
 # key, label, is_secret, validation pattern, help text
 SETTINGS = [
     ("OPENROUTER_API_KEY", "OpenRouter API key", True, r"^sk-or-[A-Za-z0-9_-]{10,}$",
-     "Dari openrouter.ai/keys. Dipakai Hermes untuk memanggil model."),
-    ("JARVIS_DEFAULT_MODEL", "Model utama", False, r"^[a-z0-9._-]+/[A-Za-z0-9._:-]+$",
-     "Harus mendukung tool calling. Contoh: deepseek/deepseek-v4-flash"),
-    ("JARVIS_CODER_MODEL", "Model coding / n8n JSON", False, r"^[a-z0-9._-]+/[A-Za-z0-9._:-]+$",
-     "Contoh: qwen/qwen3-coder-next"),
+     "Dari openrouter.ai/keys."),
+    ("JARVIS_DEFAULT_MODEL", "Model utama (tier 2)", False, MODEL,
+     "Model murah untuk sebagian besar percakapan. Harus mendukung tool calling."),
+    ("JARVIS_EXPERT_MODEL", "Model ahli (tier 3)", False, MODEL,
+     "Dipakai Hermes hanya saat ia memutuskan butuh kemampuan lebih (delegasi)."),
+    ("JARVIS_CODER_MODEL", "Model coding / n8n JSON", False, MODEL,
+     "Membuat JSON workflow n8n."),
     ("N8N_API_KEY", "n8n API key", True, r"^[A-Za-z0-9._-]{20,}$",
-     "Buat di n8n: Settings → n8n API."),
+     "Buat di https://flow1.cosger.online → Settings → n8n API."),
+    ("DEEPGRAM_API_KEY", "Deepgram API key", True, r"^[A-Za-z0-9]{20,}$",
+     "Untuk voice di APK. APK hanya menerima token berumur pendek dari server."),
 ]
+TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"),
+        ("devices", "Perangkat"), ("audit", "Audit"), ("settings", "Pengaturan")]
+CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
+KINDS = ["fact", "assumption", "preference"]
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 throttle = Throttle()
+
+
+class CoreError(RuntimeError):
+    pass
+
+
+async def core(method: str, path: str, **kw):
+    token = ENV.read().get("CORE_ADMIN_TOKEN", "")
+    try:
+        async with httpx.AsyncClient(base_url=CORE, timeout=200, headers={"X-Admin-Token": token}) as c:
+            r = await c.request(method, path, **kw)
+    except httpx.HTTPError as e:
+        raise CoreError(f"jarvis-core tidak dapat dihubungi ({type(e).__name__})")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail")
+        except ValueError:
+            detail = r.text[:200]
+        raise CoreError(f"{detail or 'HTTP ' + str(r.status_code)}")
+    return r.json()
 
 
 def client_ip(request: Request) -> str:
@@ -64,30 +91,6 @@ def mask(value: str) -> str:
     return f"••••{value[-4:]}" if len(value) > 8 else ("••••" if value else "")
 
 
-async def service_status(env: dict[str, str]) -> list[dict]:
-    checks = []
-    async with httpx.AsyncClient(timeout=5) as client:
-        async def probe(name, url, headers=None, ok=200):
-            try:
-                r = await client.get(url, headers=headers or {})
-                checks.append({"name": name, "ok": r.status_code == ok, "detail": f"HTTP {r.status_code}"})
-            except httpx.HTTPError as e:
-                checks.append({"name": name, "ok": False, "detail": type(e).__name__})
-
-        await probe("Hermes Agent", f"{HERMES}/v1/models",
-                    {"Authorization": f"Bearer {env.get('HERMES_API_KEY', '')}"})
-        await probe("n8n", f"{N8N}/healthz")
-        if env.get("N8N_API_KEY"):
-            await probe("n8n API key", f"{N8N}/api/v1/workflows?limit=1",
-                        {"X-N8N-API-KEY": env["N8N_API_KEY"]})
-        else:
-            checks.append({"name": "n8n API key", "ok": False, "detail": "belum diisi"})
-        await probe("Qdrant", f"{QDRANT}/collections", {"api-key": env.get("QDRANT_API_KEY", "")})
-    checks.append({"name": "OpenRouter key", "ok": bool(env.get("OPENROUTER_API_KEY")),
-                   "detail": "terisi" if env.get("OPENROUTER_API_KEY") else "belum diisi"})
-    return checks
-
-
 def apply_log_tail(lines: int = 8) -> str:
     try:
         return "\n".join(APPLY_LOG.read_text().splitlines()[-lines:])
@@ -95,27 +98,60 @@ def apply_log_tail(lines: int = 8) -> str:
         return ""
 
 
-async def render_dashboard(request: Request, **extra) -> HTMLResponse:
-    env = ENV.read()
-    fields = [
-        {"key": k, "label": label, "secret": secret, "help": help_,
-         "display": mask(env.get(k, "")) if secret else env.get(k, "")}
-        for k, label, secret, _, help_ in SETTINGS
-    ]
-    return templates.TemplateResponse(request, "dashboard.html", {
-        "fields": fields,
-        "status": await service_status(env),
-        "apply_log": apply_log_tail(),
-        "backend_url": f"https://{env.get('BACKEND_DOMAIN', '')}",
-        **extra,
-    })
+async def _tab_data(tab: str, request: Request) -> dict:
+    q = request.query_params
+    if tab == "dashboard":
+        return {"status": await core("GET", "/admin/status"), "usage": await core("GET", "/admin/usage"),
+                "pending": await core("GET", "/admin/approvals", params={"status_": "awaiting_approval"}),
+                "apply_log": apply_log_tail()}
+    if tab == "approvals":
+        return {"approvals": await core("GET", "/admin/approvals")}
+    if tab == "memory":
+        params = {k: q[k] for k in ("q", "category") if q.get(k)}
+        return {"memories": await core("GET", "/admin/memories", params=params), "q": q.get("q", ""),
+                "category": q.get("category", ""), "categories": CATEGORIES, "kinds": KINDS}
+    if tab == "devices":
+        return {"devices": await core("GET", "/admin/devices")}
+    if tab == "audit":
+        return {"events": await core("GET", "/admin/audit")}
+    if tab == "settings":
+        env = ENV.read()
+        return {"fields": [{"key": k, "label": label, "secret": secret, "help": help_,
+                            "display": mask(env.get(k, "")) if secret else env.get(k, "")}
+                           for k, label, secret, _, help_ in SETTINGS],
+                "apply_log": apply_log_tail()}
+    return {}
 
+
+async def render(request: Request, tab: str, **extra) -> HTMLResponse:
+    tab = tab if tab in dict(TABS) else "dashboard"
+    try:
+        data = await _tab_data(tab, request)
+    except CoreError as e:
+        data, extra["errors"] = {}, [*extra.get("errors", []), str(e)]
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "tab": tab, "tabs": TABS, "backend_url": f"https://{ENV.read().get('BACKEND_DOMAIN', '')}",
+        **data, **extra})
+
+
+def back(tab: str, **params) -> RedirectResponse:
+    qs = "&".join(f"{k}={v}" for k, v in params.items() if v)
+    return RedirectResponse(f"/?tab={tab}" + (f"&{qs}" if qs else ""), status_code=303)
+
+
+def guard(request: Request) -> RedirectResponse | None:
+    if not authed(request) or not same_origin(request):
+        return RedirectResponse("/login", status_code=303)
+    return None
+
+
+# ---------- pages ----------
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
+async def index(request: Request, tab: str = "dashboard"):
     if not authed(request):
         return RedirectResponse("/login", status_code=303)
-    return await render_dashboard(request)
+    return await render(request, tab)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -150,65 +186,125 @@ async def logout():
     return response
 
 
+# ---------- actions ----------
+
+@app.post("/approvals/{approval_id}", response_class=HTMLResponse)
+async def decide(request: Request, approval_id: int, decision: str = Form(...), tab: str = Form("approvals")):
+    if r := guard(request):
+        return r
+    try:
+        a = await core("POST", f"/admin/approvals/{approval_id}", json={"approve": decision == "approve"})
+    except CoreError as e:
+        return await render(request, tab, errors=[str(e)])
+    msg = f"Persetujuan #{a['id']} → {a['status']}" + (f": {a['error']}" if a.get("error") else "")
+    return await render(request, tab, notice=msg)
+
+
+@app.post("/memory", response_class=HTMLResponse)
+async def memory_create(request: Request, text: str = Form(...), category: str = Form(...), kind: str = Form(...)):
+    if r := guard(request):
+        return r
+    try:
+        await core("POST", "/admin/memories", json={"text": text, "category": category, "kind": kind})
+    except CoreError as e:
+        return await render(request, "memory", errors=[str(e)])
+    return await render(request, "memory", notice="Memori disimpan.")
+
+
+@app.post("/memory/{mem_id}", response_class=HTMLResponse)
+async def memory_edit(request: Request, mem_id: str, action: str = Form(...), text: str = Form(""),
+                      category: str = Form(""), kind: str = Form("")):
+    if r := guard(request):
+        return r
+    try:
+        if action == "delete":
+            await core("DELETE", f"/admin/memories/{mem_id}")
+            msg = "Memori dihapus (termasuk dari indeks)."
+        elif action in ("stale", "fresh"):
+            await core("PATCH", f"/admin/memories/{mem_id}", json={"stale": action == "stale"})
+            msg = "Ditandai usang." if action == "stale" else "Ditandai masih berlaku."
+        else:
+            await core("PATCH", f"/admin/memories/{mem_id}",
+                       json={"text": text, "category": category or None, "kind": kind or None})
+            msg = "Memori diperbarui."
+    except CoreError as e:
+        return await render(request, "memory", errors=[str(e)])
+    return await render(request, "memory", notice=msg)
+
+
+@app.post("/devices", response_class=HTMLResponse)
+async def device_create(request: Request, name: str = Form(...)):
+    if r := guard(request):
+        return r
+    try:
+        d = await core("POST", "/admin/devices", json={"name": name})
+    except CoreError as e:
+        return await render(request, "devices", errors=[str(e)])
+    return await render(request, "devices", new_device=d)
+
+
+@app.post("/devices/{device_id}/revoke", response_class=HTMLResponse)
+async def device_revoke(request: Request, device_id: str):
+    if r := guard(request):
+        return r
+    try:
+        await core("DELETE", f"/admin/devices/{device_id}")
+    except CoreError as e:
+        return await render(request, "devices", errors=[str(e)])
+    return await render(request, "devices", notice="Token perangkat dicabut.")
+
+
 @app.post("/settings", response_class=HTMLResponse)
 async def save_settings(request: Request):
-    if not authed(request) or not same_origin(request):
-        return RedirectResponse("/login", status_code=303)
+    if r := guard(request):
+        return r
     form = await request.form()
     changes, errors = {}, []
+    current = ENV.read()
     for key, label, secret, pattern, _ in SETTINGS:
         if key not in form:
             continue
         value = str(form[key]).strip()
         if secret and not value:
             continue  # blank secret field = keep current value
-        if not secret and value == ENV.read().get(key, ""):
+        if not secret and value == current.get(key, ""):
             continue
         if value and not re.match(pattern, value):
             errors.append(f"{label}: format tidak valid")
             continue
         changes[key] = value
     if errors:
-        return await render_dashboard(request, errors=errors)
+        return await render(request, "settings", errors=errors)
     if changes:
         ENV.update(changes)
         msg = f"Disimpan: {', '.join(changes)}. Layanan terkait di-restart otomatis (±30 detik)."
     else:
         msg = "Tidak ada perubahan."
-    return await render_dashboard(request, notice=msg)
+    return await render(request, "settings", notice=msg)
 
 
 @app.post("/password", response_class=HTMLResponse)
 async def change_password(request: Request, current: str = Form(...), new: str = Form(...)):
-    if not authed(request) or not same_origin(request):
-        return RedirectResponse("/login", status_code=303)
+    if r := guard(request):
+        return r
     if not verify_password(current, ENV.read()["ADMIN_PASSWORD_HASH"]):
-        return await render_dashboard(request, errors=["Password lama salah."])
+        return await render(request, "settings", errors=["Password lama salah."])
     if len(new) < 12:
-        return await render_dashboard(request, errors=["Password baru minimal 12 karakter."])
+        return await render(request, "settings", errors=["Password baru minimal 12 karakter."])
     ENV.update({"ADMIN_PASSWORD_HASH": hash_password(new)})
     return RedirectResponse("/login", status_code=303)  # old session is now invalid
 
 
 @app.post("/chat", response_class=HTMLResponse)
 async def chat(request: Request, message: str = Form(...)):
-    if not authed(request) or not same_origin(request):
-        return RedirectResponse("/login", status_code=303)
-    env = ENV.read()
+    if r := guard(request):
+        return r
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
-            r = await client.post(
-                f"{HERMES}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {env['HERMES_API_KEY']}"},
-                json={"model": "hermes-agent", "messages": [{"role": "user", "content": message}]},
-            )
-        if r.status_code == 200:
-            reply = r.json()["choices"][0]["message"]["content"]
-        else:
-            reply = f"[error HTTP {r.status_code}] {r.text[:500]}"
-    except httpx.HTTPError as e:
-        reply = f"[error] {type(e).__name__}"
-    return await render_dashboard(request, chat_message=message, chat_reply=reply)
+        d = await core("POST", "/admin/chat", json={"message": message})
+        reply = f"[{d['route']}] {d['reply']}"
+    except CoreError as e:
+        reply = f"[error] {e}"
+    return await render(request, "dashboard", chat_message=message, chat_reply=reply)
 
 
 @app.get("/healthz")

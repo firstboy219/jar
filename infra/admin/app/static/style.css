@@ -32,3 +32,27 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); font-size: .85rem; }
 code { font-size: .85rem; word-break: break-all; }
 details { margin-top: 10px; } summary { cursor: pointer; color: var(--muted); }
+.tabs { display: flex; gap: 4px; overflow-x: auto; margin: 0 0 16px; padding-bottom: 2px; }
+.tabs a { padding: 8px 12px; border-radius: 8px; color: var(--muted); text-decoration: none; white-space: nowrap; }
+.tabs a.active { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+.badge { background: var(--bad); color: #fff; border-radius: 10px; padding: 0 7px; font-size: .75rem; }
+.item { border-top: 1px solid var(--border); padding: 12px 0; }
+.item:first-of-type { border-top: 0; }
+.item.stale { opacity: .6; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.inline { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.inline.wrap { flex-wrap: wrap; }
+.inline input, .inline select { width: auto; flex: 1; min-width: 140px; margin-top: 0; }
+select { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
+button.danger { background: var(--bad); }
+.pill { font-size: .75rem; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.pill.awaiting_approval { border-color: #e5a50a; color: #e5a50a; }
+.pill.completed { border-color: var(--ok); color: var(--ok); }
+.pill.failed, .pill.rejected, .pill.expired { border-color: var(--bad); color: var(--bad); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.stats div { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.stats span { display: block; color: var(--muted); font-size: .8rem; }
+.stats b { font-size: 1.1rem; }
+table { width: 100%; border-collapse: collapse; font-size: .85rem; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; }

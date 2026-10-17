@@ -1,0 +1,38 @@
+#!/command/with-contenv sh
+# Mounted into /etc/cont-init.d/ by docker-compose.yml. Runs as root on every container start
+# (after 01-hermes-setup seeds $HERMES_HOME) and makes config.yaml follow infra/.env:
+#   model.*       main model (config.yaml would otherwise override HERMES_INFERENCE_MODEL)
+#   delegation.*  stronger model Hermes may delegate to when it decides it needs it (tiered routing)
+#   mcp_servers   jarvis-tools (memory, approvals, n8n) with its bearer token
+set -e
+cd /opt/hermes
+s6-setuidgid hermes /opt/hermes/.venv/bin/python - <<'PY'
+import os
+import hermes_yaml as yaml  # Hermes' own ruamel wrapper (no PyYAML in the image)
+path = os.path.join(os.environ.get("HERMES_HOME", "/opt/data"), "config.yaml")
+with open(path) as f:
+    cfg = yaml.safe_load(f) or {}
+
+env = os.environ.get
+model = cfg.setdefault("model", {})
+model["provider"] = env("HERMES_INFERENCE_PROVIDER") or model.get("provider", "auto")
+if env("HERMES_INFERENCE_MODEL"):
+    model["default"] = env("HERMES_INFERENCE_MODEL")
+
+delegation = cfg.setdefault("delegation", {})
+if env("JARVIS_EXPERT_MODEL"):
+    delegation["model"] = env("JARVIS_EXPERT_MODEL")
+    delegation["provider"] = "openrouter"
+delegation["max_concurrent_children"] = 2
+delegation["subagent_auto_approve"] = False  # dangerous commands in subagents are denied, never auto-run
+
+servers = cfg.get("mcp_servers") or {}
+if env("MCP_TOKEN"):
+    servers["jarvis"] = {"url": "http://jarvis-tools:8100/mcp",
+                         "headers": {"Authorization": "Bearer " + env("MCP_TOKEN")}}
+cfg["mcp_servers"] = servers
+
+with open(path, "w") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False)
+print(f"[jarvis] model={model.get('default')} expert={delegation.get('model')} mcp={list(servers)}")
+PY

@@ -1,9 +1,0 @@
-#!/command/with-contenv sh
-# Mounted into /etc/cont-init.d/ by docker-compose.yml. Runs as root on every container start
-# (after 01-hermes-setup seeds $HERMES_HOME) and makes config.yaml follow the .env model settings,
-# because config.yaml's model.default takes precedence over HERMES_INFERENCE_MODEL.
-set -e
-cfg() { s6-setuidgid hermes hermes config set "$1" "$2" >/dev/null; }
-[ -n "$HERMES_INFERENCE_PROVIDER" ] && cfg model.provider "$HERMES_INFERENCE_PROVIDER"
-[ -n "$HERMES_INFERENCE_MODEL" ] && cfg model.default "$HERMES_INFERENCE_MODEL"
-echo "[jarvis] model: ${HERMES_INFERENCE_PROVIDER:-?} / ${HERMES_INFERENCE_MODEL:-?}"

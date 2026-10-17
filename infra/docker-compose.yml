@@ -1,11 +1,12 @@
-# JARVIS — server stack (Milestone 1)
+# JARVIS — server stack
 # Based on BRD §FSD-2, with these deliberate deviations (see docs/decisions.md):
 #   - all secrets come from .env (never committed)
 #   - image tags are pinned; no :latest
-#   - only 80/443 are public; admin UIs bind to 127.0.0.1 (use an SSH tunnel)
+#   - only 80/443 are public; NPM admin and Qdrant bind to 127.0.0.1
 #   - OpenClaw is deferred; Hermes Agent runs alone first
+#   - jarvis-core fronts the agent (vis1); Hermes is internal-only and acts through jarvis-tools (MCP)
 #
-# Usage:  cd infra && ./scripts/init-env.sh && docker compose up -d
+# Usage:  cd infra && ./scripts/init-env.sh && docker compose up -d --build
 
 name: jarvis
 
@@ -55,7 +56,7 @@ services:
     shm_size: "1gb" # Chromium needs more than the 64MB default; safer than BRD's ipc: host
     volumes:
       - ./data/hermes:/opt/data
-      - ./hermes/03-jarvis-model:/etc/cont-init.d/03-jarvis-model:ro
+      - ./hermes/03-jarvis-config:/etc/cont-init.d/03-jarvis-config:ro
       - ./hermes/SOUL.md:/opt/data/SOUL.md:ro # JARVIS persona (versioned in git)
       # Cross-app visibility (FS-104), read-only
       - ./data/npm/logs:/opt/external/proxy_logs:ro
@@ -65,27 +66,79 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - HERMES_INFERENCE_PROVIDER=openrouter
       - HERMES_INFERENCE_MODEL=${JARVIS_DEFAULT_MODEL}
-      - JARVIS_CODER_MODEL=${JARVIS_CODER_MODEL}
-      # OpenAI-compatible API, reachable only inside jarvis-network (via the proxy)
+      # Tier 3: model Hermes delegates to (delegate_task) when it decides it needs more capability
+      - JARVIS_EXPERT_MODEL=${JARVIS_EXPERT_MODEL}
+      # OpenAI-compatible API, reachable only inside jarvis-network (called by jarvis-core)
       - API_SERVER_HOST=0.0.0.0
       - API_SERVER_KEY=${HERMES_API_KEY}
-      - N8N_API_URL=http://jarvis-executor:5678/api/v1
-      - N8N_API_KEY=${N8N_API_KEY}
-      - QDRANT_URL=http://jarvis-memory:6333
-      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      # Tools (memory, approvals, n8n) come from jarvis-tools; Hermes holds no n8n/Qdrant keys
+      - MCP_TOKEN=${MCP_TOKEN}
     networks:
       - jarvis-network
     depends_on:
-      - qdrant
-      - n8n
+      - jarvis-tools
+
+  # 2b. CORE SERVICE — https://${BACKEND_DOMAIN}: device auth, WSS, tiered routing, approvals,
+  #     memory, usage. The only public entry point to the agent.
+  jarvis-core:
+    build: ../core
+    image: jarvis-core:local
+    container_name: jarvis-core
+    restart: always
+    environment: &core-env
+      - DATABASE_URL=postgresql://jarvis_core:${JARVIS_DB_PASSWORD}@jarvis-db/jarvis
+      - HERMES_API_KEY=${HERMES_API_KEY}
+      - N8N_API_KEY=${N8N_API_KEY}
+      - QDRANT_API_KEY=${QDRANT_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - JARVIS_CODER_MODEL=${JARVIS_CODER_MODEL}
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      - CORE_ADMIN_TOKEN=${CORE_ADMIN_TOKEN}
+      - MCP_TOKEN=${MCP_TOKEN}
+      - TZ=${TZ}
+    networks:
+      - jarvis-network
+    depends_on:
+      core-db-init:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+
+  # 2c. MCP TOOL SERVER for Hermes (internal only): memory, approval requests, n8n drafts
+  jarvis-tools:
+    image: jarvis-core:local
+    container_name: jarvis-tools
+    restart: always
+    command: ["python", "-m", "app.mcp_server"]
+    environment: *core-env
+    networks:
+      - jarvis-network
+    depends_on:
+      jarvis-core:
+        condition: service_started
+
+  # one-shot: least-privilege role + database for jarvis-core (idempotent)
+  core-db-init:
+    image: postgres:16.15-alpine
+    restart: "no"
+    entrypoint: ["/init-core-db.sh"]
+    volumes:
+      - ./postgres/init-core-db.sh:/init-core-db.sh:ro
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - JARVIS_DB_PASSWORD=${JARVIS_DB_PASSWORD}
+    networks:
+      - jarvis-network
+    depends_on:
+      postgres-db:
+        condition: service_healthy
 
   # 3. WORKFLOW AUTOMATION
   n8n:
     image: docker.n8n.io/n8nio/n8n:2.43.7
     container_name: jarvis-executor
     restart: always
-    ports:
-      - "127.0.0.1:5678:5678" # editor UI: ssh -L 5678:localhost:5678
     environment:
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=jarvis-db
