@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create/refresh Nginx Proxy Manager proxy hosts via its API (idempotent per domain).
-# Requests a Let's Encrypt cert when LETSENCRYPT_EMAIL is set in .env.
+# Requests a Let's Encrypt cert per domain if none exists (email optional: LETSENCRYPT_EMAIL).
 # WebSocket upgrade is enabled (BRD §4: proxy_set_header Upgrade/Connection).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,18 +13,15 @@ auth=(-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json')
 
 # domain -> container:port
 upsert() {
-  local domain=$1 host=$2 port=$3 cert_id=0 ssl=false
-  if [[ -n "${LETSENCRYPT_EMAIL:-}" ]]; then
-    cert_id=$(curl -sf "${auth[@]}" "$API/nginx/certificates" | python3 -c "
+  local domain=$1 host=$2 port=$3 ssl=true cert_id meta='{}'
+  [[ -n "${LETSENCRYPT_EMAIL:-}" ]] && meta="{\"letsencrypt_email\":\"$LETSENCRYPT_EMAIL\",\"letsencrypt_agree\":true}"
+  cert_id=$(curl -sf "${auth[@]}" "$API/nginx/certificates" | python3 -c "
 import sys,json
 print(next((c['id'] for c in json.load(sys.stdin) if '$domain' in c['domain_names']), ''))")
-    if [[ -z "$cert_id" ]]; then
-      cert_id=$(curl -sf "${auth[@]}" -X POST "$API/nginx/certificates" -d "{
-        \"provider\":\"letsencrypt\",\"domain_names\":[\"$domain\"],
-        \"meta\":{\"letsencrypt_email\":\"$LETSENCRYPT_EMAIL\",\"letsencrypt_agree\":true,\"dns_challenge\":false}}" \
-        | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
-    fi
-    ssl=true
+  if [[ -z "$cert_id" ]]; then
+    cert_id=$(curl -sf "${auth[@]}" -X POST "$API/nginx/certificates" -d "{
+      \"provider\":\"letsencrypt\",\"domain_names\":[\"$domain\"],\"meta\":$meta}" \
+      | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
   fi
 
   local body="{
@@ -49,4 +46,5 @@ print(next((h['id'] for h in json.load(sys.stdin) if '$domain' in h['domain_name
 
 # Backend: Hermes OpenAI-compatible API (bearer HERMES_API_KEY required)
 upsert "$BACKEND_DOMAIN" jarvis-brain 8642
-# Frontend (jar1) is added once the web/admin frontend exists.
+# Frontend: web admin panel (FS-105)
+upsert "$FRONTEND_DOMAIN" jarvis-admin 8000

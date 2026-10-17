@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch JARVIS .env for changes from the web admin
+
+[Path]
+PathChanged=/home/ubuntu/my-project/infra/.env
+
+[Install]
+WantedBy=multi-user.target

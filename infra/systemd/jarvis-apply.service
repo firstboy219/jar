@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply JARVIS .env changes (docker compose up -d)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 2
+ExecStart=/home/ubuntu/my-project/infra/scripts/apply.sh

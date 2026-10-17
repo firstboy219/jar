@@ -1,0 +1,34 @@
+:root {
+  --bg: #0f1216; --card: #171b21; --border: #262c35; --text: #e6e9ee; --muted: #8b95a3;
+  --accent: #4f8cff; --ok: #2fbf71; --bad: #e5484d;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f5f6f8; --card: #fff; --border: #dde1e6; --text: #15181d; --muted: #5d6673; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+header form { margin: 0; }
+.brand { font-weight: 700; letter-spacing: .08em; }
+.brand small { font-weight: 400; color: var(--muted); letter-spacing: 0; }
+main { max-width: 720px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+.card.narrow { max-width: 360px; margin: 10vh auto; }
+h1, h2 { margin: 0 0 12px; font-size: 1.1rem; }
+label { display: block; margin-bottom: 14px; font-weight: 500; }
+label small { display: block; font-weight: 400; color: var(--muted); margin-top: 4px; }
+input, textarea { width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
+button { padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 6px 12px; }
+.hint { color: var(--muted); font-size: .9rem; }
+.alert { padding: 10px 14px; border-radius: 8px; margin: 0 0 16px; }
+.alert.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.alert.error { background: color-mix(in srgb, var(--bad) 15%, transparent); }
+.status { list-style: none; padding: 0; margin: 0; }
+.status li { padding: 6px 0; display: flex; align-items: center; gap: 10px; }
+.status small { color: var(--muted); margin-left: auto; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot.up { background: var(--ok); } .dot.down { background: var(--bad); }
+pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); font-size: .85rem; }
+code { font-size: .85rem; word-break: break-all; }
+details { margin-top: 10px; } summary { cursor: pointer; color: var(--muted); }

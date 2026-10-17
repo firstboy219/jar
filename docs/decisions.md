@@ -34,6 +34,14 @@ Both are `.env` settings (`JARVIS_DEFAULT_MODEL`, `JARVIS_CODER_MODEL`), so they
 | `/var/www/...`, `/var/log/nginx` mounts | NPM logs mounted `:ro` | Those host paths don't exist on this server |
 | Deepgram key in the APK (FS-101) | Backend will mint short-lived Deepgram tokens | A key in an APK is extractable (Milestone: APK) |
 
+## ADR-006 — Web admin applies settings without a Docker socket (2026-10-17)
+The owner wants to enter keys from the browser (jar1.cosger.online). The admin container only gets
+`infra/.env` (rw) and `data/admin` (ro); a host systemd path unit runs `docker compose up -d` on change.
+Giving the admin the Docker socket would make a web login equivalent to root on the host.
+Auth: scrypt password hash in `.env`, HMAC-signed HttpOnly/Secure/SameSite=Strict cookie (12 h,
+invalidated on password change), Origin check on POSTs, 5 failed logins / 15 min per IP.
+Secrets are write-only in the UI (only the last 4 chars are shown).
+
 ## Known risk
 Hermes' terminal backend is `local`, i.e. commands run inside the `jarvis-brain` container. The
 container is the sandbox for now; revisit (`terminal.backend: docker`) before enabling Execute-level tools.

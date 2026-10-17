@@ -17,31 +17,36 @@ infra/                  Docker Compose stack for the Lightsail server
 | Container | Role | Access |
 |---|---|---|
 | jarvis-proxy | Nginx Proxy Manager, SSL, WebSocket upgrade | public 80/443; admin UI 127.0.0.1:81 |
+| jarvis-admin | Web admin: settings, service status, test chat | `https://jar1.cosger.online` (password login) |
 | jarvis-brain | Hermes Agent (+ Playwright) — OpenAI-compatible API :8642 | via `vis1.cosger.online`, bearer `HERMES_API_KEY` |
 | jarvis-executor | n8n | 127.0.0.1:5678 |
 | jarvis-memory | Qdrant | 127.0.0.1:6333, `api-key` header |
 | jarvis-db | PostgreSQL 16 | internal only |
 
-Domains: `vis1.cosger.online` = backend, `jar1.cosger.online` = frontend (not yet wired).
+Domains: `vis1.cosger.online` = backend (Hermes API), `jar1.cosger.online` = web admin.
 
 ## Setup (fresh server)
 ```bash
 # Docker Engine + compose plugin from download.docker.com, then:
 cd infra
-./scripts/init-env.sh          # generates .env
-nano .env                      # fill OPENROUTER_API_KEY, LETSENCRYPT_EMAIL
-docker compose up -d
-./scripts/npm-proxy-hosts.sh   # proxy hosts + SSL
+./scripts/init-env.sh          # generates .env, prints the web admin password once
+docker compose up -d --build
+./scripts/npm-proxy-hosts.sh   # proxy hosts + Let's Encrypt
+sudo cp systemd/jarvis-apply.* /etc/systemd/system/ && sudo systemctl enable --now jarvis-apply.path
 ```
+Then log in at https://jar1.cosger.online and fill in the OpenRouter / n8n keys.
+
+### How settings are applied
+The web admin rewrites `infra/.env` **in place**; `jarvis-apply.path` (systemd) sees the change and runs
+`scripts/apply.sh` → `docker compose up -d`, which recreates only the affected containers. Log:
+`infra/data/admin/apply.log` (also shown in the admin). If you edit `.env` by hand, use an editor that
+writes in place (nano, vim) — **not** `sed -i`, which replaces the file and detaches both the admin's bind
+mount and the watcher (fix: `docker compose up -d admin && sudo systemctl restart jarvis-apply.path`).
 Lightsail firewall must allow TCP 80 and 443.
 
-## Admin UIs (SSH tunnel, never public)
-```bash
-ssh -L 8181:localhost:81 -L 5678:localhost:5678 -L 6333:localhost:6333 ubuntu@<server>
-```
-Then open http://localhost:8181 (NPM; credentials in `infra/.env`), http://localhost:5678 (n8n).
-After creating the n8n owner account, create an API key (Settings → n8n API), put it in
-`N8N_API_KEY`, and run `docker compose up -d hermes-agent`.
+## Internal UIs (not public)
+NPM (:81), n8n (:5678) and Qdrant (:6333) are bound to 127.0.0.1 on the server. Public HTTPS access for
+n8n needs its own subdomain (pending).
 
 ## Test the agent
 ```bash

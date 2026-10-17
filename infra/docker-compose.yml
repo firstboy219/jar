@@ -29,6 +29,23 @@ services:
     networks:
       - jarvis-network
 
+  # 1b. WEB ADMIN PANEL (FS-105) — https://${FRONTEND_DOMAIN}
+  # Edits .env; host systemd unit jarvis-apply.path runs `docker compose up -d`. No Docker socket.
+  admin:
+    build: ./admin
+    image: jarvis-admin:local
+    container_name: jarvis-admin
+    restart: always
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    read_only: true
+    volumes:
+      - ./.env:/config/.env
+      - ./data/admin:/status:ro
+    environment:
+      - ADMIN_PUBLIC_ORIGIN=https://${FRONTEND_DOMAIN}
+    networks:
+      - jarvis-network
+
   # 2. REASONING ENGINE (Hermes Agent, includes Playwright/Chromium)
   hermes-agent:
     image: nousresearch/hermes-agent:v0.22.2

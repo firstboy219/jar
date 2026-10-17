@@ -21,5 +21,14 @@ sed \
   -e "s|^HOST_GID=.*|HOST_GID=$(id -g)|" \
   .env.example > .env
 
-mkdir -p data/{npm,letsencrypt,hermes,n8n,qdrant,postgres}
-echo "Created .env (mode 600). Still to fill in manually: OPENROUTER_API_KEY, LETSENCRYPT_EMAIL, N8N_API_KEY."
+admin_pw=$(openssl rand -base64 18 | tr -d '/+=')
+admin_hash=$(cd admin && python3 -I -c 'import sys; sys.path.insert(0, "."); from app.auth import hash_password; print(hash_password(sys.argv[1]))' "$admin_pw")
+sed -i \
+  -e "s|^ADMIN_PASSWORD_HASH=$|ADMIN_PASSWORD_HASH=$admin_hash|" \
+  -e "s|^ADMIN_SESSION_SECRET=$|ADMIN_SESSION_SECRET=$(gen)|" \
+  .env
+
+mkdir -p data/{npm/logs,letsencrypt,hermes,n8n,qdrant,postgres,admin}
+echo "Created .env (mode 600)."
+echo "Web admin password (shown once, change it after first login): $admin_pw"
+echo "Fill the rest from the web admin: OpenRouter key, n8n API key, Let's Encrypt email."

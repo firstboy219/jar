@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block header_actions %}
+<form method="post" action="/logout"><button class="ghost" type="submit">Keluar</button></form>
+{% endblock %}
+{% block content %}
+{% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
+{% for e in errors or [] %}<p class="alert error">{{ e }}</p>{% endfor %}
+
+<section class="card">
+  <h2>Status layanan</h2>
+  <ul class="status">
+    {% for s in status %}
+    <li><span class="dot {{ 'up' if s.ok else 'down' }}"></span>{{ s.name }} <small>{{ s.detail }}</small></li>
+    {% endfor %}
+  </ul>
+  {% if apply_log %}
+  <details><summary>Log penerapan terakhir</summary><pre>{{ apply_log }}</pre></details>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Pengaturan</h2>
+  <p class="hint">Kolom rahasia tidak pernah ditampilkan. Kosongkan untuk mempertahankan nilai saat ini.</p>
+  <form method="post" action="/settings">
+    {% for f in fields %}
+    <label>{{ f.label }}
+      {% if f.secret %}
+      <input type="password" name="{{ f.key }}" placeholder="{{ f.display or 'belum diisi' }}" autocomplete="off">
+      {% else %}
+      <input type="text" name="{{ f.key }}" value="{{ f.display }}" autocomplete="off">
+      {% endif %}
+      <small>{{ f.help }}</small>
+    </label>
+    {% endfor %}
+    <button type="submit">Simpan & terapkan</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Tes chat</h2>
+  <form method="post" action="/chat">
+    <textarea name="message" rows="3" required placeholder="Halo JARVIS, siapa kamu?">{{ chat_message or '' }}</textarea>
+    <button type="submit">Kirim</button>
+  </form>
+  {% if chat_reply %}<pre class="reply">{{ chat_reply }}</pre>{% endif %}
+  <p class="hint">Endpoint backend: <code>{{ backend_url }}/v1/chat/completions</code></p>
+</section>
+
+<section class="card">
+  <h2>Ganti password admin</h2>
+  <form method="post" action="/password">
+    <label>Password lama <input type="password" name="current" autocomplete="current-password" required></label>
+    <label>Password baru <input type="password" name="new" minlength="12" autocomplete="new-password" required></label>
+    <button type="submit">Ganti password</button>
+  </form>
+</section>
+{% endblock %}
