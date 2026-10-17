@@ -34,6 +34,14 @@ docker run --rm --user "$(stat -c %u:%g ../android)" -e HOME=/tmp \
 
 APK=data/releases/jarvis-$VERSION.apk
 cp ../android/app/build/outputs/apk/release/app-release.apk "$APK"
+# AGP drops v1 (JAR) signing when minSdk >= 24; some OEM installers (e.g. Transsion XOS) still want it.
+docker run --rm --user "$(stat -c %u:%g ../android)" -e KSPASS="$PASS" \
+  -v "$PWD/data/android:/keys:ro" -v "$PWD/data/releases:/out" jarvis-android-builder:1 \
+  /opt/android-sdk/build-tools/35.0.0/apksigner sign --ks /keys/release.keystore --ks-key-alias jarvis \
+    --ks-pass env:KSPASS --key-pass env:KSPASS \
+    --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true "/out/$(basename "$APK")"
+rm -f "$APK.idsig"
+chown -R "$(stat -c %u:%g ../android)" data/releases
 
 python3 - "$INDEX" "$VERSION" "$CODE" "$APK" "$NOTES" "$(git -C .. rev-parse --short HEAD)" <<'PY'
 import datetime, hashlib, json, os, sys

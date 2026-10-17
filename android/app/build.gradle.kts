@@ -31,6 +31,10 @@ android {
             storePassword = System.getenv("JARVIS_KEYSTORE_PASSWORD")
             keyAlias = "jarvis"
             keyPassword = System.getenv("JARVIS_KEYSTORE_PASSWORD")
+            // v1 (JAR) + v2 + v3: some OEM package installers (e.g. Transsion XOS) are stricter than AOSP.
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 
