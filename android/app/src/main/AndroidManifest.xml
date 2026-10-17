@@ -38,6 +38,14 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
         <service
+            android:name=".notify.JarvisNotificationListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <service
             android:name=".screen.ScreenShareService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />

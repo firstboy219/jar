@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 mkdir -p data/admin
 {
   echo "[$(date -Is)] .env changed -> docker compose up -d"
-  docker compose up -d 2>&1 | grep -vE '^\s*$' | sed 's/^/  /'
+  flock data/admin/compose.lock docker compose up -d 2>&1 | grep -vE '^\s*$' | sed 's/^/  /'
   echo "[$(date -Is)] exit ${PIPESTATUS[0]}"
 } >> data/admin/apply.log
 tail -n 200 data/admin/apply.log > data/admin/apply.log.tmp && cat data/admin/apply.log.tmp > data/admin/apply.log && rm data/admin/apply.log.tmp

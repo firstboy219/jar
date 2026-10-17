@@ -11,8 +11,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import db, llm, memory, reports, workers
-from .location import Location, context_prefix
+from . import db, llm, memory, notifications, reports, workers
+from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
 Emit = Callable[[dict], Awaitable[None]]
@@ -96,6 +96,10 @@ async def _situation(text: str, location: Location | None) -> str:
     if pending:
         parts.append("LAPORAN BELUM DIKONFIRMASI:\n" + "\n".join(
             f"- laporan #{r['id']} (tugas: {r['title'] or '-'}, disampaikan {r['attempts']}x): {r['text']}" for r in pending))
+    recent = await notifications.recent(6)
+    if recent:
+        parts.append("NOTIFIKASI HP TERBARU (terbaru dulu):\n" + "\n".join(
+            f"- {n['posted_at'].astimezone(WIB):%H:%M} {n['app']}: {n['title']} — {n['text'][:160]}" for n in recent))
     try:
         hits = [m for m in await memory.search(text, limit=4) if m["score"] >= 0.35]
     except Exception:

@@ -158,3 +158,22 @@ def test_screen_is_sent_as_image_part():
     parts = _user_content("ini kenapa?", "QUJD")
     assert parts[0] == {"type": "text", "text": "ini kenapa?"}
     assert parts[1]["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
+
+
+def test_quiet_hours_wrap_midnight(monkeypatch):
+    from app import config, notifications
+    monkeypatch.setattr(config.settings, "quiet_hours", "22:00-06:00")
+    at = lambda h, m=0: datetime(2026, 10, 17, h - 7 if h >= 7 else h + 17, m, tzinfo=timezone.utc)  # WIB → UTC
+    assert notifications.quiet_now(at(23)) and notifications.quiet_now(at(5, 59))
+    assert not notifications.quiet_now(at(6)) and not notifications.quiet_now(at(14))
+    monkeypatch.setattr(config.settings, "quiet_hours", "")
+    assert not notifications.quiet_now(at(23))
+
+
+def test_otp_and_secrets_are_withheld():
+    from app.notifications import Notification, redact
+    otp = Notification(app="BCA", package="com.bca", title="Kode OTP", text="Kode OTP Anda 482913, jangan berikan", posted_at=0)
+    title, text, sens = redact(otp)
+    assert sens and "482913" not in title + text
+    ok = Notification(app="WhatsApp", package="com.whatsapp", title="Budi", text="Rapat jadi jam 3", posted_at=0)
+    assert redact(ok) == ("Budi", "Rapat jadi jam 3", False)

@@ -8,8 +8,11 @@ Decisions and deviations from the BRD: [`docs/decisions.md`](docs/decisions.md).
 APK ──wss/https──▶ jarvis-core (vis1)
                      ├─ tier 1: quick command (status, persetujuan, ingat:, memori …) → answered, no AI
                      ├─ privacy gate: secrets or /privat → blocked, never sent to the cloud
-                     └─ tier 2: Hermes Agent (cheap model) ──MCP──▶ jarvis-tools (memory, approvals, n8n)
-                                   └─ tier 3: delegate_task → expert model, only when Hermes decides it needs it
+                     └─ main agent (fast model, ~1–2 s): talks, never blocks
+                          └─ spawn_task ×N ─▶ workers = Hermes sessions ──MCP──▶ jarvis-tools
+                                              (memory, approvals, n8n, images/videos)
+                                └─ result → spoken report, repeated until the owner says "oke"
+phone notifications ─▶ triage (skip / say once / urgent) ─▶ spoken without being asked
 ```
 
 ## Layout
@@ -92,6 +95,7 @@ Android: protocol parsing, turn-state reducer, WebSocket auto-reconnect (MockWeb
 and screenshot tests — run by `build-apk.sh`.
 
 ## Operations
+- Deploy a service: `sudo infra/scripts/compose.sh up -d --build <service>` (shares a lock with the .env watcher)
 - Logs: `docker compose logs -f <service>`; Hermes: `infra/data/hermes/logs/`
 - Upgrade: bump the pinned tag in `docker-compose.yml`, `docker compose pull && docker compose up -d`
 - Rollback: revert the tag and `docker compose up -d`

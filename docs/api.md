@@ -31,6 +31,25 @@ Server → client (live "thought stream" while Hermes works, then the reply)
 {"type": "error",   "message": "…", "session_id": "…"}
 {"type": "pong"}
 ```
+Background (any time, not tied to a command):
+```json
+{"type": "tasks", "items": [{"id": 4, "title": "…", "status": "running"}]}       // on connect
+{"type": "task", "id": 4, "title": "Cek harga emas", "status": "queued|running|completed|failed|cancelled"}
+{"type": "task_event", "task_id": 4, "event": {"type": "thought|tool|context", …}}  // worker's live thoughts
+{"type": "report", "id": 9, "task_id": 4, "text": "…", "attempt": 1, "repeat": false} // say it, then report_spoken
+{"type": "report_ack", "id": 9}  {"type": "report_unheard", "id": 9}
+{"type": "announce", "text": "Ada WhatsApp dari Budi…"}                           // say once, no ack
+{"type": "media", "caption": "…", "items": [{"kind": "image|video|link", "url": "https://…",
+                  "title": "…", "thumbnail": "https://…|null", "source": "…"}]}
+```
+Client control messages:
+```json
+{"type": "report_spoken", "report_id": 9}   {"type": "ack", "report_id": 9}   {"type": "cancel_task", "task_id": 4}
+{"type": "notification", "notification": {"app": "WhatsApp", "package": "com.whatsapp", "title": "…",
+                                          "text": "…", "posted_at": 1792212345000}}
+```
+`user_command` may also carry `"screen": "<base64 JPEG>"` while the owner shares their screen.
+
 `reply` is authoritative (it may differ slightly from the concatenated deltas). Closing the socket
 mid-turn cancels the agent run on the server.
 Several commands may be in flight on one socket; match replies by `session_id`.

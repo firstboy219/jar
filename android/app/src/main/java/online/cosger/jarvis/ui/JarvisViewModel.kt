@@ -24,6 +24,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
 
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) = engine.saveSettings(serverUrl, token, speak)
     fun setShareLocation(enabled: Boolean) = engine.setShareLocation(enabled)
+    fun setReadNotifications(enabled: Boolean) = engine.setReadNotifications(enabled)
     fun locationPermissionMissing() = engine.locationPermissionMissing()
     fun newConversation() = engine.newConversation()
     fun dismissNotice() = engine.dismissNotice()

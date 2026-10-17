@@ -17,7 +17,8 @@ import logging
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from . import approvals, audit, chat, db, deepgram, devices, hub, media, memory, reports, status, usage, workers
+from . import (approvals, audit, chat, db, deepgram, devices, hub, media, memory, notifications, reports, status,
+               usage, workers)
 from .config import settings
 from .location import Location
 
@@ -35,8 +36,16 @@ async def lifespan(app: FastAPI):
     if resumed:
         log.info("resumed %d interrupted worker task(s)", resumed)
     ticker = asyncio.create_task(reports.run_forever())
+
+    async def purge_daily():
+        while True:
+            await notifications.purge_old()
+            await asyncio.sleep(6 * 3600)
+
+    purger = asyncio.create_task(purge_daily())
     yield
     ticker.cancel()
+    purger.cancel()
     await db.close()
 
 
@@ -155,6 +164,12 @@ async def ws(websocket: WebSocket):
             kind = msg.get("type")
             if kind == "ping":
                 await send({"type": "pong"})
+                continue
+            if kind == "notification":
+                try:
+                    await notifications.receive(notifications.Notification(**(msg.get("notification") or {})), device["id"])
+                except ValueError:
+                    pass
                 continue
             if kind in ("ack", "report_spoken", "cancel_task"):
                 try:
@@ -295,6 +310,11 @@ async def admin_device_revoke(device_id: str, actor: str = admin):
 @app.get("/admin/usage")
 async def admin_usage(_: str = admin):
     return {"local": await usage.local_summary(), "openrouter": await usage.openrouter_summary()}
+
+
+@app.get("/admin/notifications")
+async def admin_notifications(_: str = admin):
+    return await notifications.recent(50)
 
 
 @app.get("/admin/tasks")

@@ -2,7 +2,13 @@ package online.cosger.jarvis.ui.screens
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.core.app.NotificationManagerCompat
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -98,6 +104,8 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
                 if (on && vm.locationPermissionMissing()) askLocation.launch(LOCATION_PERMISSIONS)
             })
         }
+        Spacer(Modifier.height(8.dp))
+        NotificationSetting(s.readNotifications, vm::setReadNotifications)
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = {
@@ -112,5 +120,37 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
         OutlinedButton(onClick = vm::newConversation, modifier = Modifier.fillMaxWidth()) { Text("Mulai percakapan baru") }
         Spacer(Modifier.height(24.dp))
         Text("Versi ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", color = JarvisColors.Muted, fontSize = 12.sp)
+    }
+}
+
+
+/** "Baca notifikasi": needs Android's special "Akses notifikasi" grant, which only the owner can give. */
+@Composable
+private fun NotificationSetting(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(false) }
+    LifecycleResumeEffect(Unit) { // re-check when coming back from Android settings
+        granted = context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
+        onPauseOrDispose { }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Baca notifikasi", color = JarvisColors.Text)
+            Text(
+                when {
+                    !enabled -> "JARVIS memberi tahu notifikasi penting tanpa ditanya. Kode OTP tidak pernah dikirim."
+                    !granted -> "Belum diizinkan — ketuk untuk membuka Akses notifikasi dan aktifkan JARVIS."
+                    else -> "Aktif. Promo dilewati; jam tenang diatur di web admin."
+                },
+                color = if (enabled && !granted) JarvisColors.Amber else JarvisColors.Muted, fontSize = 12.sp,
+                modifier = Modifier.clickable(enabled = enabled && !granted) {
+                    context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                },
+            )
+        }
+        Switch(enabled, { on ->
+            onChange(on)
+            if (on && !granted) context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        })
     }
 }

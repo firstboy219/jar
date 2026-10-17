@@ -39,6 +39,8 @@ SETTINGS = [
      "Dipakai worker yang mengerjakan tugas. Harus mendukung tool calling."),
     ("JARVIS_EXPERT_MODEL", "Model ahli", False, MODEL,
      "Dipakai worker hanya saat ia memutuskan butuh kemampuan lebih (delegasi)."),
+    ("QUIET_HOURS", "Jam tenang notifikasi (WIB)", False, r"^(([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9])?$",
+     "Format 22:00-06:00. Di jam ini hanya notifikasi penting yang disampaikan. Kosongkan untuk mematikan."),
     ("WORKER_CONCURRENCY", "Worker berjalan bersamaan", False, r"^([1-9]|1[0-9]|20)$",
      "Jumlah tugas tak terbatas (antre); ini berapa yang dikerjakan sekaligus (1–20)."),
     ("JARVIS_CODER_MODEL", "Model coding / n8n JSON", False, MODEL,

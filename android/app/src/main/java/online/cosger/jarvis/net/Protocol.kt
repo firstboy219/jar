@@ -38,6 +38,8 @@ sealed interface ServerEvent {
         override val sessionId: String? = null
     }
     data class ReportAck(val id: Long) : ServerEvent { override val sessionId: String? = null }
+    /** Something JARVIS says on its own once (e.g. about a new notification); no confirmation needed. */
+    data class Announce(val text: String) : ServerEvent { override val sessionId: String? = null }
     /** Pictures/videos JARVIS wants the owner to see. */
     data class Media(val caption: String, val items: List<MediaItem>) : ServerEvent { override val sessionId: String? = null }
     data class ReportUnheard(val id: Long) : ServerEvent { override val sessionId: String? = null }
@@ -106,6 +108,7 @@ object Protocol {
                 o["attempt"]?.jsonPrimitive?.intOrNull ?: 1, o["repeat"]?.jsonPrimitive?.booleanOrNull == true,
             )
             "report_ack" -> ServerEvent.ReportAck(o.long("id") ?: return null)
+            "announce" -> ServerEvent.Announce(o.str("text"))
             "media" -> ServerEvent.Media(
                 o.str("caption"),
                 o["items"]?.jsonArray?.mapNotNull {
@@ -141,6 +144,17 @@ object Protocol {
     fun control(type: String, idKey: String, id: Long): String = buildJsonObject {
         put("type", type)
         put(idKey, id)
+    }.toString()
+
+    fun notification(app: String, pkg: String, title: String, text: String, postedAtMs: Long): String = buildJsonObject {
+        put("type", "notification")
+        put("notification", buildJsonObject {
+            put("app", app.take(80))
+            put("package", pkg.take(200))
+            put("title", title.take(300))
+            put("text", text.take(2000))
+            put("posted_at", postedAtMs)
+        })
     }.toString()
 
     const val PING = """{"type":"ping"}"""

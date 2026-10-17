@@ -115,6 +115,31 @@ told and confirmed as heard, like a human assistant.
   (no self-transcription); a foreground service keeps the mic alive with the screen off; auto-mute after
   5 min of silence. Cost: Deepgram bills streamed audio (~$0.26/hour unmuted).
 
+## ADR-013 — Showing media and screen sharing (2026-10-17)
+- Workers get MCP tools `find_images` (Openverse: free, no key, openly-licensed — weak for Indonesian
+  queries, so workers may also use images from pages they read), `find_videos` (YouTube search via
+  yt-dlp, no API key) and `show_media`. jarvis-core validates every item (https only; images checked to be
+  `image/*` ≤ 15 MB; YouTube thumbnails derived) before pushing `media` events to the owner's devices.
+- Screen share: Android MediaProjection at 720 px wide; only the latest frame is kept, and it is sent
+  **only together with an utterance** (~40–150 KB JPEG), never streamed. The main agent sees it as an
+  image part (vision). FLAG_SECURE apps (banking etc.) appear black. Measured: answer about the shared
+  screen in 2.4 s.
+
+## ADR-014 — Proactive notifications (2026-10-17)
+Opt-in twice: Android "Akses notifikasi" (only the owner can grant it) + "Baca notifikasi" in the app.
+The phone forwards non-ongoing, non-system notifications, deduplicated, with one-time codes replaced on
+the phone; the server redacts again (OTP/password/card patterns) before anything reaches the model.
+Notifications within 5 s are batched and triaged by the main-agent model: skip / announce (spoken once,
+`announce` event) / urgent (a report — repeated until acknowledged). Quiet hours (`QUIET_HOURS`,
+default 22:00–06:00 WIB) let only urgent ones through. Stored 7 days (`notifications` table) so the main
+agent can answer "tadi notif apa aja?"; purged every 6 h. Note: notification content (minus codes) is
+sent to the cloud model for triage.
+
+## Ops note — never run two `docker compose up` at once
+Editing `.env` triggers the watcher, which runs `docker compose up -d`. A concurrent manual `up` once
+left a container renamed `<id>_jarvis-core`. Both now take `data/admin/compose.lock`; deploy with
+`sudo infra/scripts/compose.sh up -d --build <service>`.
+
 ## Known gap — latency vs BR-001
 Measured end-to-end: tier-1 commands ~0.1 s; Hermes turns 6–23 s (cloud model + 13k-token agent prompt +
 tool calls). BR-001's < 1.5 s target is not met for agent answers. Since streaming (ADR-009) the first

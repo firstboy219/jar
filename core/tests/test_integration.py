@@ -308,3 +308,65 @@ async def test_media_is_validated_then_pushed(pool, monkeypatch):
     assert [i["kind"] for i in ev["items"]] == ["image", "video"]
     assert ev["items"][1]["thumbnail"] == "https://i.ytimg.com/vi/dFjkFepm1Bc/hqdefault.jpg"
     hub.reset()
+
+
+async def test_notification_triage_levels(pool, monkeypatch):
+    from app import config, hub, llm, notifications
+    hub.reset()
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    hub.register(phone)
+    monkeypatch.setattr(config.settings, "quiet_hours", "")
+    answers = iter([
+        '{"decisions": [{"id": 1, "decision": "announce"}, {"id": 2, "decision": "skip"}], "say": "Ada WhatsApp dari Budi: rapat jadi jam 3."}',
+        '{"decisions": [{"id": 3, "decision": "urgent"}], "say": "Ada transaksi Rp4,5 juta dari BCA yang tidak biasa."}',
+    ])
+
+    async def fake_complete(messages, model=None, max_tokens=300):
+        assert "482913" not in messages[1]["content"]  # OTP never reaches the model
+        return next(answers)
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    N = notifications.Notification
+    for n in (N(app="WhatsApp", package="com.whatsapp", title="Budi", text="Rapat jadi jam 3", posted_at=1),
+              N(app="Shopee", package="com.shopee", title="Flash sale!", text="Diskon 90%", posted_at=1)):
+        await notifications.receive(n, None)
+    notifications._pending.clear()  # drive triage directly instead of waiting for the debounce
+    r = await notifications.triage([{"id": 1, "app": "WhatsApp", "title": "Budi", "text": "Rapat jadi jam 3"},
+                                    {"id": 2, "app": "Shopee", "title": "Flash sale!", "text": "Diskon 90%"}])
+    assert r["level"] == "announce" and pushed[-1] == {"type": "announce", "text": "Ada WhatsApp dari Budi: rapat jadi jam 3."}
+
+    await notifications.receive(N(app="BCA", package="com.bca", title="Kode OTP", text="OTP 482913", posted_at=1), None)
+    notifications._pending.clear()
+    stored = await pool.fetchrow("SELECT title, text, sensitive FROM notifications WHERE id = 3")
+    assert stored["sensitive"] and "482913" not in stored["text"]
+    r = await notifications.triage([{"id": 3, "app": "BCA", "title": stored["title"], "text": stored["text"]}])
+    assert r["level"] == "urgent" and pushed[-1]["type"] == "report"  # urgent → repeated until acknowledged
+    decisions = [r["decision"] for r in await pool.fetch("SELECT decision FROM notifications ORDER BY id")]
+    assert decisions == ["announce", "skip", "urgent"]
+    hub.reset()
+
+
+async def test_quiet_hours_suppress_announcements(pool, monkeypatch):
+    from app import hub, llm, notifications
+    hub.reset()
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    hub.register(phone)
+    monkeypatch.setattr(notifications, "quiet_now", lambda now=None: True)
+
+    async def fake_complete(messages, model=None, max_tokens=300):
+        return '{"decisions": [{"id": 1, "decision": "announce"}], "say": "Ada pesan dari Ani."}'
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    await notifications.receive(notifications.Notification(app="WA", package="wa", title="Ani", text="hai", posted_at=1), None)
+    notifications._pending.clear()
+    r = await notifications.triage([{"id": 1, "app": "WA", "title": "Ani", "text": "hai"}])
+    assert r["level"] == "skip" and pushed == []
+    hub.reset()

@@ -72,7 +72,8 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     @Volatile private var stt: SttConfig? = null
     private var sttFetch: Deferred<SttConfig>? = null
-    private val reportQueue = Channel<ServerEvent.Report>(Channel.UNLIMITED)
+    private val reportQueue = Channel<ServerEvent>(Channel.UNLIMITED) // Report (needs ack) or Announce (once)
+    private val outbox = ArrayDeque<String>() // notifications captured while offline
 
     init {
         scope.launch { socket.events.collect(::onEvent) }
@@ -85,6 +86,13 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             }
         }
         scope.launch { speakReportsWhenFree() }
+        scope.launch {
+            connection.collect { c ->
+                if (c == Connection.Connected) synchronized(outbox) {
+                    while (outbox.isNotEmpty() && socket.sendControl(outbox.first())) outbox.removeFirst()
+                }
+            }
+        }
         scope.launch { autoMuteWatchdog() }
         connect()
     }
@@ -104,6 +112,18 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     }
 
     fun setShareLocation(enabled: Boolean) = settingsStore.update { it.copy(shareLocation = enabled) }
+    fun setReadNotifications(enabled: Boolean) = settingsStore.update { it.copy(readNotifications = enabled) }
+
+    /** From the notification listener: send now, or keep (bounded) until the link is back. */
+    fun forwardNotification(app: String, pkg: String, title: String, text: String, postedAtMs: Long) {
+        val json = Protocol.notification(app, pkg, title, text, postedAtMs)
+        scope.launch {
+            if (!socket.sendControl(json)) synchronized(outbox) {
+                outbox.addLast(json)
+                while (outbox.size > 20) outbox.removeFirst()
+            }
+        }
+    }
     fun locationPermissionMissing(): Boolean = settings.value.shareLocation && !locations.hasPermission()
 
     fun newConversation() {
@@ -204,6 +224,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 _board.update { it.reduce(event) }
                 reportQueue.trySend(event)
             }
+            is ServerEvent.Announce -> {
+                _history.update { it + ChatMessage(fromUser = false, text = event.text, route = "announce") }
+                reportQueue.trySend(event)
+            }
             is ServerEvent.Media -> {
                 _board.update { it.reduce(event) }
                 if (event.items.isNotEmpty()) _notice.value = "JARVIS menampilkan: ${event.caption.ifBlank { "${event.items.size} gambar/video" }}"
@@ -228,7 +252,13 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
      * then the server is told it was said (that is what starts the "did you hear it?" clock).
      */
     private suspend fun speakReportsWhenFree() {
-        for (r in reportQueue) {
+        for (item in reportQueue) {
+            if (item is ServerEvent.Announce) {
+                withTimeoutOrNull(45_000) { listener.state.first { it != MicState.Hearing } }
+                if (settings.value.speakReplies) speaker.say(item.text)
+                continue
+            }
+            val r = item as? ServerEvent.Report ?: continue
             if (_board.value.reports.find { it.id == r.id }?.state == online.cosger.jarvis.ui.SpokenReport.State.Acknowledged) continue
             // Wait for a natural gap, but never forever (a stuck turn must not swallow a report).
             withTimeoutOrNull(45_000) { listener.state.first { it != MicState.Hearing } }
