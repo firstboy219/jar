@@ -34,7 +34,7 @@ docker compose up -d --build
 ./scripts/npm-proxy-hosts.sh   # proxy hosts + Let's Encrypt
 sudo cp systemd/jarvis-apply.* /etc/systemd/system/ && sudo systemctl enable --now jarvis-apply.path
 ```
-Then log in at https://jar1.cosger.online and fill in the OpenRouter / n8n keys.
+Lightsail firewall must allow TCP 80 and 443. Then log in at https://jar1.cosger.online and fill in the OpenRouter / n8n keys.
 
 ### How settings are applied
 The web admin rewrites `infra/.env` **in place**; `jarvis-apply.path` (systemd) sees the change and runs
@@ -42,7 +42,6 @@ The web admin rewrites `infra/.env` **in place**; `jarvis-apply.path` (systemd) 
 `infra/data/admin/apply.log` (also shown in the admin). If you edit `.env` by hand, use an editor that
 writes in place (nano, vim) — **not** `sed -i`, which replaces the file and detaches both the admin's bind
 mount and the watcher (fix: `docker compose up -d admin && sudo systemctl restart jarvis-apply.path`).
-Lightsail firewall must allow TCP 80 and 443.
 
 ## Internal UIs (not public)
 NPM (:81), n8n (:5678) and Qdrant (:6333) are bound to 127.0.0.1 on the server. Public HTTPS access for
