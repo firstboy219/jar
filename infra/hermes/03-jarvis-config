@@ -26,6 +26,9 @@ if env("JARVIS_EXPERT_MODEL"):
 delegation["max_concurrent_children"] = 2
 delegation["subagent_auto_approve"] = False  # dangerous commands in subagents are denied, never auto-run
 
+# Bound one turn's cost/time (default 500 tool-calling iterations).
+cfg.setdefault("agent", {})["max_turns"] = 30
+
 servers = cfg.get("mcp_servers") or {}
 if env("MCP_TOKEN"):
     servers["jarvis"] = {"url": "http://jarvis-tools:8100/mcp",

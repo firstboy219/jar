@@ -137,3 +137,24 @@ async def test_memory_roundtrip(pool, monkeypatch):
     assert all(h["id"] != m["id"] for h in await memory.search("autotoko marketplace"))
     assert await memory.delete(str(m["id"]), "test")
     assert await memory.get(str(m["id"])) is None
+
+
+async def test_n8n_draft_is_idempotent_while_pending(pool, monkeypatch):
+    from app import mcp_server, n8n
+    created = []
+
+    async def fake_generate(description):
+        return {"name": "Tes", "nodes": [{"id": "1", "name": "A", "type": "n8n-nodes-base.manualTrigger",
+                                          "typeVersion": 1, "position": [0, 0], "parameters": {}}],
+                "connections": {}}
+
+    async def fake_create(wf):
+        created.append(wf["name"])
+        return {"id": f"wf{len(created)}", "name": wf["name"], "active": False}
+
+    monkeypatch.setattr(mcp_server, "_generate_workflow", fake_generate)
+    monkeypatch.setattr(n8n, "create_inactive", fake_create)
+    first = await mcp_server.n8n_draft_workflow("tiap pagi cek kurs")
+    second = await mcp_server.n8n_draft_workflow("tiap pagi cek kurs")
+    assert first["created"] and not second["created"] and second["already_pending"]
+    assert second["approval_id"] == first["approval_id"] and created == ["Tes"]

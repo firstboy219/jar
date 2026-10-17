@@ -153,10 +153,15 @@ async def _generate_workflow(description: str) -> dict:
     async with httpx.AsyncClient(timeout=120) as c:
         r = await c.post("https://openrouter.ai/api/v1/chat/completions",
                          headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                         json={"model": settings.coder_model, "temperature": 0.1,
+                         json={"model": settings.coder_model, "temperature": 0.1, "max_tokens": 8000,
                                "messages": [{"role": "system", "content": _CODER_PROMPT},
                                             {"role": "user", "content": description}]})
-    r.raise_for_status()
+    if r.status_code != 200:
+        try:
+            msg = r.json()["error"]["message"]
+        except (ValueError, KeyError, TypeError):
+            msg = r.text[:200]
+        raise RuntimeError(f"OpenRouter HTTP {r.status_code}: {msg}")
     return _extract_json(r.json()["choices"][0]["message"]["content"])
 
 
@@ -165,6 +170,13 @@ async def n8n_draft_workflow(description: str) -> dict:
     """Design a new n8n automation from a plain-language description (BR-002). The coder model writes the
     workflow JSON, it is validated and created INACTIVE in n8n, and an approval request to activate it is
     queued for the owner. Describe trigger, steps, and expected output precisely."""
+    # A retried or timed-out turn must not create a second copy of the same pending workflow.
+    pending = await db.pool().fetchrow(
+        """SELECT id, detail FROM approvals WHERE kind = 'n8n_activate_workflow'
+           AND status = 'awaiting_approval' AND detail->>'description' = $1""", description[:2000])
+    if pending:
+        return {"created": False, "already_pending": True, "workflow_id": pending["detail"]["workflow_id"],
+                "approval_id": pending["id"], "note": "Workflow yang sama sudah dibuat dan menunggu persetujuan."}
     try:
         wf = await _generate_workflow(description)
     except (httpx.HTTPError, ValueError, KeyError, RuntimeError) as e:
