@@ -29,6 +29,8 @@ import online.cosger.jarvis.ui.Board
 import online.cosger.jarvis.ui.ChatMessage
 import online.cosger.jarvis.ui.Phase
 import online.cosger.jarvis.ui.TurnState
+import online.cosger.jarvis.screen.ScreenCapture
+import online.cosger.jarvis.screen.ScreenShareService
 import online.cosger.jarvis.voice.ContinuousListener
 import online.cosger.jarvis.voice.ListeningService
 import online.cosger.jarvis.voice.MicState
@@ -54,6 +56,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     val interim: StateFlow<String> = listener.interim
     private val speaker = Speaker(context)
     val speaking: StateFlow<Boolean> = speaker.speaking
+
+    /** Screen sharing: the latest frame goes along with each thing the owner says. */
+    val screen = ScreenCapture(context)
+    val screenSharing: StateFlow<Boolean> = screen.active
 
     private val _turn = MutableStateFlow(TurnState())
     val turn: StateFlow<TurnState> = _turn.asStateFlow()
@@ -161,7 +167,8 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         _turn.value = TurnState(phase = Phase.Thinking, userText = clean)
         scope.launch {
             val loc = runCatching { location?.let { withTimeoutOrNull(2_000) { it.await() } } }.getOrNull()
-            if (!socket.send(clean, settings.value.sessionId, loc)) {
+            val frame = if (screen.active.value) runCatching { screen.latestJpegBase64() }.getOrNull() else null
+            if (!socket.send(clean, settings.value.sessionId, loc, frame)) {
                 _turn.value = TurnState()
                 _notice.value = "Belum terhubung ke JARVIS — pesan tidak terkirim."
                 return@launch
@@ -180,6 +187,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         }
     }
 
+    fun stopScreenShare() = ScreenShareService.stop(context)
+
+    fun dismissMedia(seq: Long) = _board.update { it.dismissMedia(seq) }
+
     fun cancelTask(taskId: Long) {
         socket.sendControl(Protocol.control("cancel_task", "task_id", taskId))
     }
@@ -192,6 +203,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             is ServerEvent.Report -> {
                 _board.update { it.reduce(event) }
                 reportQueue.trySend(event)
+            }
+            is ServerEvent.Media -> {
+                _board.update { it.reduce(event) }
+                if (event.items.isNotEmpty()) _notice.value = "JARVIS menampilkan: ${event.caption.ifBlank { "${event.items.size} gambar/video" }}"
             }
             else -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return

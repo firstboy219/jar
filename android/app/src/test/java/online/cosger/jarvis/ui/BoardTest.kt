@@ -49,4 +49,21 @@ class BoardTest {
         b = Board().reduce(ServerEvent.Report(8, null, "x", 3, true)).reduce(ServerEvent.ReportUnheard(8))
         assertEquals(SpokenReport.State.Unheard, b.openReports.single().state)
     }
+
+    @Test fun mediaEventsAreParsedFilteredAndKept() {
+        val e = Protocol.parse("""{"type":"media","caption":"Contoh kampas rem","items":[
+            {"kind":"video","url":"https://www.youtube.com/watch?v=XkQzAS-9G3E","title":"Ganti kampas","thumbnail":"https://i.ytimg.com/vi/XkQzAS-9G3E/hqdefault.jpg","source":""},
+            {"kind":"image","url":"http://insecure/x.jpg","title":"x","thumbnail":null,"source":""}]}""") as ServerEvent.Media
+        assertEquals(1, e.items.size) // non-https dropped
+        assertEquals("https://i.ytimg.com/vi/XkQzAS-9G3E/hqdefault.jpg", e.items[0].preview)
+        var b = Board().reduce(e).reduce(e)
+        assertEquals(listOf(2L, 1L), b.media.map { it.seq }) // newest first
+        b = b.dismissMedia(2)
+        assertEquals(listOf(1L), b.media.map { it.seq })
+    }
+
+    @Test fun commandCarriesScreenFrameOnlyWhenSharing() {
+        assertTrue(Protocol.command("ini kenapa?", "s", null, "QUJD").contains("\"screen\":\"QUJD\""))
+        assertTrue(!Protocol.command("halo", "s").contains("screen"))
+    }
 }

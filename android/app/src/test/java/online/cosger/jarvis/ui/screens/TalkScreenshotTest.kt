@@ -2,7 +2,9 @@ package online.cosger.jarvis.ui.screens
 
 import app.cash.paparazzi.DeviceConfig
 import app.cash.paparazzi.Paparazzi
+import online.cosger.jarvis.net.MediaItem
 import online.cosger.jarvis.ui.Board
+import online.cosger.jarvis.ui.MediaShow
 import online.cosger.jarvis.ui.Phase
 import online.cosger.jarvis.ui.SpokenReport
 import online.cosger.jarvis.ui.ToolActivity
@@ -30,9 +32,10 @@ class TalkScreenshotTest {
         reports = listOf(SpokenReport(9, 3, "Cuaca Pondok Aren siang ini cerah, 35 derajat dan terasa 39. UV sangat tinggi, jadi pakai tabir surya ya.", 2, true, SpokenReport.State.Spoken)),
     )
 
-    private fun shot(turn: TurnState, mic: MicState, board: Board = Board(), interim: String = "", speaking: Boolean = false, connected: Boolean = true) =
+    private fun shot(turn: TurnState, mic: MicState, board: Board = Board(), interim: String = "", speaking: Boolean = false,
+                     connected: Boolean = true, sharing: Boolean = false) =
         paparazzi.snapshot {
-            JarvisTheme { TalkContent(turn, mic, 0.6f, interim, speaking, board, connected, {}, {}, {}, {}) }
+            JarvisTheme { TalkContent(turn, mic, 0.6f, interim, speaking, board, connected, {}, {}, {}, {}, sharing) }
         }
 
     @Test fun mutedIdle() = shot(TurnState(), MicState.Muted)
@@ -43,4 +46,14 @@ class TalkScreenshotTest {
     )
     @Test fun hearing() = shot(TurnState(), MicState.Hearing, interim = "Ngomong-ngomong, kopi atau teh yang")
     @Test fun jarvisSpeaking() = shot(TurnState(phase = Phase.Done, answer = "Teh hangat cocok buat pagi ini."), MicState.Paused, speaking = true)
+
+    @Test fun sharingScreenWithMedia() = shot(
+        TurnState(phase = Phase.Done, userText = "Ini tombol yang mana ya buat ganti rem?", answer = "Yang di kanan bawah. Aku tampilkan juga video caranya."),
+        MicState.Ready,
+        Board(media = listOf(MediaShow(1, "Cara ganti kampas rem motor matic", listOf(
+            MediaItem("video", "https://www.youtube.com/watch?v=XkQzAS-9G3E", "Cara ganti kampas rem belakang motor matic honda", null, ""),
+            MediaItem("image", "https://example.com/rem.jpg", "Kampas rem cakram", null, "")),
+        ))),
+        sharing = true,
+    )
 }

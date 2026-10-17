@@ -1,5 +1,6 @@
 package online.cosger.jarvis.ui
 
+import online.cosger.jarvis.net.MediaItem
 import online.cosger.jarvis.net.ServerEvent
 
 /** One background worker as shown in the app: its status plus its own live "thought stream". */
@@ -23,10 +24,13 @@ data class SpokenReport(
     enum class State { Waiting, Spoken, Acknowledged, Unheard }
 }
 
-/** Workers and reports — what the main agent has delegated and what still needs to be heard. Pure reducer. */
+data class MediaShow(val seq: Long, val caption: String, val items: List<MediaItem>)
+
+/** Workers, reports and shown media — what the main agent has delegated and what still needs attention. Pure reducer. */
 data class Board(
     val workers: List<Worker> = emptyList(),
     val reports: List<SpokenReport> = emptyList(),
+    val media: List<MediaShow> = emptyList(),
 ) {
     val activeWorkers: List<Worker> get() = workers.filter { it.active }
     val openReports: List<SpokenReport> get() = reports.filter { it.state == SpokenReport.State.Waiting || it.state == SpokenReport.State.Spoken || it.state == SpokenReport.State.Unheard }
@@ -49,8 +53,13 @@ data class Board(
         }
         is ServerEvent.ReportAck -> withReport(e.id) { it.copy(state = SpokenReport.State.Acknowledged) }
         is ServerEvent.ReportUnheard -> withReport(e.id) { it.copy(state = SpokenReport.State.Unheard) }
+        is ServerEvent.Media -> if (e.items.isEmpty()) this else copy(
+            media = (listOf(MediaShow((media.firstOrNull()?.seq ?: 0) + 1, e.caption, e.items)) + media).take(MAX_MEDIA),
+        )
         else -> this
     }
+
+    fun dismissMedia(seq: Long): Board = copy(media = media.filter { it.seq != seq })
 
     fun markSpoken(id: Long): Board = withReport(id) {
         if (it.state == SpokenReport.State.Waiting) it.copy(state = SpokenReport.State.Spoken) else it
@@ -62,5 +71,6 @@ data class Board(
     companion object {
         const val MAX_WORKERS = 20
         const val MAX_REPORTS = 20
+        const val MAX_MEDIA = 10
     }
 }

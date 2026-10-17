@@ -197,6 +197,56 @@ async def n8n_draft_workflow(description: str) -> dict:
             "note": "Workflow dibuat nonaktif; pemilik harus menyetujui aktivasi."}
 
 
+# ---------- showing things on the owner's phone ----------
+
+@mcp.tool()
+async def find_images(query: str, limit: int = 6) -> list[dict]:
+    """Search openly-licensed images (Openverse). Returns url, title, source, license. Indonesian queries
+    may return few results — try English keywords too. Then call show_media with the best ones."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get("https://api.openverse.org/v1/images/",
+                            params={"q": query, "page_size": max(1, min(limit, 12)), "mature": "false"})
+        r.raise_for_status()
+        return [{"url": i["url"], "title": i.get("title") or "", "source": i.get("foreign_landing_url") or "",
+                 "license": i.get("license") or ""} for i in r.json().get("results", []) if i.get("url", "").startswith("https://")]
+    except (httpx.HTTPError, ValueError) as e:
+        return [{"error": f"pencarian gambar gagal: {type(e).__name__}"}]
+
+
+def _yt_search(query: str, limit: int) -> list[dict]:
+    import yt_dlp
+    with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "skip_download": True, "noplaylist": True}) as y:
+        info = y.extract_info(f"ytsearch{limit}:{query}", download=False)
+    return [{"url": e["url"], "title": e.get("title") or "", "channel": e.get("channel") or e.get("uploader") or "",
+             "duration_s": e.get("duration")} for e in info.get("entries", []) if e.get("url")]
+
+
+@mcp.tool()
+async def find_videos(query: str, limit: int = 5) -> list[dict]:
+    """Search YouTube videos (title, channel, duration, url). Use for tutorials/demos, then show_media
+    with kind 'video'."""
+    import asyncio
+    try:
+        return await asyncio.to_thread(_yt_search, query, max(1, min(limit, 10)))
+    except Exception as e:
+        return [{"error": f"pencarian video gagal: {type(e).__name__}"}]
+
+
+@mcp.tool()
+async def show_media(items: list[dict], caption: str = "") -> dict:
+    """Show pictures/videos on the owner's phone right now. items: [{"url": "https://…", "kind":
+    "image"|"video"|"link", "title": "…", "source": "…"}]. Images must be direct https image URLs (from
+    find_images, or an image you found on a web page); videos are YouTube URLs. caption: one short line
+    explaining what the owner is looking at."""
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post("http://jarvis-core:8000/internal/media", json={"items": items, "caption": caption},
+                         headers={"X-Internal-Token": settings.mcp_token})
+    if r.status_code != 200:
+        return {"shown": 0, "reason": f"core HTTP {r.status_code}"}
+    return r.json()
+
+
 def build_app():
     app = mcp.streamable_http_app(
         stateless_http=True, json_response=True,

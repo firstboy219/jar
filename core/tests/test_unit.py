@@ -143,3 +143,18 @@ def test_tool_call_fragments_are_merged():
     llm._merge_tool_deltas(acc, [{"index": 0, "function": {"name": "task", "arguments": ' emas"}'}}])
     [call] = llm._finish_tools(acc)
     assert (call.id, call.name, call.arguments) == ("c1", "spawn_task", {"title": "Cek emas"})
+
+
+def test_youtube_thumbnail():
+    from app.media import youtube_thumbnail
+    assert youtube_thumbnail("https://www.youtube.com/watch?v=dFjkFepm1Bc") == "https://i.ytimg.com/vi/dFjkFepm1Bc/hqdefault.jpg"
+    assert youtube_thumbnail("https://youtu.be/dFjkFepm1Bc") == "https://i.ytimg.com/vi/dFjkFepm1Bc/hqdefault.jpg"
+    assert youtube_thumbnail("https://evil.example/watch?v=dFjkFepm1Bc") is None
+
+
+def test_screen_is_sent_as_image_part():
+    from app.assistant import _user_content
+    assert _user_content("halo", None) == "halo"
+    parts = _user_content("ini kenapa?", "QUJD")
+    assert parts[0] == {"type": "text", "text": "ini kenapa?"}
+    assert parts[1]["image_url"]["url"] == "data:image/jpeg;base64,QUJD"

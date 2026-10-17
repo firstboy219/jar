@@ -38,12 +38,20 @@ sealed interface ServerEvent {
         override val sessionId: String? = null
     }
     data class ReportAck(val id: Long) : ServerEvent { override val sessionId: String? = null }
+    /** Pictures/videos JARVIS wants the owner to see. */
+    data class Media(val caption: String, val items: List<MediaItem>) : ServerEvent { override val sessionId: String? = null }
     data class ReportUnheard(val id: Long) : ServerEvent { override val sessionId: String? = null }
     data object Pong : ServerEvent { override val sessionId: String? = null }
     data object AuthOk : ServerEvent { override val sessionId: String? = null }
 }
 
 data class ContextItem(val text: String, val category: String, val score: Double)
+
+data class MediaItem(val kind: String, val url: String, val title: String, val thumbnail: String?, val source: String) {
+    val isVideo: Boolean get() = kind == "video"
+    /** What to draw: the image itself, or a video's thumbnail. */
+    val preview: String? get() = if (isVideo) thumbnail else url
+}
 
 /** Phone position shared with JARVIS when the owner enabled it. */
 data class DeviceLocation(
@@ -98,6 +106,16 @@ object Protocol {
                 o["attempt"]?.jsonPrimitive?.intOrNull ?: 1, o["repeat"]?.jsonPrimitive?.booleanOrNull == true,
             )
             "report_ack" -> ServerEvent.ReportAck(o.long("id") ?: return null)
+            "media" -> ServerEvent.Media(
+                o.str("caption"),
+                o["items"]?.jsonArray?.mapNotNull {
+                    val m = it.jsonObject
+                    val url = m.str("url")
+                    if (!url.startsWith("https://")) null
+                    else MediaItem(m.str("kind").ifEmpty { "image" }, url, m.str("title"),
+                        m["thumbnail"]?.jsonPrimitive?.contentOrNull?.takeIf { t -> t.startsWith("https://") }, m.str("source"))
+                } ?: emptyList(),
+            )
             "report_unheard" -> ServerEvent.ReportUnheard(o.long("id") ?: return null)
             "pong" -> ServerEvent.Pong
             "auth_ok" -> ServerEvent.AuthOk
@@ -105,9 +123,10 @@ object Protocol {
         }
     }
 
-    fun command(text: String, sessionId: String, location: DeviceLocation? = null): String = buildJsonObject {
+    fun command(text: String, sessionId: String, location: DeviceLocation? = null, screenJpegBase64: String? = null): String = buildJsonObject {
         put("user_command", text)
         put("session_id", sessionId)
+        screenJpegBase64?.let { put("screen", it) }
         if (location != null) {
             put("location", buildJsonObject {
                 put("lat", location.lat)

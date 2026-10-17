@@ -60,8 +60,8 @@ class JarvisSocket(
     /** Report heard/spoken, task cancel — fire and forget. */
     fun sendControl(json: String): Boolean = _connection.value == Connection.Connected && ws?.send(json) == true
 
-    fun send(text: String, sessionId: String, location: DeviceLocation? = null): Boolean =
-        _connection.value == Connection.Connected && ws?.send(Protocol.command(text, sessionId, location)) == true
+    fun send(text: String, sessionId: String, location: DeviceLocation? = null, screen: String? = null): Boolean =
+        _connection.value == Connection.Connected && ws?.send(Protocol.command(text, sessionId, location, screen)) == true
 
     private suspend fun runLoop() {
         var attempt = 0

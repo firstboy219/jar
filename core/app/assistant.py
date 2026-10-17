@@ -35,7 +35,15 @@ Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu
 pemilik menunjukkan ia sudah mendengar/menanggapinya (mis. "oke", "sip", "makasih", atau membahas isinya), \
 panggil acknowledge_reports untuk laporan itu. Jika ia minta diulang, ulangi isinya.
 
-Fakta/preferensi yang pemilik minta diingat → remember. Jangan menyimpan rahasia/kata sandi."""
+Fakta/preferensi yang pemilik minta diingat → remember. Jangan menyimpan rahasia/kata sandi.
+
+Menampilkan: kalau pemilik ingin diperlihatkan sesuatu (foto, contoh, video tutorial), atau gambar akan \
+lebih jelas daripada kata-kata, tugaskan worker untuk mencari dan menampilkannya di layar HP \
+(instruksikan: "tampilkan dengan show_media"). Katakan bahwa gambarnya akan muncul di layar.
+
+Layar: jika pesan pemilik menyertakan gambar layar, itu tampilan layar HP-nya saat ini (ia sedang \
+berbagi layar). Diskusikan apa yang terlihat; jangan membacakan data sensitif (saldo, OTP, kata sandi) \
+kecuali diminta."""
 
 TOOLS = [
     {"type": "function", "function": {
@@ -118,8 +126,15 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
     return json.dumps({"error": f"unknown tool {call.name}"})
 
 
+def _user_content(text: str, screen: str | None):
+    if not screen:
+        return text
+    return [{"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{screen}"}}]
+
+
 async def respond(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
-                  location: Location | None = None) -> Answer:
+                  location: Location | None = None, screen: str | None = None) -> Answer:
     async def send(ev: dict) -> None:
         if emit:
             await emit(ev)
@@ -127,7 +142,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "system", "content": await _situation(text, location)},
                 *await _history(session_id),
-                {"role": "user", "content": text}]
+                {"role": "user", "content": _user_content(text, screen)}]
     spoken, usage_in, usage_out = "", 0, 0
     for round_ in range(3):  # model may call tools, then needs one more turn to speak
         completion = None

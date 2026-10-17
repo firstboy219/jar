@@ -78,7 +78,7 @@ async def _log(session_id: str, device_id, role: str, content: str, route: str, 
 
 
 async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
-                 location: Location | None = None) -> Turn:
+                 location: Location | None = None, screen: str | None = None) -> Turn:
     async def send(event: dict) -> None:
         if emit:
             await emit(event)
@@ -114,7 +114,7 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
         await say("thinking")
         started = time.monotonic()
         try:
-            a = await assistant.respond(text, session_id, actor, device_id, send, location)
+            a = await assistant.respond(text, session_id, actor, device_id, send, location, screen)
             await _log(session_id, device_id, "assistant", a.text, "assistant", model="main-agent",
                        prompt_tokens=a.prompt_tokens, completion_tokens=a.completion_tokens,
                        latency_ms=int((time.monotonic() - started) * 1000))

@@ -20,6 +20,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val history = engine.history
     val board = engine.board
     val notice = engine.notice
+    val screenSharing = engine.screenSharing
 
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) = engine.saveSettings(serverUrl, token, speak)
     fun setShareLocation(enabled: Boolean) = engine.setShareLocation(enabled)
@@ -32,4 +33,6 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun acknowledge(reportId: Long) = engine.acknowledge(reportId)
     fun repeatReport(reportId: Long) = engine.repeatReport(reportId)
     fun cancelTask(taskId: Long) = engine.cancelTask(taskId)
+    fun stopScreenShare() = engine.stopScreenShare()
+    fun dismissMedia(seq: Long) = engine.dismissMedia(seq)
 }

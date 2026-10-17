@@ -1,7 +1,9 @@
 package online.cosger.jarvis.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +42,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.ScreenShare
+import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -64,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import online.cosger.jarvis.net.Connection
+import online.cosger.jarvis.screen.ScreenShareService
 import online.cosger.jarvis.ui.Board
 import online.cosger.jarvis.ui.JarvisViewModel
 import online.cosger.jarvis.ui.Phase
@@ -85,7 +90,13 @@ fun TalkScreen(vm: JarvisViewModel) {
     val speaking by vm.speaking.collectAsStateWithLifecycle()
     val board by vm.board.collectAsStateWithLifecycle()
     val connection by vm.connection.collectAsStateWithLifecycle()
+    val sharing by vm.screenSharing.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val askScreen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            ScreenShareService.start(context, result.resultCode, result.data!!)
+        }
+    }
     var hasMic by remember {
         mutableStateOf(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
@@ -107,6 +118,12 @@ fun TalkScreen(vm: JarvisViewModel) {
             }.toTypedArray())
         },
         onAck = vm::acknowledge, onRepeat = vm::repeatReport, onCancelTask = vm::cancelTask,
+        sharing = sharing,
+        onToggleShare = {
+            if (sharing) vm.stopScreenShare()
+            else askScreen.launch(context.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
+        },
+        onDismissMedia = vm::dismissMedia,
     )
 }
 
@@ -134,6 +151,9 @@ fun TalkContent(
     onAck: (Long) -> Unit,
     onRepeat: (Long) -> Unit,
     onCancelTask: (Long) -> Unit,
+    sharing: Boolean = false,
+    onToggleShare: () -> Unit = {},
+    onDismissMedia: (Long) -> Unit = {},
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
@@ -141,7 +161,8 @@ fun TalkContent(
         Modifier.fillMaxSize().background(JarvisColors.Background).padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Header(connected, workers.size)
+        Header(connected, workers.size, sharing, onToggleShare)
+        if (sharing) ShareBanner(onToggleShare)
 
         Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
             ReadinessRing(mic, Modifier.size(206.dp))
@@ -163,6 +184,7 @@ fun TalkContent(
             }
             turn.error?.let { Text(it, color = JarvisColors.Red, fontSize = 13.sp) }
 
+            board.media.take(2).forEach { MediaCard(it, onDismissMedia) }
             board.openReports.forEach { ReportCard(it, onAck, onRepeat) }
             if (workers.isNotEmpty()) {
                 Text("SEDANG DIKERJAKAN · ${workers.size}", color = JarvisColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp)
@@ -177,7 +199,7 @@ fun TalkContent(
 }
 
 @Composable
-private fun Header(connected: Boolean, workers: Int) {
+private fun Header(connected: Boolean, workers: Int, sharing: Boolean, onToggleShare: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) JarvisColors.Green else JarvisColors.Amber))
         Spacer(Modifier.width(8.dp))
@@ -187,6 +209,28 @@ private fun Header(connected: Boolean, workers: Int) {
             if (!connected) "Menghubungkan…" else if (workers > 0) "$workers tugas berjalan" else "Terhubung",
             color = JarvisColors.Muted, fontSize = 12.sp,
         )
+        Spacer(Modifier.width(10.dp))
+        Icon(
+            if (sharing) Icons.Filled.StopScreenShare else Icons.Filled.ScreenShare,
+            if (sharing) "Berhenti berbagi layar" else "Bagikan layar ke JARVIS",
+            Modifier.size(22.dp).clickable(onClick = onToggleShare),
+            tint = if (sharing) JarvisColors.Red else JarvisColors.Muted,
+        )
+    }
+}
+
+@Composable
+private fun ShareBanner(onStop: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).background(JarvisColors.Red.copy(alpha = 0.15f))
+            .clickable(onClick = onStop).padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(JarvisColors.Red))
+        Spacer(Modifier.width(8.dp))
+        Text("Layar dibagikan — JARVIS melihat layarmu setiap kamu bicara", color = JarvisColors.Text, fontSize = 12.sp,
+            modifier = Modifier.weight(1f))
+        Text("Stop", color = JarvisColors.Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

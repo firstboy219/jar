@@ -17,7 +17,7 @@ import logging
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from . import approvals, audit, chat, db, deepgram, devices, hub, memory, reports, status, usage, workers
+from . import approvals, audit, chat, db, deepgram, devices, hub, media, memory, reports, status, usage, workers
 from .config import settings
 from .location import Location
 
@@ -78,6 +78,8 @@ class Command(BaseModel):
     user_command: str = Field(min_length=1, max_length=8000)
     session_id: str = Field(min_length=1, max_length=128)
     location: Location | None = None  # only when the owner enabled location sharing in the app
+    # Latest screen frame while the owner is sharing their screen (JPEG, base64), max ~1.5 MB
+    screen: str | None = Field(default=None, max_length=2_000_000)
 
 
 @app.get("/healthz")
@@ -135,7 +137,7 @@ async def ws(websocket: WebSocket):
                 await send({**event, "session_id": cmd.session_id})
             try:
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
-                                         device_id=device["id"], emit=emit, location=cmd.location)
+                                         device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "session_id": cmd.session_id})
             except (WebSocketDisconnect, RuntimeError):
                 pass  # socket gone mid-turn; the task is cancelled below anyway
@@ -168,7 +170,7 @@ async def ws(websocket: WebSocket):
                 continue
             try:
                 cmd = Command(user_command=msg.get("user_command", ""), session_id=msg.get("session_id", ""),
-                              location=msg.get("location"))
+                              location=msg.get("location"), screen=msg.get("screen"))
             except ValueError:
                 await send({"type": "error", "message": "butuh user_command dan session_id (lokasi opsional)"})
                 continue
@@ -183,6 +185,23 @@ async def ws(websocket: WebSocket):
         # Client gone: abandon the main-agent turns in flight. Workers are independent and keep going.
         for task in list(tasks):
             task.cancel()
+
+
+# ---------- internal API (jarvis-tools → core) ----------
+
+class MediaIn(BaseModel):
+    items: list[dict] = Field(min_length=1, max_length=12)
+    caption: str = ""
+
+
+@app.post("/internal/media")
+async def internal_media(m: MediaIn, request: Request):
+    # Only the MCP tool server on jarvis-network may call this; never through the public proxy.
+    if "x-forwarded-for" in request.headers or "x-real-ip" in request.headers:
+        raise HTTPException(404)
+    if not settings.mcp_token or not hmac.compare_digest(request.headers.get("x-internal-token", ""), settings.mcp_token):
+        raise HTTPException(404)
+    return await media.show(m.items, m.caption, "hermes")
 
 
 # ---------- admin API ----------

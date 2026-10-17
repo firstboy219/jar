@@ -281,3 +281,30 @@ async def test_location_whereami_and_agent_context(pool, monkeypatch):
     assert seen["user"] == "cuaca di sini gimana?"
     logged = await pool.fetchval("SELECT content FROM messages WHERE role='user' ORDER BY id DESC LIMIT 1")
     assert logged == "cuaca di sini gimana?"  # context is not written into the message log
+
+
+async def test_media_is_validated_then_pushed(pool, monkeypatch):
+    from app import hub, media
+    hub.reset()
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    async def image_ok(client, url):
+        return "good" in url
+
+    monkeypatch.setattr(media, "_image_ok", image_ok)
+    hub.register(phone)
+    r = await media.show([
+        {"url": "https://img.example/good.jpg", "kind": "image", "title": "Kampas rem"},
+        {"url": "http://img.example/good.jpg"},                       # not https
+        {"url": "https://img.example/bad.html", "kind": "image"},      # not an image
+        {"url": "https://www.youtube.com/watch?v=dFjkFepm1Bc", "kind": "video", "title": "Ganti kampas rem PCX"},
+    ], "Contoh kampas rem", "test")
+    assert r["shown"] == 2 and r["devices"] == 1
+    ev = pushed[0]
+    assert ev["type"] == "media" and ev["caption"] == "Contoh kampas rem"
+    assert [i["kind"] for i in ev["items"]] == ["image", "video"]
+    assert ev["items"][1]["thumbnail"] == "https://i.ytimg.com/vi/dFjkFepm1Bc/hqdefault.jpg"
+    hub.reset()
