@@ -19,11 +19,11 @@ infra/                  Docker Compose stack for the Lightsail server
 | jarvis-proxy | Nginx Proxy Manager, SSL, WebSocket upgrade | public 80/443; admin UI 127.0.0.1:81 |
 | jarvis-admin | Web admin: settings, service status, test chat | `https://jar1.cosger.online` (password login) |
 | jarvis-brain | Hermes Agent (+ Playwright) — OpenAI-compatible API :8642 | via `vis1.cosger.online`, bearer `HERMES_API_KEY` |
-| jarvis-executor | n8n | 127.0.0.1:5678 |
+| jarvis-executor | n8n | `https://flow1.cosger.online` (n8n owner login) |
 | jarvis-memory | Qdrant | 127.0.0.1:6333, `api-key` header |
 | jarvis-db | PostgreSQL 16 | internal only |
 
-Domains: `vis1.cosger.online` = backend (Hermes API), `jar1.cosger.online` = web admin.
+Domains: `vis1.cosger.online` = backend (Hermes API), `jar1.cosger.online` = web admin, `flow1.cosger.online` = n8n.
 
 ## Setup (fresh server)
 ```bash
@@ -44,8 +44,7 @@ writes in place (nano, vim) — **not** `sed -i`, which replaces the file and de
 mount and the watcher (fix: `docker compose up -d admin && sudo systemctl restart jarvis-apply.path`).
 
 ## Internal UIs (not public)
-NPM (:81), n8n (:5678) and Qdrant (:6333) are bound to 127.0.0.1 on the server. Public HTTPS access for
-n8n needs its own subdomain (pending).
+NPM (:81) and Qdrant (:6333) are bound to 127.0.0.1 on the server.
 
 ## Test the agent
 ```bash
@@ -57,6 +56,23 @@ curl https://vis1.cosger.online/v1/chat/completions \
 
 ## Operations
 - Logs: `docker compose logs -f <service>`; Hermes: `infra/data/hermes/logs/`
-- Backup: `docker exec jarvis-db pg_dumpall -U jarvis_admin > backup.sql` plus `infra/data/{n8n,qdrant,hermes}`
 - Upgrade: bump the pinned tag in `docker-compose.yml`, `docker compose pull && docker compose up -d`
 - Rollback: revert the tag and `docker compose up -d`
+
+## Backup & restore
+`jarvis-backup.timer` runs `infra/scripts/backup.sh` daily at 03:00 WIB and keeps 7 copies in
+`infra/backups/<UTC timestamp>/` (root-only; contains `.env` secrets):
+`postgres.sql.gz`, `qdrant.snapshot`, `files.tar.gz` (.env + hermes/n8n/npm/letsencrypt data).
+Install: `sudo cp infra/systemd/jarvis-backup.* /etc/systemd/system/ && sudo systemctl enable --now jarvis-backup.timer`.
+Backups live on the same disk — also enable Lightsail automatic snapshots for off-server copies.
+
+Restore (on a fresh checkout, after installing Docker):
+```bash
+cd infra && B=backups/<timestamp>
+sudo tar -xzf $B/files.tar.gz                       # .env + data dirs
+docker compose up -d postgres-db qdrant
+gunzip -c $B/postgres.sql.gz | docker exec -i jarvis-db psql -U jarvis_admin -d postgres
+curl -X POST -H "api-key: $(grep ^QDRANT_API_KEY= .env | cut -d= -f2)" \
+  -F snapshot=@$B/qdrant.snapshot 'http://127.0.0.1:6333/collections/<name>/snapshots/upload'  # per collection
+docker compose up -d --build
+```

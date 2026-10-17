@@ -37,8 +37,6 @@ SETTINGS = [
      "Contoh: qwen/qwen3-coder-next"),
     ("N8N_API_KEY", "n8n API key", True, r"^[A-Za-z0-9._-]{20,}$",
      "Buat di n8n: Settings → n8n API."),
-    ("LETSENCRYPT_EMAIL", "Email Let's Encrypt", False, r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$",
-     "Opsional. Untuk notifikasi kedaluwarsa sertifikat SSL."),
 ]
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)

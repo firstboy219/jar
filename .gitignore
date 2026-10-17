@@ -5,6 +5,7 @@
 
 # Container data volumes
 infra/data/
+infra/backups/
 
 # OS / editor
 .DS_Store

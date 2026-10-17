@@ -96,6 +96,11 @@ services:
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
       - GENERIC_TIMEZONE=${TZ}
       - TZ=${TZ}
+      - N8N_HOST=${FLOW_DOMAIN}
+      - N8N_PROTOCOL=https
+      - N8N_EDITOR_BASE_URL=https://${FLOW_DOMAIN}/
+      - WEBHOOK_URL=https://${FLOW_DOMAIN}/
+      - N8N_PROXY_HOPS=1
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_RUNNERS_ENABLED=true
     volumes:

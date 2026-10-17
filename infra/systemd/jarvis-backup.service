@@ -1,0 +1,8 @@
+[Unit]
+Description=JARVIS daily backup (postgres, qdrant, data, .env)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/my-project/infra/scripts/backup.sh
