@@ -55,6 +55,8 @@ services:
     shm_size: "1gb" # Chromium needs more than the 64MB default; safer than BRD's ipc: host
     volumes:
       - ./data/hermes:/opt/data
+      - ./hermes/03-jarvis-model:/etc/cont-init.d/03-jarvis-model:ro
+      - ./hermes/SOUL.md:/opt/data/SOUL.md:ro # JARVIS persona (versioned in git)
       # Cross-app visibility (FS-104), read-only
       - ./data/npm/logs:/opt/external/proxy_logs:ro
     environment:
