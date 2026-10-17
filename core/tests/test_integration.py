@@ -167,3 +167,29 @@ async def test_n8n_draft_is_idempotent_while_pending(pool, monkeypatch):
     second = await mcp_server.n8n_draft_workflow("tiap pagi cek kurs")
     assert first["created"] and not second["created"] and second["already_pending"]
     assert second["approval_id"] == first["approval_id"] and created == ["Tes"]
+
+
+async def test_location_whereami_and_agent_context(pool, monkeypatch):
+    from app import chat, hermes
+    from app.location import Location, last
+
+    t = await chat.handle("di mana saya", "s9", actor="test")
+    assert t.route == "core" and "belum menerima lokasi" in t.reply
+
+    loc = Location(lat=-6.158, lon=106.905, accuracy_m=20, address="Kelapa Gading, Jakarta Utara")
+    t = await chat.handle("di mana saya", "s9", actor="test", location=loc)
+    assert "Kelapa Gading" in t.reply and "maps.google.com" in t.reply
+    assert (await last())["address"] == "Kelapa Gading, Jakarta Utara"
+
+    seen = {}
+
+    async def fake(text, session_id):
+        seen["text"] = text
+        yield {"type": "done", "reply": hermes.HermesReply("Cerah.", 1, 1, 1)}
+
+    monkeypatch.setattr(hermes, "stream", fake)
+    await chat.handle("cuaca di sini gimana?", "s9", actor="test", location=loc)
+    assert seen["text"].startswith("[Konteks perangkat") and "Kelapa Gading" in seen["text"]
+    assert seen["text"].endswith("cuaca di sini gimana?")
+    logged = await pool.fetchval("SELECT content FROM messages WHERE role='user' ORDER BY id DESC LIMIT 1")
+    assert logged == "cuaca di sini gimana?"  # context is not written into the message log

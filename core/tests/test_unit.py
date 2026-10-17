@@ -1,5 +1,8 @@
 from app import approvals, hermes, sensitive
 from app.mcp_server import _extract_json, validate_workflow
+from datetime import datetime, timezone
+
+from app.location import Location, context_prefix
 from app.router import Intent, parse
 
 
@@ -104,3 +107,25 @@ def test_tool_event_friendly_name():
 def test_hermes_session_header_sanitized():
     assert hermes.session_header("abc/../../etc") == "jarvis-abc....etc"
     assert len(hermes.session_header("x" * 500)) == len("jarvis-") + 64
+
+
+# ---- location ----
+
+def test_whereami_command():
+    for t in ("di mana saya?", "dimana aku sekarang", "lokasi saya", "Where am I?"):
+        assert parse(t) == Intent("whereami"), t
+    assert parse("di mana saya bisa beli sparepart?") is None  # a real question → Hermes
+
+
+def test_location_describe_and_prefix():
+    loc = Location(lat=-6.158, lon=106.905, accuracy_m=18.4, age_s=300, address="Kelapa Gading, Jakarta Utara")
+    assert loc.describe() == "Kelapa Gading, Jakarta Utara (-6.15800, 106.90500 ±18 m, diambil 5 menit lalu)"
+    p = context_prefix(loc, datetime(2026, 10, 17, 5, 30, tzinfo=timezone.utc))
+    assert p.startswith("[Konteks perangkat — waktu Sabtu 17 Oktober 2026 12:30 WIB; lokasi HP pemilik: Kelapa Gading")
+    assert context_prefix(None, datetime(2026, 10, 17, 5, 30, tzinfo=timezone.utc)).count("lokasi") == 0
+
+
+def test_location_rejects_out_of_range():
+    import pydantic, pytest
+    with pytest.raises(pydantic.ValidationError):
+        Location(lat=123, lon=0)

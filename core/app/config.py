@@ -20,6 +20,11 @@ class Settings:
     openrouter_api_key: str = field(default_factory=lambda: _env("OPENROUTER_API_KEY"))
     coder_model: str = field(default_factory=lambda: _env("JARVIS_CODER_MODEL", "qwen/qwen3-coder-next"))
     deepgram_api_key: str = field(default_factory=lambda: _env("DEEPGRAM_API_KEY"))
+    # Benchmarked 2026-10-17 on Indonesian commands: nova-2 WER 12-15% vs nova-3 19-22% (docs/decisions.md).
+    deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", "nova-2"))
+    deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", "id"))
+    deepgram_keywords: str = field(default_factory=lambda: _env(
+        "DEEPGRAM_KEYWORDS", "JARVIS,Autotoko,n8n,UAT,BRD,FSD,workflow,Shopee,Tokopedia"))
     # web admin -> core (internal network only)
     admin_token: str = field(default_factory=lambda: _env("CORE_ADMIN_TOKEN"))
     # hermes -> jarvis-tools MCP server

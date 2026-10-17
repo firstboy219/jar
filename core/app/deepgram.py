@@ -19,4 +19,10 @@ async def grant(ttl_seconds: int = 60) -> dict:
     if r.status_code != 200:
         raise DeepgramError(f"Deepgram HTTP {r.status_code}")
     d = r.json()
-    return {"access_token": d["access_token"], "expires_in": d.get("expires_in", ttl_seconds)}
+    return {"access_token": d["access_token"], "expires_in": d.get("expires_in", ttl_seconds), **stt_config()}
+
+
+def stt_config() -> dict:
+    """Recognition settings the APK uses for the Deepgram stream (tunable without an app release)."""
+    keywords = [k.strip() for k in settings.deepgram_keywords.split(",") if k.strip()][:50]
+    return {"model": settings.deepgram_model, "language": settings.deepgram_language, "keywords": keywords}

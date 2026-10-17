@@ -8,6 +8,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,24 +20,57 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import kotlin.math.sqrt
 
+/** Speech-to-text settings + short-lived token, both handed out by jarvis-core. */
+data class SttConfig(
+    val token: String,
+    val model: String = "nova-2",
+    val language: String = "id",
+    val keywords: List<String> = emptyList(),
+    val expiresAtMs: Long = Long.MAX_VALUE,
+) {
+    fun isFresh(nowMs: Long = System.currentTimeMillis()) = nowMs < expiresAtMs - 15_000
+
+    fun url(): HttpUrl = "https://api.deepgram.com/v1/listen".toHttpUrl().newBuilder().apply {
+        addQueryParameter("model", model)
+        addQueryParameter("language", language)
+        addQueryParameter("encoding", "linear16")
+        addQueryParameter("sample_rate", DeepgramStreamer.SAMPLE_RATE.toString())
+        addQueryParameter("channels", "1")
+        addQueryParameter("interim_results", "true")
+        addQueryParameter("smart_format", "true")
+        // Push-to-talk decides when speech ends; long endpointing avoids splitting mid-sentence pauses.
+        addQueryParameter("endpointing", "800")
+        keywords.forEach {
+            // nova-3 uses keyterm prompting; older models use keyword boosting.
+            if (model.startsWith("nova-3")) addQueryParameter("keyterm", it)
+            else addQueryParameter("keywords", "$it:2")
+        }
+    }.build()
+}
+
 /**
- * FS-101 client-side audio streaming: AudioRecord (Linear16, 16 kHz, mono) → 100 ms chunks →
- * Deepgram live WSS, KeepAlive every 5 s. Push-to-talk: start() on press, finish() on release
- * returns the final transcript (interim text is exposed live for the UI).
+ * FS-101 push-to-talk: AudioRecord (Linear16, 16 kHz, mono) in 100 ms chunks → Deepgram live WSS.
+ *
+ * Nothing the owner says is lost:
+ *  - recording starts the instant the button goes down; chunks are buffered until the socket is ready
+ *    (the token is normally prefetched, so that wait is ~0),
+ *  - after release it keeps recording [TAIL_MS] so the last syllable is not clipped,
+ *  - it sends Finalize and waits for Deepgram's `from_finalize` result before closing.
  */
 class DeepgramStreamer(
     private val scope: CoroutineScope,
     private val client: OkHttpClient = OkHttpClient(),
-    private val model: String = "nova-3",
-    private val language: String = "id",
 ) {
     private val _interim = MutableStateFlow("")
     val interim: StateFlow<String> = _interim
@@ -48,43 +82,68 @@ class DeepgramStreamer(
     private var ws: WebSocket? = null
     private var recorder: AudioRecord? = null
     private var pump: Job? = null
+    private var sender: Job? = null
     private var keepAlive: Job? = null
+    private var chunks = Channel<ByteString>(Channel.UNLIMITED)
     private val finals = StringBuilder()
+    private var flushed = CompletableDeferred<Unit>()
     private var closed = CompletableDeferred<Unit>()
+    @Volatile private var failure: String? = null
 
+    /** Start recording now; [config] is awaited in parallel (usually already cached). */
     @SuppressLint("MissingPermission") // caller checks RECORD_AUDIO before start()
-    fun start(accessToken: String) {
+    fun start(config: suspend () -> SttConfig) {
         cancel()
         finals.clear()
         _interim.value = ""
+        failure = null
+        flushed = CompletableDeferred()
         closed = CompletableDeferred()
-        val url = "wss://api.deepgram.com/v1/listen?model=$model&language=$language&encoding=linear16" +
-            "&sample_rate=$SAMPLE_RATE&channels=1&interim_results=true&smart_format=true&endpointing=300"
-        ws = client.newWebSocket(
-            Request.Builder().url(url).header("Authorization", "Bearer $accessToken").build(),
-            object : WebSocketListener() {
-                override fun onMessage(webSocket: WebSocket, text: String) = onResult(text)
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { closed.complete(Unit) }
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { closed.complete(Unit) }
-            },
-        )
+        chunks = Channel(Channel.UNLIMITED)
 
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val rec = AudioRecord(
             MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, CHUNK_BYTES * 4),
+            AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, CHUNK_BYTES * 8),
         )
         recorder = rec
         rec.startRecording()
+        val out = chunks
         pump = scope.launch(Dispatchers.IO) {
             val buf = ByteArray(CHUNK_BYTES)
             while (isActive) {
                 val n = rec.read(buf, 0, buf.size)
                 if (n <= 0) continue
-                ws?.send(buf.toByteString(0, n))
+                out.trySend(buf.toByteString(0, n))
                 _level.value = rms(buf, n)
             }
         }
+
+        sender = scope.launch(Dispatchers.IO) {
+            val cfg = try {
+                config()
+            } catch (e: Exception) {
+                failure = e.message ?: "Token suara gagal diambil"
+                flushed.complete(Unit); closed.complete(Unit)
+                return@launch
+            }
+            val socket = client.newWebSocket(
+                Request.Builder().url(cfg.url()).header("Authorization", "Bearer ${cfg.token}").build(),
+                object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) = onResult(text)
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { done() }
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        if (!flushed.isCompleted) failure = "Koneksi suara terputus"
+                        done()
+                    }
+                },
+            )
+            ws = socket
+            // OkHttp queues frames until the handshake completes, so buffered audio is never dropped.
+            for (chunk in out) socket.send(chunk)
+            socket.send("""{"type":"Finalize"}""")
+        }
+
         keepAlive = scope.launch {
             while (isActive) {
                 delay(5_000)
@@ -93,26 +152,35 @@ class DeepgramStreamer(
         }
     }
 
-    /** Stop recording, flush Deepgram, and return everything it finalized. */
+    /** Stop after a short tail, flush Deepgram, and return the final transcript ("" if nothing heard). */
     suspend fun finish(): String {
+        delay(TAIL_MS) // keep listening briefly: people release the button on their last syllable
         stopMic()
-        ws?.send("""{"type":"Finalize"}""")
-        delay(FLUSH_MS) // Deepgram answers Finalize with the last is_final result(s)
+        chunks.close() // sender drains what's left, then sends Finalize
+        withTimeoutOrNull(FLUSH_TIMEOUT_MS) { flushed.await() }
         ws?.send("""{"type":"CloseStream"}""")
         withTimeoutOrNull(2_000) { closed.await() }
         keepAlive?.cancel()
         ws = null
         val text = finals.toString().trim().ifEmpty { _interim.value.trim() }
         _interim.value = ""
+        failure?.let { if (text.isEmpty()) throw IllegalStateException(it) }
         return text
     }
 
     fun cancel() {
         stopMic()
+        chunks.close()
+        sender?.cancel()
         keepAlive?.cancel()
         ws?.cancel()
         ws = null
         _interim.value = ""
+    }
+
+    private fun done() {
+        flushed.complete(Unit)
+        closed.complete(Unit)
     }
 
     private fun stopMic() {
@@ -127,17 +195,14 @@ class DeepgramStreamer(
     }
 
     private fun onResult(text: String) {
-        val o = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return
-        if (o["type"]?.jsonPrimitive?.content != "Results") return
-        val transcript = o["channel"]?.jsonObject?.get("alternatives")?.jsonArray?.firstOrNull()
-            ?.jsonObject?.get("transcript")?.jsonPrimitive?.content.orEmpty()
-        val isFinal = o["is_final"]?.jsonPrimitive?.booleanOrNull == true
-        if (isFinal) {
-            if (transcript.isNotBlank()) finals.append(transcript).append(' ')
+        val r = parseResult(text) ?: return
+        if (r.isFinal) {
+            if (r.transcript.isNotBlank()) finals.append(r.transcript).append(' ')
             _interim.value = finals.toString()
         } else {
-            _interim.value = finals.toString() + transcript
+            _interim.value = finals.toString() + r.transcript
         }
+        if (r.fromFinalize) flushed.complete(Unit)
     }
 
     private fun rms(buf: ByteArray, n: Int): Float {
@@ -152,9 +217,24 @@ class DeepgramStreamer(
         return (rms * 4).coerceIn(0.0, 1.0).toFloat()
     }
 
+    data class Result(val transcript: String, val isFinal: Boolean, val fromFinalize: Boolean)
+
     companion object {
         const val SAMPLE_RATE = 16_000
         const val CHUNK_BYTES = SAMPLE_RATE * 2 / 10 // 100 ms of 16-bit mono
-        const val FLUSH_MS = 700L
+        const val TAIL_MS = 300L
+        const val FLUSH_TIMEOUT_MS = 4_000L
+
+        fun parseResult(text: String): Result? {
+            val o = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
+            if (o["type"]?.jsonPrimitive?.content != "Results") return null
+            val transcript = o["channel"]?.jsonObject?.get("alternatives")?.jsonArray?.firstOrNull()
+                ?.jsonObject?.get("transcript")?.jsonPrimitive?.content.orEmpty()
+            return Result(
+                transcript = transcript,
+                isFinal = o["is_final"]?.jsonPrimitive?.booleanOrNull == true,
+                fromFinalize = o["from_finalize"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+        }
     }
 }

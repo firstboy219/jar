@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import approvals, audit, chat, db, deepgram, devices, memory, status, usage
 from .config import settings
+from .location import Location
 
 log = logging.getLogger("jarvis-core")
 
@@ -67,6 +68,7 @@ async def admin_auth(request: Request) -> str:
 class Command(BaseModel):
     user_command: str = Field(min_length=1, max_length=8000)
     session_id: str = Field(min_length=1, max_length=128)
+    location: Location | None = None  # only when the owner enabled location sharing in the app
 
 
 @app.get("/healthz")
@@ -77,7 +79,7 @@ async def healthz():
 @app.post("/api/v1/chat")
 async def chat_rest(cmd: Command, device: dict = Depends(device_auth)):
     turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
-                             device_id=device["id"])
+                             device_id=device["id"], location=cmd.location)
     return {"reply": turn.reply, "route": turn.route, "session_id": cmd.session_id}
 
 
@@ -119,7 +121,7 @@ async def ws(websocket: WebSocket):
                 await send({**event, "session_id": cmd.session_id})
             try:
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
-                                         device_id=device["id"], emit=emit)
+                                         device_id=device["id"], emit=emit, location=cmd.location)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "session_id": cmd.session_id})
             except (WebSocketDisconnect, RuntimeError):
                 pass  # socket gone mid-turn; the task is cancelled below anyway
@@ -138,9 +140,10 @@ async def ws(websocket: WebSocket):
                 await send({"type": "pong"})
                 continue
             try:
-                cmd = Command(user_command=msg.get("user_command", ""), session_id=msg.get("session_id", ""))
+                cmd = Command(user_command=msg.get("user_command", ""), session_id=msg.get("session_id", ""),
+                              location=msg.get("location"))
             except ValueError:
-                await send({"type": "error", "message": "butuh user_command dan session_id"})
+                await send({"type": "error", "message": "butuh user_command dan session_id (lokasi opsional)"})
                 continue
             task = asyncio.create_task(run(cmd))
             tasks.add(task)

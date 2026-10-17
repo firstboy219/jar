@@ -30,6 +30,11 @@ sealed interface ServerEvent {
 
 data class ContextItem(val text: String, val category: String, val score: Double)
 
+/** Phone position shared with JARVIS when the owner enabled it. */
+data class DeviceLocation(
+    val lat: Double, val lon: Double, val accuracyM: Double?, val ageSeconds: Long, val address: String?,
+)
+
 object Protocol {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -62,9 +67,18 @@ object Protocol {
         }
     }
 
-    fun command(text: String, sessionId: String): String = buildJsonObject {
+    fun command(text: String, sessionId: String, location: DeviceLocation? = null): String = buildJsonObject {
         put("user_command", text)
         put("session_id", sessionId)
+        if (location != null) {
+            put("location", buildJsonObject {
+                put("lat", location.lat)
+                put("lon", location.lon)
+                location.accuracyM?.let { put("accuracy_m", it) }
+                put("age_s", location.ageSeconds)
+                location.address?.let { put("address", it.take(300)) }
+            })
+        }
     }.toString()
 
     const val PING = """{"type":"ping"}"""

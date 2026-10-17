@@ -77,6 +77,24 @@ Hermes was writing its own MEMORY.md/USER.md entries alongside the jarvis memory
 violate "memory is visible/editable by the owner", so `memory.memory_enabled` and
 `user_profile_enabled` are off; all long-term memory goes through the jarvis MCP tools.
 
+## ADR-011 — Speech recognition: Deepgram nova-2 for Indonesian; location as opt-in context (2026-10-17)
+Owner reported words being missed. Benchmark (6 realistic Indonesian commands × 2 voices × clean/noisy,
+streamed exactly like the APK): **nova-2 `id` WER 12.3% clean / 14.8% noisy vs nova-3 `id` 21.7% / 18.9%**;
+nova-3 also dropped trailing words; `multi` was unusable (~94%). Much of nova-2's residual "error" is
+numerals ("2" vs "dua"). Keyword boosting fixed domain terms (UAT, Autotoko). The APK also lost audio:
+it started recording only after fetching a token, stopped the instant the button was released, and closed
+the stream after a fixed 700 ms. Now: token prefetched, mic opens on press with audio buffered until the
+socket is up, 300 ms tail after release, and the stream closes only after Deepgram's `from_finalize`.
+Model/language/keywords come from the server (`DEEPGRAM_*`, editable in the web admin) so tuning needs
+no app release.
+
+Location: the owner asked JARVIS to know where they are. The app sends position + on-phone reverse-
+geocoded address with each command when "Bagikan lokasi" is on (default on, asks permission; denying
+turns it off). jarvis-core prepends it (with WIB time) as a context block for Hermes only — the message
+log keeps the raw text — answers `di mana saya` without AI, and keeps only the latest fix
+(`settings_kv.last_location`) for future proactive features. Note: it is sent to the cloud model as part
+of the prompt when Hermes handles the message.
+
 ## Known gap — latency vs BR-001
 Measured end-to-end: tier-1 commands ~0.1 s; Hermes turns 6–23 s (cloud model + 13k-token agent prompt +
 tool calls). BR-001's < 1.5 s target is not met for agent answers. Since streaming (ADR-009) the first

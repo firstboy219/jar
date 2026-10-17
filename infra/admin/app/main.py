@@ -43,6 +43,10 @@ SETTINGS = [
      "Buat di https://flow1.cosger.online → Settings → n8n API."),
     ("DEEPGRAM_API_KEY", "Deepgram API key", True, r"^[A-Za-z0-9]{20,}$",
      "Untuk voice di APK. APK hanya menerima token berumur pendek dari server."),
+    ("DEEPGRAM_MODEL", "Model pengenalan suara", False, r"^[a-z0-9-]+$",
+     "nova-2 terbukti paling akurat untuk bahasa Indonesia (WER ±12%)."),
+    ("DEEPGRAM_KEYWORDS", "Kosakata khusus suara", False, r"^[A-Za-z0-9 ,._-]{0,500}$",
+     "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma (mis. nama proyek, orang, tempat)."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"),
         ("devices", "Perangkat"), ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]

@@ -10,7 +10,7 @@ from pathlib import Path
 
 _lock = threading.Lock()
 # Values end up in docker compose interpolation and container env: keep them boring.
-SAFE_VALUE = re.compile(r"^[A-Za-z0-9._@:/+=,-]*$")
+SAFE_VALUE = re.compile(r"^[A-Za-z0-9._@:/+=, -]*$")
 
 
 class EnvFile:

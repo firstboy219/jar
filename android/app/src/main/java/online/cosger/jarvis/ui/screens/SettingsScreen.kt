@@ -1,5 +1,7 @@
 package online.cosger.jarvis.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,6 +41,10 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
     var server by remember(s.serverUrl) { mutableStateOf(s.serverUrl) }
     var token by remember { mutableStateOf("") }
     var speak by remember(s.speakReplies) { mutableStateOf(s.speakReplies) }
+    val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        // Without any location permission the toggle would silently do nothing — turn it off instead.
+        if (granted.values.none { it }) vm.setShareLocation(false)
+    }
 
     Column(
         Modifier.fillMaxSize().background(JarvisColors.Background).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -76,6 +82,21 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Bacakan jawaban (suara)", color = JarvisColors.Text, modifier = Modifier.weight(1f))
             Switch(speak, { speak = it })
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Bagikan lokasi ke JARVIS", color = JarvisColors.Text)
+                Text(
+                    "Dikirim bersama setiap perintah (alamat dihitung di HP), untuk pertanyaan seperti " +
+                        "\"cuaca di sini\" atau \"di mana saya\".",
+                    color = JarvisColors.Muted, fontSize = 12.sp,
+                )
+            }
+            Switch(s.shareLocation, { on ->
+                vm.setShareLocation(on)
+                if (on && vm.locationPermissionMissing()) askLocation.launch(LOCATION_PERMISSIONS)
+            })
         }
         Spacer(Modifier.height(20.dp))
         Button(

@@ -11,7 +11,9 @@ A bad token gets `{"type":"error","message":"unauthorized"}` and close code **44
 
 Client → server
 ```json
-{"user_command": "status", "session_id": "3f2c…"}
+{"user_command": "status", "session_id": "3f2c…",
+ "location": {"lat": -6.1587, "lon": 106.9056, "accuracy_m": 15, "age_s": 3,
+              "address": "Jl. Boulevard Raya, Kelapa Gading, Jakarta Utara"}}   // optional, owner opt-in
 {"type": "ping"}
 ```
 `session_id`: stable per conversation (Hermes keeps history per id). Max 128 chars; `user_command` max 8000.
@@ -42,11 +44,11 @@ send `ping` every 20 s, and treat 2 missed `pong`s as a dead connection.
 | Method | Path | Body / result |
 |---|---|---|
 | POST | `/api/v1/chat` | `{"user_command","session_id"}` → `{"reply","route","session_id"}` |
-| GET | `/api/v1/deepgram/token` | → `{"access_token","expires_in"}` short-lived token for Deepgram streaming STT; 503 if no Deepgram key configured |
+| GET | `/api/v1/deepgram/token` | → `{"access_token","expires_in","model","language","keywords"}` — 60 s Deepgram token plus the STT settings to use (tuned on the server); 503 if no Deepgram key |
 | GET | `/healthz` | → `{"ok":true}` (no auth) |
 
 Errors: `401` bad/revoked token, `422` validation, `503` dependency not configured.
 
 ## Quick commands (tier 1, answered by core without any model)
 `bantuan`, `status`, `persetujuan`, `setujui <id>`, `tolak <id>`, `ingat: <teks>`, `memori <kata kunci>`,
-`lupakan <id memori>`, `workflow`. Prefix `/privat` keeps a message off the cloud.
+`lupakan <id memori>`, `workflow`, `di mana saya`. Prefix `/privat` keeps a message off the cloud.

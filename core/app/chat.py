@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from . import approvals, audit, db, hermes, memory, n8n, sensitive, status
+from .location import Location, context_prefix, remember_last
 from .router import HELP, Intent, parse
 
 # Live events for the UI (WSS): {"type": "status"|"thought"|"tool"|"context"|"delta", ...}
@@ -20,8 +21,13 @@ def _fmt_approval(a: dict) -> str:
     return f"#{a['id']} [{a['risk']}] {a['title']} — {a['status']}"
 
 
-async def _run_intent(intent: Intent, actor: str) -> str:
+async def _run_intent(intent: Intent, actor: str, location: Location | None = None) -> str:
     match intent.name:
+        case "whereami":
+            if not location:
+                return ("Saya belum menerima lokasi dari HP. Aktifkan 'Bagikan lokasi ke JARVIS' di Pengaturan "
+                        "aplikasi dan izinkan akses lokasi.")
+            return f"Kamu ada di {location.describe()}.\n{location.maps_url()}"
         case "help":
             return HELP
         case "status":
@@ -74,7 +80,8 @@ async def _log(session_id: str, device_id, role: str, content: str, route: str, 
         kw.get("model"), kw.get("prompt_tokens"), kw.get("completion_tokens"), kw.get("latency_ms"))
 
 
-async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None) -> Turn:
+async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
+                 location: Location | None = None) -> Turn:
     async def send(event: dict) -> None:
         if emit:
             await emit(event)
@@ -84,6 +91,8 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
 
     text = text.strip()
     intent = parse(text)
+    if location:
+        await remember_last(location)
     private = sensitive.is_private(text)
     found = sensitive.scan(text)
 
@@ -94,7 +103,7 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
     if intent:
         await say("executing")
         try:
-            reply, route = await _run_intent(intent, actor), "core"
+            reply, route = await _run_intent(intent, actor, location), "core"
         except (approvals.ApprovalError, memory.MemoryError_, n8n.N8nError) as e:
             reply, route = f"Tidak bisa: {e}", "error"
     elif private or found:
@@ -107,7 +116,8 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
         await say("thinking")
         try:
             r = None
-            async for ev in hermes.stream(text, session_id):
+            # Device context (time, opt-in location) goes to the agent only; the log keeps the raw text.
+            async for ev in hermes.stream(context_prefix(location) + text, session_id):
                 if ev["type"] == "done":
                     r = ev["reply"]
                     continue

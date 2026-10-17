@@ -13,6 +13,7 @@ data class AppSettings(
     val serverUrl: String = BuildConfig.DEFAULT_SERVER,
     val deviceToken: String = "",
     val speakReplies: Boolean = true,
+    val shareLocation: Boolean = true,
     val sessionId: String = UUID.randomUUID().toString(),
 ) {
     val isConfigured: Boolean get() = deviceToken.startsWith("jdv_")
@@ -40,6 +41,7 @@ class SecureSettings(context: Context) {
             serverUrl = prefs.getString("server_url", null) ?: defaults.serverUrl,
             deviceToken = prefs.getString("device_token", null) ?: "",
             speakReplies = prefs.getBoolean("speak_replies", true),
+            shareLocation = prefs.getBoolean("share_location", true),
             sessionId = session,
         )
     }
@@ -50,6 +52,7 @@ class SecureSettings(context: Context) {
             .putString("server_url", next.serverUrl.trim().trimEnd('/'))
             .putString("device_token", next.deviceToken.trim())
             .putBoolean("speak_replies", next.speakReplies)
+            .putBoolean("share_location", next.shareLocation)
             .putString("session_id", next.sessionId)
             .apply()
         _state.value = next.copy(serverUrl = next.serverUrl.trim().trimEnd('/'), deviceToken = next.deviceToken.trim())

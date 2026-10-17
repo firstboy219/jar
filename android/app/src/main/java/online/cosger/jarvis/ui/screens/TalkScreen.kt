@@ -83,17 +83,28 @@ fun TalkScreen(vm: JarvisViewModel) {
     var hasMic by remember {
         mutableStateOf(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
     }
-    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { hasMic = it }
+    val askPerms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        hasMic = it[Manifest.permission.RECORD_AUDIO] == true || hasMic
+    }
+    LaunchedEffect(Unit) { vm.prefetchVoice() } // token ready before the first press
 
     TalkContent(
         turn = turn,
         interim = interim,
         micLevel = level,
         connected = connection == Connection.Connected,
-        onPress = { if (hasMic) vm.onTalkPressed() else askMic.launch(Manifest.permission.RECORD_AUDIO) },
+        onPress = {
+            if (hasMic) vm.onTalkPressed()
+            else askPerms.launch(
+                if (vm.locationPermissionMissing()) arrayOf(Manifest.permission.RECORD_AUDIO, *LOCATION_PERMISSIONS)
+                else arrayOf(Manifest.permission.RECORD_AUDIO),
+            )
+        },
         onRelease = { if (hasMic) vm.onTalkReleased() },
     )
 }
+
+val LOCATION_PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
 
 /** Stateless so it can be previewed/screenshotted with any TurnState. */
 @OptIn(ExperimentalLayoutApi::class)

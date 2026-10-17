@@ -24,6 +24,7 @@ _RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^(lupakan|hapus memori|forget)\s+(?P<id>[0-9a-f-]{36})$"), "forget"),
     (re.compile(r"^(cari memori|memori|apa yang kamu ingat tentang)\s+(?P<query>.+?)\??$"), "recall"),
     (re.compile(r"^(daftar )?(workflow|workflows|alur kerja)( n8n)?\??$"), "workflows"),
+    (re.compile(r"^(di ?mana (saya|aku)( sekarang)?|lokasi (saya|aku)( sekarang)?|where am i)\??$"), "whereami"),
 ]
 
 
@@ -51,5 +52,6 @@ HELP = """Perintah cepat (dijawab langsung tanpa model AI):
 • memori <kata kunci> — cari di memori
 • lupakan <id memori>
 • workflow — daftar workflow n8n
+• di mana saya — lokasi HP saat ini (jika berbagi lokasi aktif)
 Awali pesan dengan /privat agar tidak dikirim ke model cloud.
 Pesan lain dijawab oleh JARVIS (Hermes)."""

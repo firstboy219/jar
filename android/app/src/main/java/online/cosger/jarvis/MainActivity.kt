@@ -2,7 +2,9 @@ package online.cosger.jarvis
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -31,6 +33,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import online.cosger.jarvis.ui.JarvisViewModel
 import online.cosger.jarvis.ui.screens.ChatScreen
+import online.cosger.jarvis.ui.screens.LOCATION_PERMISSIONS
 import online.cosger.jarvis.ui.screens.SettingsScreen
 import online.cosger.jarvis.ui.screens.TalkScreen
 import online.cosger.jarvis.ui.theme.JarvisColors
@@ -57,6 +60,13 @@ class MainActivity : ComponentActivity() {
                     notice?.let { snackbar.showSnackbar(it); vm.dismissNotice() }
                 }
                 val current by nav.currentBackStackEntryAsState()
+                // Location sharing is on by default: ask once at start; denying turns the setting off.
+                val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { g ->
+                    if (g.values.none { it }) vm.setShareLocation(false)
+                }
+                LaunchedEffect(settings.isConfigured) {
+                    if (settings.isConfigured && vm.locationPermissionMissing()) askLocation.launch(LOCATION_PERMISSIONS)
+                }
 
                 Scaffold(
                     containerColor = JarvisColors.Background,

@@ -57,8 +57,8 @@ class JarvisSocket(
     }
 
     /** Returns false if not connected; the caller shows that instead of pretending it was sent. */
-    fun send(text: String, sessionId: String): Boolean =
-        _connection.value == Connection.Connected && ws?.send(Protocol.command(text, sessionId)) == true
+    fun send(text: String, sessionId: String, location: DeviceLocation? = null): Boolean =
+        _connection.value == Connection.Connected && ws?.send(Protocol.command(text, sessionId, location)) == true
 
     private suspend fun runLoop() {
         var attempt = 0
