@@ -71,6 +71,12 @@ private enum class Tab(val route: String, val label: String, val icon: ImageVect
 
 // FragmentActivity (not ComponentActivity): the owner console asks for fingerprint/face via BiometricPrompt.
 class MainActivity : FragmentActivity() {
+    override fun onResume() {
+        super.onResume()
+        // Every time JARVIS is opened: is there a newer version? (dialog: Update sekarang / Tunda)
+        (application as JarvisApp).engine.checkUpdateSoon()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

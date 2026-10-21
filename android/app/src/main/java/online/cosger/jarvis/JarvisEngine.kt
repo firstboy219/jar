@@ -410,6 +410,16 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     fun closeStage() = stageEvent("closed")
 
+    private var lastUpdateCheck = 0L
+
+    /** App came to the foreground: ask the server for a newer APK (at most every 10 minutes). */
+    fun checkUpdateSoon() {
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateCheck < 10 * 60_000L || !settings.value.isConfigured) return
+        lastUpdateCheck = now
+        scope.launch { updater.check() }
+    }
+
     private fun onEvent(event: ServerEvent) {
         when (event) {
             is ServerEvent.Pong, ServerEvent.AuthOk -> return
