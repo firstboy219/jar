@@ -56,7 +56,7 @@ PY
 refresh_mirror() { # current main for Hermes (read-only mount)
   mkdir -p "$(dirname "$MIRROR")"; chown root:root "$(dirname "$MIRROR")"; chmod 755 "$(dirname "$MIRROR")"
   [[ -d $MIRROR ]] || git init -q --bare "$MIRROR"
-  git -C "$MIRROR" fetch -q --force "$REPO" main:main
+  git -C "$REPO" push -q --force "$MIRROR" main:main  # receive-pack runs in the root-owned mirror
   chmod -R go-w,a+rX "$MIRROR"
 }
 
