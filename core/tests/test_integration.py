@@ -17,7 +17,7 @@ async def pool(monkeypatch):
     monkeypatch.setattr(config.settings, "qdrant_url", os.getenv("TEST_QDRANT_URL", ""))
     p = await db.connect(os.environ["TEST_DATABASE_URL"])
     await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
-                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts "
+                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts, flow_issues "
                     "RESTART IDENTITY CASCADE")
     # factory composition: everything local, no category budgets
     await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
@@ -862,3 +862,36 @@ async def test_fast_worker_answers_lookups_without_a_hermes_session(pool, monkey
         await asyncio.sleep(0.05)
     assert "Sidang kabinet" in await pool.fetchval("SELECT result FROM tasks WHERE id = $1", t["id"])
     assert await reports.unconfirmed()
+
+
+
+async def test_flow_watcher_tells_the_owner_and_starts_one_fix(pool, monkeypatch):
+    from app import auditor, llm, workers
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    auditor._state.update(last_run=None, last_told=None)
+
+    async def judge(messages, **kw):
+        if kw.get("caller") != "flowwatch":
+            return "Perbaikan alur selesai."  # report wording
+        assert "PEMILIK: kamu siapa" in messages[1]["content"]
+        return '[{"i": 1, "ok": true}, {"i": 2, "ok": false, "masalah": "menjawab berita, bukan siapa dirinya"}]'
+    monkeypatch.setattr(llm, "complete", judge)
+    for role, text in [("user", "apa berita terkini"), ("assistant", "Berita crypto melonjak, aku cek dulu."),
+                       ("user", "kamu siapa"), ("assistant", "Berita crypto melonjak, aku cek dulu.")]:
+        await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('s40', $1, $2, 'assistant')", role, text)
+    await pool.execute("UPDATE messages SET created_at = now() - interval '5 minutes'")
+    assert await auditor.due()
+    r = await auditor.run()
+    kinds = sorted(i["kind"] for i in r["new"])
+    assert kinds == ["off_context", "promise_unkept", "promise_unkept", "repeated"]
+    fix = await pool.fetchrow("SELECT kind, instruction FROM tasks WHERE id = $1", r["fix_task_id"])
+    assert fix["kind"] == "selfimprove" and "menjawab berita, bukan siapa dirinya" in fix["instruction"]
+    assert (await pool.fetchrow("SELECT kind, status FROM tasks WHERE id = $1", r["task_id"]))["status"] == "completed"
+    told = await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
+    assert "Pengawas alur menemukan" in told and "kamu siapa" in told
+    # nothing new → no new issues, no second fix today
+    auditor._state["last_run"] = None
+    again = await auditor.run()
+    assert again["new"] == [] and again["fix_task_id"] is None
+    await workers._deliver(r["fix_task_id"], "selfimprove", "x", "selesai", "selfimprove")
+    assert await pool.fetchval("SELECT count(*) FROM flow_issues WHERE status = 'fixed'") == 4

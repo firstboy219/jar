@@ -14,6 +14,7 @@ import online.cosger.jarvis.ui.Phase
 import online.cosger.jarvis.ui.TurnState
 import online.cosger.jarvis.ui.console.MoreScreen
 import online.cosger.jarvis.ui.stage.BrainGraph
+import online.cosger.jarvis.ui.stage.BrainView
 import online.cosger.jarvis.ui.stage.Panel
 import online.cosger.jarvis.ui.stage.StageActions
 import online.cosger.jarvis.ui.stage.StageHost
@@ -74,6 +75,36 @@ class StageScreenshotTest {
         JarvisTheme {
             TalkContent(TurnState(), MicState.Muted, 0f, "", false, Board(), true, {}, {}, {}, {},
                 stageContent = { StageHost(StageState(), brain, false, actions, Modifier.fillMaxSize()) }, wakeListening = true)
+        }
+    }
+
+    /** Home: the brain fills the screen behind the conversation; the memories in use are listed. */
+    @Test fun brainBackgroundWithMemoriesInUse() {
+        val now = System.currentTimeMillis()
+        val stage = StageState().pulse(listOf("n3", "n7"), "read", listOf("Suka kopi tanpa gula", "Kantor di BSD"), nowMs = now)
+        paparazzi.snapshot {
+            JarvisTheme {
+                TalkContent(TurnState(phase = Phase.Done, userText = "Mampir kopi dekat kantor?", answer = "Ada dua kedai di BSD yang buka sekarang."),
+                    MicState.Ready, 0f, "", false, Board(), true, {}, {}, {}, {},
+                    stageContent = { StageHost(stage, brain, false, actions, Modifier.fillMaxSize()) },
+                    background = { BrainView(brain, stage.pulses, false, Modifier.fillMaxSize(), dim = 1f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM) },
+                    involved = stage.involved.map { it.label })
+            }
+        }
+    }
+
+    /** Anything at once on the front screen: a note, a map, a document, over the dimmed brain. */
+    @Test fun boardWithAnything() {
+        val stage = panel("board", """{"title":"Persiapan ke Bandung","blocks":[
+            {"kind":"text","title":"Catatan","text":"1. Berangkat 06.00\n2. Isi bensin di rest area KM 57\n3. Rapat 10.00"},
+            {"kind":"doc","title":"Agenda rapat","url":"/api/v1/documents/2","format":"pdf"},
+            {"kind":"text","text":"Cuaca Bandung: cerah berawan, 22–29°C"}]}""", "Persiapan ke Bandung")
+        paparazzi.snapshot {
+            JarvisTheme {
+                TalkContent(TurnState(), MicState.Ready, 0f, "", false, Board(), true, {}, {}, {}, {},
+                    panelOpen = true, stageContent = { StageHost(stage, brain, false, actions, Modifier.fillMaxSize()) },
+                    background = { BrainView(brain, emptyMap(), false, Modifier.fillMaxSize(), dim = 0.45f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM) })
+            }
         }
     }
 

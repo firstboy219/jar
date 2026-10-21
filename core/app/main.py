@@ -22,7 +22,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, audit, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, audit, auditor, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, notifications, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -96,6 +96,8 @@ async def lifespan(app: FastAPI):
             try:
                 await dev.poll()
                 await perf.watch_recurring_errors()
+                if await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
+                    await auditor.run()
                 if perf.weekly_due(last_review):
                     last_review = __import__("datetime").datetime.now(awareness.WIB).date()
                     await perf.start_review()
@@ -601,7 +603,7 @@ async def internal_media(m: MediaIn, request: Request):
 
 
 class StageIn(BaseModel):
-    action: str = Field(pattern="^(show|update|close)$")
+    action: str = Field(pattern="^(show|show_any|update|close)$")
     panel: str | None = None
     payload: dict = Field(default_factory=dict)
     caption: str = ""
@@ -614,6 +616,8 @@ async def internal_stage(s: StageIn, request: Request):
     try:
         if s.action == "show":
             return await stage.show(s.panel or "", s.payload, s.caption, "hermes")
+        if s.action == "show_any":
+            return await stage.show_any(s.payload.get("items") or [], s.caption, "hermes")
         if s.action == "update":
             return await stage.update(s.stage_id or "", s.payload)
         return await stage.close(s.stage_id)
@@ -948,6 +952,28 @@ async def admin_efficiency_review(actor: str = admin):
     return {"task_id": t["id"]}
 
 
+@app.get("/admin/flow-issues")
+async def admin_flow_issues(_: str = admin):
+    return jsonable(await auditor.list_())
+
+
+@app.post("/admin/flow-check")
+async def admin_flow_check(actor: str = admin):
+    r = await auditor.run(actor)
+    return jsonable({"task_id": r["task_id"], "new": len(r["new"]), "fix_task_id": r["fix_task_id"]})
+
+
+class FlowIssueIn(BaseModel):
+    status: str = Field(pattern="^(open|ignored|fixed)$")
+
+
+@app.post("/admin/flow-issues/{issue_id}")
+async def admin_flow_issue(issue_id: int, body: FlowIssueIn, _: str = admin):
+    if not await auditor.set_status(issue_id, body.status):
+        raise HTTPException(404)
+    return {"ok": True}
+
+
 @app.get("/admin/errors")
 async def admin_errors(_: str = admin):
     return jsonable(await errors.recent())
@@ -1063,6 +1089,15 @@ async def console_settings_save(body: dict = Body(...), device: dict = Depends(o
     r = await _admin_internal("POST", "/internal/settings", json=body)
     if r.status_code == 200 and r.json().get("saved"):
         await audit.record(f"device:{device['name']}", "settings.saved", None, keys=r.json()["saved"])
+    return JSONResponse(r.json(), status_code=r.status_code)
+
+
+@app.post(CONSOLE + "/admin-password")
+async def console_admin_password(body: dict = Body(...), device: dict = Depends(owner_device_auth)):
+    r = await _admin_internal("POST", "/internal/admin-password",
+                              json={"current": str(body.get("current") or ""), "new": str(body.get("new") or "")})
+    if r.status_code == 200:
+        await audit.record(f"device:{device['name']}", "admin.password_changed", None)
     return JSONResponse(r.json(), status_code=r.status_code)
 
 

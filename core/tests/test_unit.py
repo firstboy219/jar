@@ -1,3 +1,4 @@
+import pytest
 from app import approvals, hermes, sensitive
 from app.mcp_server import _extract_json, validate_workflow
 from datetime import datetime, timezone
@@ -380,3 +381,43 @@ def test_promise_detection():
     assert _PROMISE.search("Oke, aku cek dulu ya, nanti aku kabari.")
     assert _PROMISE.search("Oke, saya akan cari lagu band dan tampilkan di layar HP.")
     assert not _PROMISE.search("Kopi, biar melek.")
+
+
+
+def test_flow_checks_find_unkept_promises_and_repeats():
+    from datetime import datetime, timedelta, timezone
+    from app import auditor
+    t = datetime(2026, 10, 21, 9, tzinfo=timezone.utc)
+
+    def m(i, role, text, route="assistant", sec=0, trace=None):
+        return {"id": i, "session_id": "s", "role": role, "content": text, "route": route,
+                "created_at": t + timedelta(seconds=sec), "trace": trace}
+    turns = [m(1, "user", "apa berita terkini hari ini"), m(2, "assistant", "Oke, aku cek dulu ya.", sec=20),
+             m(3, "user", "kamu siapa sebenarnya"), m(4, "assistant", "Oke, aku cek dulu ya.", sec=40),
+             m(5, "user", "tolong carikan harga emas"), m(6, "assistant", "Siap, aku carikan.", sec=60,
+                                                         trace={"total_ms": 90_000, "route": {"model": "qwen-lokal"}})]
+    issues = auditor.turn_checks(turns, [("s", t + timedelta(seconds=61))])
+    kinds = [(i["message_id"], i["kind"]) for i in issues]
+    assert (2, "promise_unkept") in kinds and (4, "repeated") in kinds and (6, "slow_reply") in kinds
+    assert (6, "promise_unkept") not in kinds  # a task did start for that one
+    assert auditor.parse_verdicts('ok: [{"i": 1, "ok": true}, {"i": 2, "ok": false, "masalah": "tidak nyambung"}]') == [
+        {"i": 2, "ok": False, "masalah": "tidak nyambung"}]
+    assert auditor.parse_verdicts("bukan json") == []
+
+
+def test_stage_shows_anything():
+    from app import stage
+    assert stage.guess({"url": "https://x.id/lagu.mp3"})[0] == "audio"
+    assert stage.guess({"url": "https://youtu.be/abcdefghijk"})[0] == "video"
+    assert stage.guess({"url": "https://x.id/foto.JPG"})[0] == "image"
+    assert stage.guess({"url": "https://x.id/laporan.pdf"}) == ("doc", {"url": "https://x.id/laporan.pdf", "title": "", "format": "pdf"})
+    assert stage.guess({"url": "https://kompas.com/berita"})[0] == "web"
+    assert stage.guess({"text": "1. beli kopi"})[0] == "text"
+    assert stage.guess({"lat": -6.2, "lon": 106.8, "label": "Monas"})[0] == "map"
+    board = stage.validate("board", {"blocks": [{"kind": "text", "text": "hai"}, {"kind": "image", "url": "https://x.id/a.png"}]})
+    assert [b["kind"] for b in board["blocks"]] == ["text", "image"]
+    for bad in ({"blocks": [{"kind": "draft", "variants": [{"text": "x"}]}]},
+                {"blocks": [{"kind": "web", "url": "https://bank.id", "mode": "login"}]},
+                {"blocks": [{"kind": "image", "url": "http://x.id/a.png"}]}):
+        with pytest.raises(stage.StageError):
+            stage.validate("board", bad)

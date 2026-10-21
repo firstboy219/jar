@@ -157,6 +157,33 @@
 </section>
 
 {% elif tab == 'self' %}
+<section class="card">
+  <div class="row"><h2>Pengawas alur</h2>
+    <form method="post" action="/flow-check"><button type="submit">Periksa sekarang</button></form></div>
+  <p class="hint">Worker khusus yang memeriksa apakah jawaban JARVIS sesuai konteks obrolan dan alurnya berjalan (janji ditepati, tidak berulang, tidak lambat/gagal). Masalah disampaikan ke kamu, lalu diperbaiki.</p>
+  {% for i in flow_issues or [] %}
+  <div class="item row">
+    <div><span class="pill {{ 'rejected' if i.severity == 'high' else ('awaiting_approval' if i.severity == 'medium' else 'completed') }}">{{ i.kind }} · {{ i.status }}</span>
+      <br>{{ i.detail }}
+      {% if i.owner_said %}<br><small>pemilik: “{{ i.owner_said[:140] }}” → JARVIS: “{{ (i.jarvis_said or '')[:160] }}”</small>{% endif %}
+      <br><small>#{{ i.id }} · {{ i.at[:16]|replace('T',' ') }}{% if i.fix_task_id %} · perbaikan tugas #{{ i.fix_task_id }}{% endif %}</small></div>
+    {% if i.status in ('open', 'fixing') %}
+    <form method="post" action="/flow-issues/{{ i.id }}"><input type="hidden" name="status" value="ignored"><button class="ghost" type="submit">Abaikan</button></form>
+    {% endif %}
+  </div>
+  {% else %}<p class="hint">Belum ada masalah yang ditemukan.</p>{% endfor %}
+</section>
+<section class="card">
+  <div class="row"><h2>Pengembangan diri (kode)</h2>
+    <form method="post" action="/efficiency-review"><button type="submit">Tinjauan efisiensi sekarang</button></form></div>
+  <p class="hint">Perubahan kode buatan JARVIS sendiri (performa &amp; fitur minor): diuji otomatis, dipasang hanya setelah kamu setujui.</p>
+  {% for c in dev_changes or [] %}
+  <div class="item"><span class="pill {{ 'completed' if c.status == 'deployed' else ('awaiting_approval' if c.status in ('awaiting_approval','testing','deploying') else 'rejected') }}">{{ c.status }}</span>
+    <strong>#{{ c.id }} {{ c.title }}</strong><br><small>{{ c.branch }} · {{ c.updated_at[:16]|replace('T',' ') }}</small>
+    {% if c.why %}<br><small>{{ c.why[:300] }}</small>{% endif %}
+    {% if c.diffstat %}<details><summary>perubahan</summary><pre>{{ c.diffstat }}</pre></details>{% endif %}</div>
+  {% else %}<p class="hint">Belum ada.</p>{% endfor %}
+</section>
 {% if errors_log %}
 <section class="card">
   <h2>Error layanan (7 hari)</h2>

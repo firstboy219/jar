@@ -24,7 +24,7 @@ OWNER=$(stat -c %U "$REPO")
 export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$REPO GIT_CONFIG_KEY_1=safe.directory GIT_CONFIG_VALUE_1=$REPO/.git
 MAX_CHANGED_LINES=1500
 # Out of scope for self-improvement (security, permissions, secrets, money guards, build/supply chain, itself)
-FORBIDDEN='^(infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|infra/admin/app/(auth|main)\.py|infra/admin/Dockerfile|infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements-dev|core/app/(main|approvals|devices|vault|sensitive|dev|perf|composition|budget|errors|config|db)\.py|android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|\.github/|\.claude/|BRD\.docx)'
+FORBIDDEN='^(infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|infra/admin/app/(auth|main)\.py|infra/admin/Dockerfile|infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements-dev|core/app/(main|approvals|devices|vault|sensitive|dev|perf|auditor|composition|budget|errors|config|db)\.py|android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|\.github/|\.claude/|BRD\.docx)'
 
 mkdir -p "$DEV/requests" "$DEV/results" "$DEV/done"
 as_owner() { runuser -u "$OWNER" -- "$@"; }

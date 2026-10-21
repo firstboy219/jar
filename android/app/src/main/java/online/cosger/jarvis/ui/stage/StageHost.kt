@@ -62,21 +62,14 @@ fun StageHost(state: StageState, brain: BrainGraph?, thinking: Boolean, actions:
             }
         }
         Box(Modifier.fillMaxSize().padding(start = 10.dp, end = 10.dp, bottom = 10.dp)) {
-            when (panel.kind) {
-                "music" -> MusicPanel(panel, actions)
-                "video" -> VideoPanel(panel, actions)
-                "map" -> MapPanel(panel, actions)
-                "web" -> WebPanel(panel, actions)
-                "doc" -> DocPanel(panel, actions)
-                "draft" -> DraftPanel(panel, actions)
-                "gallery" -> GalleryPanel(panel)
-            }
+            PanelBody(panel, actions)
         }
     }
 }
 
-private val TITLES = mapOf("music" to "MUSIK", "video" to "VIDEO", "map" to "PETA", "web" to "WEB", "doc" to "DOKUMEN",
-                           "draft" to "DRAF BALASAN", "gallery" to "GAMBAR")
+private val TITLES = mapOf("music" to "MUSIK", "audio" to "SUARA", "video" to "VIDEO", "image" to "GAMBAR", "map" to "PETA",
+                           "web" to "WEB", "doc" to "DOKUMEN", "text" to "CATATAN", "draft" to "DRAF BALASAN",
+                           "gallery" to "GALERI", "board" to "PANGGUNG")
 
 @Composable
 internal fun PanelButton(text: String, primary: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {

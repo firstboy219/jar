@@ -65,6 +65,17 @@ class ConsoleApi(
         target
     }
 
+    /** A public https file JARVIS pointed to (e.g. a PDF on the web): no device token is sent there. */
+    suspend fun downloadExternal(url: String, target: File): File = withContext(Dispatchers.IO) {
+        require(url.startsWith("https://")) { "hanya https" }
+        client.newCall(Request.Builder().url(url).get().build()).execute().use { r ->
+            if (!r.isSuccessful) throw CoreApiException("HTTP ${r.code}")
+            target.parentFile?.mkdirs()
+            target.outputStream().use { out -> r.body!!.byteStream().copyTo(out) }
+        }
+        target
+    }
+
     /** Header for players/loaders fetching /api/v1/media/... directly. */
     fun authHeader(): Map<String, String> = mapOf("Authorization" to "Bearer ${token()}")
     fun absolute(path: String): String = if (path.startsWith("https://")) path else baseUrl().trimEnd('/') + path

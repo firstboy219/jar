@@ -326,3 +326,19 @@ Changes:
 - While workers are local, situation preparation does not start a Hermes session (keeps the CPU for the owner).
 - "pakai model apa" is answered from the composition without a model.
 The real fix for quality is a cloud model for the main agent (Groq free key or OpenRouter credit).
+
+## ADR-028 — Flow watcher, flexible home screen, console parity (2026-10-21)
+- **Pengawas Alur** (`core/app/auditor.py`, table `flow_issues`): a dedicated worker that runs after a
+  conversation pauses (≥ 2 min, at most every 20 min) or on demand. Deterministic checks (promise without
+  a task, repeated reply, error/very slow reply, failed/very slow task, unheard report) plus a judge model
+  over the new non-private owner ↔ main agent turns ("does the answer fit what the owner said and the
+  conversation?"). The owner hears a short summary (≤ every 3 h); one fix task a day (self-improvement
+  scope, skill `jarvis-flow-audit`) works on the open issues. Each run is listed as a task (kind
+  `flowcheck`). `auditor.py` is out of bounds for self-modification (the watcher must not weaken itself).
+- **Home = anything + the brain**: new panels `audio`, `image`, `text` and `board` (several blocks of any
+  kind stacked; first player autoplays only); `show_anything` (MCP) picks the panel from a URL's type, a
+  text or a place. The 3D brain fills the home background (dimmed under panels/camera); `brain_pulse`
+  carries memory texts so the phone labels the nodes in use and lists "MEMORI TERLIBAT".
+- **Console parity**: the APK gained Pengawas alur, Pengembangan diri (code changes), Error layanan,
+  Tinjauan efisiensi and admin-password change (`/api/v1/console/admin-password` → jarvis-admin); the
+  "Lainnya" menu is grouped like the web admin's tabs and shows the installed version.

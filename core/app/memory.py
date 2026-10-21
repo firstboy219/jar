@@ -74,7 +74,7 @@ async def save(text: str, category: str, source: str, kind: str = "fact") -> dic
         text, category, kind, source)
     await _index(str(row["id"]), text, category, False)
     await audit.record(source, "memory.saved", f"memory:{row['id']}", category=category)
-    _touch([row["id"]], "write")
+    _touch([row["id"]], "write", [row["text"]])
     return dict(row)
 
 
@@ -133,15 +133,17 @@ async def list_(category: str | None = None, limit: int = 200) -> list[dict]:
 _recent: list[tuple[str, str]] = []
 
 
-def _touch(ids: list[str], kind: str) -> None:
+def _touch(ids: list[str], kind: str, texts: list[str] | None = None) -> None:
     for i in ids:
         _recent.append((str(i), kind))
     del _recent[:-60]
     try:
         from . import hub
         if hub.online() and ids:
+            # labels: the phone lists WHICH memories were just used next to the 3D brain
+            labels = [" ".join(str(t).split())[:80] for t in (texts or [])][:12]
             asyncio.get_running_loop().create_task(
-                hub.broadcast({"type": "brain_pulse", "ids": [str(i) for i in ids][:12], "kind": kind}))
+                hub.broadcast({"type": "brain_pulse", "ids": [str(i) for i in ids][:12], "kind": kind, "labels": labels}))
     except RuntimeError:
         pass
 
@@ -165,7 +167,8 @@ async def search(query: str, limit: int = 5, include_stale: bool = False) -> lis
     rows = await db.pool().fetch("SELECT * FROM memories WHERE id = ANY($1::uuid[])", list(scores))
     found = sorted([dict(r) | {"score": round(scores[str(r["id"])], 3)} for r in rows],
                    key=lambda m: m["score"], reverse=True)
-    _touch([m["id"] for m in found if m["score"] >= 0.35], "read")
+    used = [m for m in found if m["score"] >= 0.35]
+    _touch([m["id"] for m in used], "read", [m["text"] for m in used])
     return found
 
 

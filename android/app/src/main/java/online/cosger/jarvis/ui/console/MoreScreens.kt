@@ -29,14 +29,15 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,36 +62,41 @@ import online.cosger.jarvis.ui.stage.obj
 import online.cosger.jarvis.ui.theme.JarvisColors
 import java.io.ByteArrayOutputStream
 
-/** Every menu of the web admin, on the phone (plus phone-only ones). */
-enum class ConsoleRoute(val path: String, val title: String, val hint: String, val icon: ImageVector) {
-    Dashboard("dashboard", "Dasbor", "status layanan, anggaran, latensi", Icons.Filled.Dashboard),
-    Memory("memory", "Memori", "cari, tambah, hapus ingatan JARVIS", Icons.Filled.Memory),
-    Composition("composition", "Komposisi AI", "AI per kategori, mesin suara, Mode Kuat", Icons.Filled.Tune),
-    Studio("studio", "Hermes Studio", "jadwal, skill, kanban buatan Hermes", Icons.Filled.Hub),
-    Self("self", "Diri JARVIS", "pengetahuan diri & perbaikan", Icons.Filled.Psychology),
-    Documents("documents", "Dokumen", "file buatan JARVIS", Icons.Filled.Description),
-    Notifications("notifications", "Notifikasi", "yang diteruskan dari HP", Icons.Filled.Notifications),
-    Devices("devices", "Perangkat", "token perangkat", Icons.Filled.Devices),
-    Update("update", "Pembaruan aplikasi", "daftar versi & pasang", Icons.Filled.SystemUpdate),
-    Audit("audit", "Audit", "jejak semua tindakan", Icons.AutoMirrored.Filled.ReceiptLong),
-    Server("server", "Pengaturan server", "kunci API, anggaran, jam tenang", Icons.Filled.AccountTree),
-    Passwords("passwords", "Password", "login tersimpan untuk web & JARVIS", Icons.Filled.Key),
-    Voice("voice", "Suaraku", "voiceprint supaya JARVIS mengenali suaramu", Icons.Filled.RecordVoiceOver),
-    Phone("phone", "Setelan HP", "supaya JARVIS tidak dimatikan sistem", Icons.Filled.BatteryChargingFull),
-    App("app", "Pengaturan aplikasi", "server, token, suara, lokasi", Icons.Filled.Settings),
+/** Every menu of the web admin, on the phone (plus phone-only ones), grouped like the web admin's tabs. */
+enum class ConsoleRoute(val path: String, val title: String, val hint: String, val icon: ImageVector, val group: String) {
+    Dashboard("dashboard", "Dasbor", "status layanan, anggaran, latensi suara, pemakaian", Icons.Filled.Dashboard, "Pantau"),
+    Audit("audit", "Audit", "jejak semua tindakan", Icons.AutoMirrored.Filled.ReceiptLong, "Pantau"),
+    Notifications("notifications", "Notifikasi", "yang diteruskan dari HP", Icons.Filled.Notifications, "Pantau"),
+    Memory("memory", "Memori", "cari, tambah, hapus ingatan JARVIS", Icons.Filled.Memory, "JARVIS"),
+    Self("self", "Diri JARVIS", "pengetahuan diri, perbaikan, pengembangan diri, error", Icons.Filled.Psychology, "JARVIS"),
+    Flow("flow", "Pengawas alur", "obrolan sesuai konteks? masalah & perbaikannya", Icons.Filled.Insights, "JARVIS"),
+    Studio("studio", "Hermes Studio", "jadwal, skill, kanban, memori Hermes", Icons.Filled.Hub, "JARVIS"),
+    Documents("documents", "Dokumen", "file buatan JARVIS", Icons.Filled.Description, "JARVIS"),
+    Composition("composition", "Komposisi AI", "AI per kategori, anggaran, mesin suara, Mode Kuat", Icons.Filled.Tune, "AI & server"),
+    Server("server", "Pengaturan server", "kunci API, anggaran, jam tenang, password admin", Icons.Filled.AccountTree, "AI & server"),
+    Devices("devices", "Perangkat", "token perangkat", Icons.Filled.Devices, "AI & server"),
+    Passwords("passwords", "Password", "login tersimpan untuk web & JARVIS", Icons.Filled.Key, "AI & server"),
+    Update("update", "Pembaruan aplikasi", "daftar versi & pasang", Icons.Filled.SystemUpdate, "Aplikasi & HP"),
+    Voice("voice", "Suaraku", "voiceprint supaya JARVIS mengenali suaramu", Icons.Filled.RecordVoiceOver, "Aplikasi & HP"),
+    Phone("phone", "Setelan HP", "supaya JARVIS tidak dimatikan sistem", Icons.Filled.BatteryChargingFull, "Aplikasi & HP"),
+    App("app", "Pengaturan aplikasi", "server, token, suara, lokasi", Icons.Filled.Settings, "Aplikasi & HP"),
 }
 
 @Composable
 fun MoreScreen(onOpen: (ConsoleRoute) -> Unit) {
     ConsolePage("Lainnya", null) {
-        ConsoleRoute.entries.forEach { r ->
-            Card(Modifier.clickable { onOpen(r) }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(r.icon, null, tint = JarvisColors.Cyan, modifier = Modifier.size(22.dp))
-                    Spacer(Modifier.width(12.dp))
-                    androidx.compose.foundation.layout.Column {
-                        Body(r.title, size = 15)
-                        Small(r.hint)
+        Small("Tugas & persetujuan, rapat, dan chat ada di tab bawah. Versi terpasang: ${online.cosger.jarvis.BuildConfig.VERSION_NAME}")
+        ConsoleRoute.entries.groupBy { it.group }.forEach { (group, routes) ->
+            Label(group)
+            routes.forEach { r ->
+                Card(Modifier.clickable { onOpen(r) }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(r.icon, null, tint = JarvisColors.Cyan, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.width(12.dp))
+                        androidx.compose.foundation.layout.Column {
+                            Body(r.title, size = 15)
+                            Small(r.hint)
+                        }
                     }
                 }
             }

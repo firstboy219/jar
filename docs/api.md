@@ -63,9 +63,9 @@ Send header `X-App-Caps: say,stage,utterance,brain` to receive the events below.
 {"type": "transcript", "seq": 7, "text": "…", "engine": "whisper|groq|deepgram", "confidence": 0.84, "is_owner": true}
 {"type": "say", "text": "Oke, aku cek dulu ya.", "session_id": "…"}     // speak now, sentence by sentence
 {"type": "reply", …, "spoken": true}                                        // already said via "say"
-{"type": "stage", "id": "…", "panel": "music|video|map|web|doc|draft|gallery", "mode": "show|update|close",
+{"type": "stage", "id": "…", "panel": "music|audio|video|image|map|web|doc|text|draft|gallery|board", "mode": "show|update|close",
  "payload": {…}, "caption": "…"}
-{"type": "brain_pulse", "ids": ["<memory id>"], "kind": "read|write"}
+{"type": "brain_pulse", "ids": ["<memory id>"], "kind": "read|write", "labels": ["<memory text, ≤80 chars>"]}
 {"type": "approval", "id": 12, "title": "…", "risk": "high"}
 ```
 
@@ -99,6 +99,9 @@ JARVIS, `error` = something failed.
 | GET | `/api/v1/app/latest`, `/api/v1/app/releases/{file}` | newest APK (every device) + download |
 | GET | `/admin/dev-changes` (+ console) | JARVIS' own performance changes: status, files, test/deploy log (ADR-026) |
 | POST | `/admin/efficiency-review` (+ console) | start the efficiency review now |
+| GET / POST | `/admin/flow-issues`, `/admin/flow-issues/{id}` `{"status"}` (+ console) | flow watcher findings; mark open/ignored/fixed |
+| POST | `/admin/flow-check` (+ console) | run the flow watcher now |
+| POST | `/api/v1/console/admin-password` | `{"current","new"}` change the web admin password (owner device) |
 | * | `/api/v1/console/…` | every web-admin endpoint (`/admin/…`) for owner-scope devices, plus `settings`, `releases` |
 
 Errors: `401` bad/revoked token, `403` device without owner scope, `422` validation, `503` dependency not configured.

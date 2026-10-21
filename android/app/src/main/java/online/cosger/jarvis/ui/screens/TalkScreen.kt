@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,13 +39,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.NoPhotography
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,6 +82,7 @@ import online.cosger.jarvis.ui.ToolActivity
 import online.cosger.jarvis.ui.TurnState
 import online.cosger.jarvis.ui.Worker
 import online.cosger.jarvis.ui.console.MemoryCardDialog
+import online.cosger.jarvis.ui.stage.BrainView
 import online.cosger.jarvis.ui.stage.StageActions
 import online.cosger.jarvis.ui.stage.StageHost
 import online.cosger.jarvis.ui.theme.JarvisColors
@@ -157,11 +159,23 @@ fun TalkScreen(vm: JarvisViewModel) {
                 StageActions(vm.console, vm::stageEvent, vm::notify, mic == MicState.Hearing), Modifier.fillMaxSize(),
                 onNode = { card = it })
         },
+        background = {
+            // JARVIS' brain fills the whole home screen, behind everything; nodes light up as memories are used
+            val workersBusy = board.workers.any { it.active }
+            BrainView(brain, stage.pulses, orbPhase(turn, mic, speaking, workersBusy) != Phase.Idle, Modifier.fillMaxSize(),
+                onNode = { card = it }, captionAlignment = Alignment.TopCenter, captionPadding = PaddingValues(top = 46.dp),
+                dim = if (stage.panel != null || cameraOn) 0.45f else 1f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM)
+        },
+        involved = stage.involved.map { it.label },
         onReply = { vm.askReplyDraft() },
         wakeListening = wakeListening,
     )
     card?.let { id -> MemoryCardDialog(vm, id) { card = null } }
 }
+
+/** The home brain sits behind the readiness ring and reaches well past it (fractions of the screen). */
+const val BRAIN_CENTER_Y = 0.33f
+const val BRAIN_ZOOM = 1.45f
 
 /** What the orb shows: the owner speaking, JARVIS speaking, the main agent thinking, or workers busy. */
 fun orbPhase(turn: TurnState, mic: MicState, speaking: Boolean, workersBusy: Boolean): Phase = when {
@@ -198,74 +212,107 @@ fun TalkContent(
     stageContent: (@Composable () -> Unit)? = null,
     onReply: () -> Unit = {},
     wakeListening: Boolean = false,
+    background: (@Composable () -> Unit)? = null,
+    involved: List<String> = emptyList(),
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
-    Column(
-        Modifier.fillMaxSize().background(JarvisColors.Background).padding(horizontal = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
-        if (sharing) ShareBanner(onToggleShare, onReply)
-
-        if (cameraOn) {
-            // Point the camera at something and talk: JARVIS sees the frame with each utterance.
-            Box(
-                Modifier.fillMaxWidth().height(260.dp).padding(top = 8.dp).clip(RoundedCornerShape(18.dp))
-                    .border(3.dp, micColor(mic), RoundedCornerShape(18.dp)),
-            ) {
-                camera()
-                Row(Modifier.align(Alignment.BottomEnd).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).clickable(onClick = onFlipCamera),
-                        contentAlignment = Alignment.Center) { Icon(Icons.Filled.Cameraswitch, "Ganti kamera", tint = Color.White) }
-                }
-                Text("JARVIS melihat ini saat kamu bicara", color = Color.White, fontSize = 11.sp,
-                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(8.dp))
-                        .background(Color.Black.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 4.dp))
-            }
-            Spacer(Modifier.height(8.dp))
-        } else if (panelOpen && stageContent != null) {
-            // JARVIS opened something for this conversation: music, video, map, web, document, drafts
-            Box(Modifier.fillMaxWidth().height(340.dp).padding(top = 8.dp)) { stageContent() }
-            Spacer(Modifier.height(6.dp))
-        } else {
-            Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
-                // Default: JARVIS' brain — its memories in 3D; the orb shows on top while it listens/thinks/talks.
-                stageContent?.let { Box(Modifier.fillMaxSize()) { it() } }
-                ReadinessRing(mic, Modifier.size(226.dp))
-                if (stageContent == null || phase != Phase.Idle) {
-                    ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f,
-                        Modifier.size(if (stageContent == null) 180.dp else 110.dp))
-                }
-            }
+    Box(Modifier.fillMaxSize().background(JarvisColors.Background)) {
+        background?.let {
+            Box(Modifier.fillMaxSize()) { it() }
+            // keep the conversation readable over the brain: darker towards the bottom
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(
+                0f to Color.Transparent, 0.42f to Color.Transparent, 0.62f to JarvisColors.Background.copy(alpha = 0.75f),
+                1f to JarvisColors.Background.copy(alpha = 0.92f))))
         }
-        ReadinessLabel(mic, connected, wakeListening)
-
         Column(
-            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).animateContentSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(4.dp))
-            val heard = if (mic == MicState.Hearing && interim.isNotBlank()) interim else turn.userText
-            if (heard.isNotBlank()) {
-                Text("“$heard”", color = JarvisColors.Text, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            }
-            if (turn.answer.isNotBlank()) {
-                Text(turn.answer, color = JarvisColors.Ice, fontSize = 15.sp, lineHeight = 21.sp)
-            }
-            turn.error?.let { Text(it, color = JarvisColors.Red, fontSize = 13.sp) }
+            Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
+            if (sharing) ShareBanner(onToggleShare, onReply)
 
-            board.media.take(2).forEach { MediaCard(it, onDismissMedia) }
-            board.openReports.forEach { ReportCard(it, onAck, onRepeat) }
-            if (workers.isNotEmpty()) {
-                Text("SEDANG DIKERJAKAN · ${workers.size}", color = JarvisColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp)
-                workers.forEach { WorkerCard(it, onCancelTask) }
+            if (cameraOn) {
+                // Point the camera at something and talk: JARVIS sees the frame with each utterance.
+                Box(
+                    Modifier.fillMaxWidth().height(260.dp).padding(top = 8.dp).clip(RoundedCornerShape(18.dp))
+                        .border(3.dp, micColor(mic), RoundedCornerShape(18.dp)),
+                ) {
+                    camera()
+                    Row(Modifier.align(Alignment.BottomEnd).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).clickable(onClick = onFlipCamera),
+                            contentAlignment = Alignment.Center) { Icon(Icons.Filled.Cameraswitch, "Ganti kamera", tint = Color.White) }
+                    }
+                    Text("JARVIS melihat ini saat kamu bicara", color = Color.White, fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(8.dp))
+                            .background(Color.Black.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 4.dp))
+                }
+                Spacer(Modifier.height(8.dp))
+            } else if (panelOpen && stageContent != null) {
+                // JARVIS opened something for this conversation: music, video, map, web, document, drafts
+                Box(Modifier.fillMaxWidth().height(400.dp).padding(top = 8.dp)) { stageContent() }
+                Spacer(Modifier.height(6.dp))
+            } else {
+                Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
+                    // Default: JARVIS' brain — its memories in 3D (full-screen background, or here when there is none);
+                    // the orb shows on top while it listens/thinks/talks.
+                    if (background == null) stageContent?.let { Box(Modifier.fillMaxSize()) { it() } }
+                    ReadinessRing(mic, Modifier.size(226.dp))
+                    val brainShown = stageContent != null || background != null
+                    if (!brainShown || phase != Phase.Idle) {
+                        ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f,
+                            Modifier.size(if (brainShown) 110.dp else 180.dp))
+                    }
+                }
             }
-            Spacer(Modifier.height(8.dp))
+            ReadinessLabel(mic, connected, wakeListening)
+            if (involved.isNotEmpty()) InvolvedMemories(involved)
+
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).animateContentSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Spacer(Modifier.height(4.dp))
+                val heard = if (mic == MicState.Hearing && interim.isNotBlank()) interim else turn.userText
+                if (heard.isNotBlank()) {
+                    Text("“$heard”", color = JarvisColors.Text, fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                if (turn.answer.isNotBlank()) {
+                    Text(turn.answer, color = JarvisColors.Ice, fontSize = 15.sp, lineHeight = 21.sp)
+                }
+                turn.error?.let { Text(it, color = JarvisColors.Red, fontSize = 13.sp) }
+
+                board.media.take(2).forEach { MediaCard(it, onDismissMedia) }
+                board.openReports.forEach { ReportCard(it, onAck, onRepeat) }
+                if (workers.isNotEmpty()) {
+                    Text("SEDANG DIKERJAKAN · ${workers.size}", color = JarvisColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp)
+                    workers.forEach { WorkerCard(it, onCancelTask) }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            MuteButton(mic, onToggleMute)
+            Spacer(Modifier.height(14.dp))
         }
+    }
+}
 
-        MuteButton(mic, onToggleMute)
-        Spacer(Modifier.height(14.dp))
+/** Which memories JARVIS is using right now (they also light up in the brain behind). */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun InvolvedMemories(labels: List<String>) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("MEMORI TERLIBAT", color = JarvisColors.Violet, fontSize = 9.sp, letterSpacing = 2.sp)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 4.dp)) {
+            labels.take(4).forEach { label ->
+                Text(label, color = JarvisColors.Text, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 220.dp).clip(RoundedCornerShape(12.dp))
+                        .background(JarvisColors.Violet.copy(alpha = 0.18f))
+                        .border(1.dp, JarvisColors.Violet.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 3.dp))
+            }
+        }
     }
 }
 

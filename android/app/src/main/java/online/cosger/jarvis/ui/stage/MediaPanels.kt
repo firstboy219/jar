@@ -51,7 +51,7 @@ import online.cosger.jarvis.ui.theme.JarvisColors
 /** ExoPlayer that sends the device token when fetching JARVIS' own media (/api/v1/media/...). */
 @OptIn(UnstableApi::class)
 @Composable
-private fun rememberPlayer(url: String, actions: StageActions): ExoPlayer {
+internal fun rememberPlayer(url: String, actions: StageActions, autoplay: Boolean = true): ExoPlayer {
     val context = LocalContext.current
     val player = remember(url) {
         val http = OkHttpDataSource.Factory(OkHttpClient()).setDefaultRequestProperties(
@@ -59,7 +59,7 @@ private fun rememberPlayer(url: String, actions: StageActions): ExoPlayer {
         ExoPlayer.Builder(context).setMediaSourceFactory(DefaultMediaSourceFactory(http)).build().apply {
             setMediaItem(MediaItem.fromUri(actions.console.absolute(url)))
             prepare()
-            playWhenReady = true
+            playWhenReady = autoplay
         }
     }
     DisposableEffect(player) { onDispose { player.release() } }
@@ -70,8 +70,8 @@ private fun rememberPlayer(url: String, actions: StageActions): ExoPlayer {
 
 @Composable
 fun MusicPanel(panel: Panel, actions: StageActions) {
-    val player = rememberPlayer(panel.str("url"), actions)
-    var playing by remember { mutableStateOf(true) }
+    val player = rememberPlayer(panel.str("url"), actions, panel.autoplay)
+    var playing by remember { mutableStateOf(panel.autoplay) }
     var position by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(player) {
         while (true) {
@@ -98,7 +98,9 @@ fun MusicPanel(panel: Panel, actions: StageActions) {
             PanelButton("Dari awal") { player.seekTo(0); player.play() }
         }
         Spacer(Modifier.height(8.dp))
-        Text("Lisensi ${panel.str("license")} · ${Uri.parse(panel.str("source_url")).host ?: ""}", color = JarvisColors.Muted, fontSize = 10.sp)
+        if (panel.str("license").isNotBlank()) {  // music from open sources; any other sound (audio) has none
+            Text("Lisensi ${panel.str("license")} · ${Uri.parse(panel.str("source_url")).host ?: ""}", color = JarvisColors.Muted, fontSize = 10.sp)
+        }
     }
 }
 
@@ -119,14 +121,14 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                     settings.allowFileAccess = false
                     loadDataWithBaseURL("https://www.youtube.com",
                         "<html><body style='margin:0;background:#000'><iframe width='100%' height='100%' " +
-                            "src='https://www.youtube.com/embed/$yt?autoplay=1&playsinline=1' frameborder='0' " +
+                            "src='https://www.youtube.com/embed/$yt?autoplay=${if (panel.autoplay) 1 else 0}&playsinline=1' frameborder='0' " +
                             "allow='autoplay; encrypted-media; picture-in-picture' allowfullscreen></iframe></body></html>",
                         "text/html", "utf-8", null)
                 }
             }, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
                 onRelease = { it.destroy() })
         } else {
-            val player = rememberPlayer(url, actions)
+            val player = rememberPlayer(url, actions, panel.autoplay)
             AndroidView({ ctx -> PlayerView(ctx).apply { this.player = player } },
                 Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)))
         }

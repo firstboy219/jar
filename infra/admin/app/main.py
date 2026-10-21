@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -150,7 +150,9 @@ async def _tab_data(tab: str, request: Request) -> dict:
     if tab == "app":
         return {"releases": load_releases()}
     if tab == "self":
-        return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors")}
+        return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors"),
+                                                    "flow_issues": await core("GET", "/admin/flow-issues"),
+                                                    "dev_changes": await core("GET", "/admin/dev-changes")}
     if tab == "password":
         return {"vault": await core("GET", "/admin/vault")}
     if tab == "ai":
@@ -286,6 +288,39 @@ async def selfcheck(request: Request):
     except CoreError as e:
         return await render(request, "self", errors=[str(e)])
     return await render(request, "self", notice=f"Cek diri dimulai (tugas #{t['task_id']}). Hasilnya akan disampaikan JARVIS.")
+
+
+@app.post("/flow-check", response_class=HTMLResponse)
+async def flow_check(request: Request):
+    if r := guard(request):
+        return r
+    try:
+        t = await core("POST", "/admin/flow-check")
+    except CoreError as e:
+        return await render(request, "self", errors=[str(e)])
+    return await render(request, "self", notice=f"Pengawas alur selesai memeriksa: {t['new']} masalah baru.")
+
+
+@app.post("/flow-issues/{issue_id}", response_class=HTMLResponse)
+async def flow_issue(request: Request, issue_id: int, status: str = Form(...)):
+    if r := guard(request):
+        return r
+    try:
+        await core("POST", f"/admin/flow-issues/{issue_id}", json={"status": status})
+    except CoreError as e:
+        return await render(request, "self", errors=[str(e)])
+    return await render(request, "self", notice=f"Masalah #{issue_id} → {status}.")
+
+
+@app.post("/efficiency-review", response_class=HTMLResponse)
+async def efficiency_review(request: Request):
+    if r := guard(request):
+        return r
+    try:
+        t = await core("POST", "/admin/efficiency-review")
+    except CoreError as e:
+        return await render(request, "self", errors=[str(e)])
+    return await render(request, "self", notice=f"Tinjauan efisiensi dimulai (tugas #{t['task_id']}).")
 
 
 @app.post("/improvements/{improvement_id}/revert", response_class=HTMLResponse)
@@ -451,6 +486,21 @@ async def internal_settings_save(request: Request):
     if changes:
         ENV.update(changes)
     return {"saved": sorted(changes), "errors": []}
+
+
+@app.post("/internal/admin-password")
+async def internal_admin_password(request: Request):
+    """From the owner's phone (owner device, fingerprint in the app): same rules as the web form."""
+    if not _internal(request):
+        return HTMLResponse("Not found", status_code=404)
+    body = await request.json()
+    if not verify_password(str(body.get("current") or ""), ENV.read()["ADMIN_PASSWORD_HASH"]):
+        return JSONResponse({"error": "Password lama salah."}, status_code=400)
+    new = str(body.get("new") or "")
+    if len(new) < 12:
+        return JSONResponse({"error": "Password baru minimal 12 karakter."}, status_code=400)
+    ENV.update({"ADMIN_PASSWORD_HASH": hash_password(new)})
+    return {"changed": True}
 
 
 @app.get("/internal/releases")

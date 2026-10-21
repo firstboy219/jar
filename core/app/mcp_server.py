@@ -313,8 +313,21 @@ async def stage_show(panel: str, payload: dict, caption: str = "") -> dict:
     - gallery: {"items":[{"url","title"}]}
     - doc: {"title","url" (/api/v1/documents/<id>),"format"}
     - draft: {"to","channel":"whatsapp"|"email","variants":[{"label","text"}],"wa_phone","email","subject"}
-    All URLs must be https. Returns the stage id (for stage_update / stage_close)."""
+    - audio: {"title","url"} any sound (podcast, recording, voice note) — music without licence info
+    - image: {"title","url"} one picture, full size (zoomable)
+    - text: {"title","text"} notes, a list, a summary, a recipe — plain text, newlines kept
+    - board: {"title","blocks":[{"kind": <any panel above except draft>, ...its payload}]} several things at once
+    All URLs must be https. Returns the stage id (for stage_update / stage_close). Easier: show_anything."""
     return await _core("/internal/stage", {"action": "show", "panel": panel, "payload": payload, "caption": caption})
+
+
+@mcp.tool()
+async def show_anything(items: list[dict], caption: str = "") -> dict:
+    """Show ANYTHING on the owner's phone screen; the panel is chosen from what you give. Each item is one of:
+    {"url": "https://…", "title"} — picture, video (incl. YouTube), sound/music file, PDF/document, or any web
+    page (by its type); {"text": "…", "title"} — notes/lists/summaries; {"lat", "lon", "label"} — a place on
+    a map. One item fills the screen; several are stacked on one board. caption: one short line."""
+    return await _core("/internal/stage", {"action": "show_any", "payload": {"items": items}, "caption": caption})
 
 
 @mcp.tool()

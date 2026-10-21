@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,6 +20,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -29,10 +33,11 @@ import kotlin.math.sin
 /** A node after rotation + perspective, for drawing and hit-testing. Pure math, unit-tested. */
 data class Projected(val index: Int, val x: Float, val y: Float, val depth: Float, val scale: Float)
 
-fun project(nodes: List<BrainGraph.Node>, yaw: Float, pitch: Float, width: Float, height: Float): List<Projected> {
+fun project(nodes: List<BrainGraph.Node>, yaw: Float, pitch: Float, width: Float, height: Float,
+            centerY: Float = 0.5f, zoom: Float = 1f): List<Projected> {
     val cx = width / 2f
-    val cy = height / 2f
-    val r = minOf(width, height) * 0.42f
+    val cy = height * centerY
+    val r = minOf(width, height) * 0.42f * zoom
     val cyw = cos(yaw); val syw = sin(yaw); val cp = cos(pitch); val sp = sin(pitch)
     return nodes.mapIndexed { i, n ->
         // rotate around the vertical axis, then tilt
@@ -57,7 +62,13 @@ fun BrainView(
     thinking: Boolean,
     modifier: Modifier = Modifier,
     onNode: (String) -> Unit = {},
+    captionAlignment: Alignment = Alignment.BottomCenter,
+    captionPadding: PaddingValues = PaddingValues(bottom = 6.dp),
+    dim: Float = 1f,
+    centerY: Float = 0.5f,
+    zoom: Float = 1f,
 ) {
+    val measurer = rememberTextMeasurer()
     var yaw by remember { mutableFloatStateOf(0f) }
     var pitch by remember { mutableFloatStateOf(-0.25f) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -80,7 +91,7 @@ fun BrainView(
                 }
                 .pointerInput(graph) {
                     detectTapGestures { tap ->
-                        val hit = project(nodes, yaw, pitch, size.width.toFloat(), size.height.toFloat())
+                        val hit = project(nodes, yaw, pitch, size.width.toFloat(), size.height.toFloat(), centerY, zoom)
                             .minByOrNull { (it.x - tap.x) * (it.x - tap.x) + (it.y - tap.y) * (it.y - tap.y) }
                         if (hit != null && (hit.x - tap.x) * (hit.x - tap.x) + (hit.y - tap.y) * (hit.y - tap.y) < 48f * 48f) {
                             onNode(nodes[hit.index].id)
@@ -89,16 +100,18 @@ fun BrainView(
                 },
         ) {
             val glow = if (thinking) JarvisColors.Violet else JarvisColors.Cyan
-            drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.16f), Color.Transparent), center, size.minDimension / 2f),
-                radius = size.minDimension / 2f)
+            val middle = Offset(size.width / 2f, size.height * centerY)
+            val halo = size.minDimension / 2f * zoom
+            drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.16f * dim), Color.Transparent), middle, halo),
+                radius = halo, center = middle)
             if (nodes.isEmpty()) return@Canvas
-            val pts = project(nodes, yaw, pitch, size.width, size.height)
+            val pts = project(nodes, yaw, pitch, size.width, size.height, centerY, zoom)
             val byIndex = pts.associateBy { it.index }
             graph!!.edges.forEach { (a, b) ->
                 val p = byIndex[a] ?: return@forEach
                 val q = byIndex[b] ?: return@forEach
                 val alpha = (0.10f + 0.18f * ((p.scale + q.scale) / 2f - 0.6f)).coerceIn(0.04f, 0.35f)
-                drawLine(glow.copy(alpha = alpha), Offset(p.x, p.y), Offset(q.x, q.y), strokeWidth = 1.2f)
+                drawLine(glow.copy(alpha = alpha * dim), Offset(p.x, p.y), Offset(q.x, q.y), strokeWidth = 1.2f)
             }
             pts.forEach { p ->
                 val n = nodes[p.index]
@@ -117,13 +130,19 @@ fun BrainView(
                     drawCircle(Brush.radialGradient(listOf(color.copy(alpha = 0.5f), Color.Transparent), Offset(p.x, p.y), radius * 4),
                         radius = radius * 4, center = Offset(p.x, p.y))
                 }
-                drawCircle(color.copy(alpha = alpha), radius = radius, center = Offset(p.x, p.y))
+                drawCircle(color.copy(alpha = alpha * dim), radius = radius, center = Offset(p.x, p.y))
+                // which memory it is: the label floats next to a node while it is being used
+                val label = pulse?.label?.ifBlank { n.label } ?: ""
+                if (flash > 0.15f && label.isNotBlank()) {
+                    val text = measurer.measure(label.take(36), TextStyle(color = color.copy(alpha = flash.coerceIn(0.4f, 1f)), fontSize = 10.sp))
+                    drawText(text, topLeft = Offset((p.x + radius + 6f).coerceAtMost(size.width - text.size.width - 4f), p.y - text.size.height / 2f))
+                }
             }
         }
         Text(
             if (nodes.isEmpty()) "OTAK JARVIS · belum ada memori" else "OTAK JARVIS · ${graph?.total ?: nodes.size} memori",
             color = JarvisColors.Muted, fontSize = 10.sp, letterSpacing = 2.sp,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp),
+            modifier = Modifier.align(captionAlignment).padding(captionPadding),
         )
     }
 }

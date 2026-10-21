@@ -25,7 +25,8 @@ WORKER_BRIEF = (
     "langkah berikutnya bila ada.\n\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
-KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding"}
+KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",
+                 "flowcheck": "latar-belakang"}
 
 
 def _sem_() -> asyncio.Semaphore:
@@ -194,6 +195,9 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
         from . import selfimprove
         await reports._create(task_id, session_id, await selfimprove.on_selfcheck(task_id, result))
     else:
+        if kind == "selfimprove":  # a flow watcher fix finished: its issues are handled
+            from . import auditor
+            await auditor.on_fix_done(task_id)
         await reports.from_task(task_id, title, result, session_id)
 
 
@@ -229,6 +233,9 @@ async def recent(limit: int = 50) -> list[dict]:
 async def resume_after_restart() -> int:
     """Tasks interrupted by a restart are re-run (workers are research/drafting; risky actions go
     through idempotent approvals, so re-running is safe)."""
+    await db.pool().execute(  # the flow watcher runs inside core, not as a Hermes session: just close it
+        "UPDATE tasks SET status = 'failed', error = 'dihentikan oleh restart', finished_at = now() "
+        "WHERE kind = 'flowcheck' AND status IN ('queued', 'running')")
     rows = await db.pool().fetch(
         "UPDATE tasks SET status = 'queued', started_at = NULL WHERE status IN ('queued', 'running') RETURNING id")
     for r in rows:

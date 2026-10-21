@@ -18,18 +18,39 @@ data class Panel(val id: String, val kind: String, val payload: JsonObject, val 
     fun str(key: String): String = payload[key]?.jsonPrimitive?.contentOrNull.orEmpty()
     fun int(key: String): Int? = payload[key]?.jsonPrimitive?.intOrNull
     fun list(key: String): List<JsonObject> = (payload[key] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+
+    /** Media starts playing by itself unless it is not the first player on a board. */
+    val autoplay: Boolean get() = payload["autoplay"]?.jsonPrimitive?.booleanOrNull != false
+
+    /** A board's blocks as panels of their own (rendered by the same composables). */
+    fun blocks(): List<Panel> {
+        var mediaSeen = false
+        return list("blocks").mapIndexedNotNull { i, b ->
+            val kind = b["kind"]?.jsonPrimitive?.contentOrNull ?: return@mapIndexedNotNull null
+            if (kind !in StageState.BLOCKS) return@mapIndexedNotNull null
+            val media = kind in setOf("music", "audio", "video")
+            val body = JsonObject(b - "kind" + ("autoplay" to JsonPrimitive(media && !mediaSeen)))
+            if (media) mediaSeen = true
+            Panel("$id-$i", kind, body, "")
+        }
+    }
 }
 
 /**
- * The phone's front screen. Pure value + reducer (unit-tested). Shows, in priority order: the panel
- * JARVIS opened (music, video, map, web, doc, draft, gallery), else the 3D brain. Memory pulses are
- * kept for a few seconds so the brain can flash the nodes that were just read or written.
+ * The phone's front screen. Pure value + reducer (unit-tested). The 3D brain is always the background;
+ * on top, the panel JARVIS opened (music, audio, video, image, gallery, map, web, doc, text, draft, or a
+ * board with several of them). Memory pulses are kept for a few seconds so the brain can flash the nodes
+ * just read or written; the memories involved stay listed for two minutes.
  */
 data class StageState(
     val panel: Panel? = null,
     val pulses: Map<String, Pulse> = emptyMap(),
+    val involved: List<Involved> = emptyList(),
 ) {
-    data class Pulse(val kind: String, val atMs: Long)
+    data class Pulse(val kind: String, val atMs: Long, val label: String = "")
+
+    /** A memory JARVIS just used (read) or learned (write) — listed under the brain for a while. */
+    data class Involved(val id: String, val label: String, val kind: String, val atMs: Long)
 
     fun reduce(e: ServerEvent.Stage, nowMs: Long = System.currentTimeMillis()): StageState = when (e.mode) {
         "close" -> close(e.id)
@@ -45,14 +66,26 @@ data class StageState(
         return copy(panel = p.copy(payload = JsonObject(p.payload + ("selected" to JsonPrimitive(index)))))
     }
 
-    fun pulse(ids: List<String>, kind: String, nowMs: Long = System.currentTimeMillis()): StageState =
-        copy(pulses = (pulses + ids.associateWith { Pulse(kind, nowMs) })).prune(nowMs)
+    fun pulse(ids: List<String>, kind: String, labels: List<String> = emptyList(), nowMs: Long = System.currentTimeMillis()): StageState {
+        val label = { i: Int -> labels.getOrNull(i).orEmpty() }
+        val fresh = ids.mapIndexedNotNull { i, id -> label(i).takeIf { it.isNotBlank() }?.let { Involved(id, it, kind, nowMs) } }
+        return copy(
+            pulses = pulses + ids.mapIndexed { i, id -> id to Pulse(kind, nowMs, label(i)) },
+            involved = (fresh + involved.filter { old -> fresh.none { it.id == old.id } }).take(MAX_INVOLVED),
+        ).prune(nowMs)
+    }
 
-    private fun prune(nowMs: Long) = copy(pulses = pulses.filterValues { nowMs - it.atMs < PULSE_MS })
+    private fun prune(nowMs: Long) = copy(
+        pulses = pulses.filterValues { nowMs - it.atMs < PULSE_MS },
+        involved = involved.filter { nowMs - it.atMs < INVOLVED_MS },
+    )
 
     companion object {
-        val KINDS = setOf("music", "video", "map", "web", "doc", "draft", "gallery")
+        val KINDS = setOf("music", "audio", "video", "image", "map", "web", "doc", "text", "draft", "gallery", "board")
         const val PULSE_MS = 6_000L
+        const val INVOLVED_MS = 120_000L
+        const val MAX_INVOLVED = 6
+        val BLOCKS = KINDS - setOf("board", "draft")
     }
 }
 

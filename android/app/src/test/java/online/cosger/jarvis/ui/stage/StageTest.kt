@@ -67,4 +67,28 @@ class StageTest {
         val r = Json.parseToJsonElement("""{"polyline":[[-6.2,106.8],[-6.3,106.9],["x"]]}""").jsonObject
         assertEquals(listOf(-6.2 to 106.8, -6.3 to 106.9), routePoints(r))
     }
+
+    @Test fun usedMemoriesAreListedWithTheirText() {
+        val e = Protocol.parse("""{"type":"brain_pulse","ids":["m1","m2"],"kind":"read","labels":["Suka kopi tanpa gula","Kantor di BSD"]}""")
+            as ServerEvent.BrainPulse
+        var s = StageState().pulse(e.ids, e.kind, e.labels, nowMs = 1_000)
+        assertEquals(listOf("Suka kopi tanpa gula", "Kantor di BSD"), s.involved.map { it.label })
+        assertEquals("Kantor di BSD", s.pulses["m2"]!!.label)
+        s = s.pulse(listOf("m3", "m1"), "write", listOf("Rapat UAT Kamis", "Suka kopi tanpa gula"), nowMs = 2_000)
+        assertEquals(listOf("m3", "m1", "m2"), s.involved.map { it.id }) // newest first, no duplicates
+        assertTrue(s.pulse(emptyList(), "read", nowMs = 2_000 + StageState.INVOLVED_MS + 1).involved.isEmpty())
+    }
+
+    @Test fun boardBlocksAutoplayOnlyTheFirstPlayer() {
+        val s = StageState().reduce(stage("""{"type":"stage","id":"b","panel":"board","mode":"show","payload":{"blocks":[
+            {"kind":"text","text":"Ringkasan"},{"kind":"video","url":"https://youtu.be/abcdefghijk"},
+            {"kind":"audio","url":"https://x.id/a.mp3"},{"kind":"shell","cmd":"x"},{"kind":"image","url":"https://x.id/a.png"}]}}"""))
+        val blocks = s.panel!!.blocks()
+        assertEquals(listOf("text", "video", "audio", "image"), blocks.map { it.kind })
+        assertEquals(listOf(true, false), blocks.filter { it.kind in setOf("video", "audio") }.map { it.autoplay })
+        assertFalse(blocks[0].payload.containsKey("kind"))
+        for (k in listOf("audio", "image", "text", "board")) {
+            assertEquals(k, StageState().reduce(stage("""{"type":"stage","id":"$k","panel":"$k","payload":{}}""")).panel?.kind)
+        }
+    }
 }

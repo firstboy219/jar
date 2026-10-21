@@ -353,13 +353,49 @@ fun StudioScreen(vm: JarvisViewModel, onBack: () -> Unit) {
 
 // ---------- Diri JARVIS ----------
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SelfScreen(vm: JarvisViewModel, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val self = rememberLoad { vm.console.get("/api/v1/console/self").obj() }
-    ConsolePage("Diri JARVIS", onBack, self.reload) {
-        Action("Cek & perbaiki diri sekarang") {
-            scope.launch { runCatching { vm.console.post("/api/v1/console/selfcheck") }.onSuccess { vm.notify("Cek diri dimulai; hasilnya disampaikan JARVIS.") } }
+    val changes = rememberLoad { vm.console.get("/api/v1/console/dev-changes").arr() }
+    val errors = rememberLoad { vm.console.get("/api/v1/console/errors").arr() }
+    ConsolePage("Diri JARVIS", onBack, { self.reload(); changes.reload(); errors.reload() }) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Action("Cek & perbaiki diri sekarang") {
+                scope.launch { runCatching { vm.console.post("/api/v1/console/selfcheck") }.onSuccess { vm.notify("Cek diri dimulai; hasilnya disampaikan JARVIS.") } }
+            }
+            Action("Tinjauan efisiensi") {
+                scope.launch {
+                    runCatching { vm.console.post("/api/v1/console/efficiency-review") }
+                        .onSuccess { vm.notify("Tinjauan efisiensi dimulai; hasilnya disampaikan JARVIS.") }.onFailure { vm.notify(it.message ?: "Gagal") }
+                }
+            }
+        }
+        LoadState(changes) { list ->
+            Label("Pengembangan diri (kode)")
+            if (list.isEmpty()) Small("Belum ada perubahan kode buatan JARVIS.")
+            list.take(20).forEach { x ->
+                val o = x.obj()
+                Card(border = when (o.s("status")) {
+                    "awaiting_approval" -> JarvisColors.Amber; "deployed" -> JarvisColors.Green
+                    "rolled_back", "deploy_failed", "test_failed" -> JarvisColors.Red; else -> JarvisColors.Border
+                }) {
+                    Body("#${o.i("id")} ${o.s("title")}", size = 13)
+                    Small("${DEV_STATUS[o.s("status")] ?: o.s("status")} · ${o.s("branch")} · ${time(o.s("updated_at"))}")
+                    if (o.s("why").isNotBlank()) Small(o.s("why").take(300), JarvisColors.Text)
+                    if (o.s("status") == "awaiting_approval") Small("Setujui/tolak di tab Tugas → Persetujuan.", JarvisColors.Amber)
+                }
+            }
+        }
+        LoadState(errors) { list ->
+            if (list.isNotEmpty()) {
+                Label("Error layanan (7 hari)", JarvisColors.Red)
+                list.take(15).forEach { x ->
+                    val o = x.obj()
+                    Card { Body("${o.i("n") ?: 1}× [${o.s("source")}] ${o.s("message").take(160)}", size = 13); Small("terakhir ${time(o.s("last_at"))}") }
+                }
+            }
         }
         LoadState(self) { s ->
             Card { Label("Yang JARVIS tahu tentang dirinya"); Small(s.s("self"), JarvisColors.Text) }
@@ -380,6 +416,61 @@ fun SelfScreen(vm: JarvisViewModel, onBack: () -> Unit) {
         }
     }
 }
+
+// ---------- Pengawas alur ----------
+
+/** The flow watcher: did JARVIS answer in context, keep its promises, not repeat itself, not stall? */
+@Composable
+fun FlowScreen(vm: JarvisViewModel, onBack: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val issues = rememberLoad { vm.console.get("/api/v1/console/flow-issues").arr() }
+    var running by remember { mutableStateOf(false) }
+    ConsolePage("Pengawas alur", onBack, issues.reload) {
+        Small("Worker khusus yang memeriksa obrolanmu dengan JARVIS: jawaban sesuai konteks, janji ditepati, tidak berulang, " +
+            "tidak lambat/gagal. Masalah disampaikan ke kamu, lalu diperbaiki (perubahan kode tetap minta persetujuanmu).")
+        Action(if (running) "Memeriksa…" else "Periksa sekarang", enabled = !running) {
+            running = true
+            scope.launch {
+                runCatching { vm.console.post("/api/v1/console/flow-check").obj() }
+                    .onSuccess { vm.notify("Pengawas alur: ${it.i("new") ?: 0} masalah baru.") }
+                    .onFailure { vm.notify(it.message ?: "Gagal") }
+                running = false
+                issues.reload()
+            }
+        }
+        LoadState(issues) { list ->
+            if (list.isEmpty()) Small("Belum ada masalah yang ditemukan.")
+            list.forEach { x ->
+                val o = x.obj()
+                val color = when (o.s("severity")) { "high" -> JarvisColors.Red; "medium" -> JarvisColors.Amber; else -> JarvisColors.Border }
+                Card(border = if (o.s("status") in setOf("open", "fixing")) color else JarvisColors.Border) {
+                    Label("${FLOW_KINDS[o.s("kind")] ?: o.s("kind")} · ${FLOW_STATUS[o.s("status")] ?: o.s("status")}", color)
+                    Body(o.s("detail"), size = 13)
+                    if (o.s("owner_said").isNotBlank()) {
+                        Small("Kamu: “${o.s("owner_said").take(160)}”", JarvisColors.Text)
+                        Small("JARVIS: “${o.s("jarvis_said").take(200)}”")
+                    }
+                    Small("#${o.i("id")} · ${time(o.s("at"))}" + (o.i("fix_task_id")?.let { " · diperbaiki tugas #$it" } ?: ""))
+                    if (o.s("status") in setOf("open", "fixing")) Action("Abaikan", JarvisColors.Muted) {
+                        scope.launch {
+                            runCatching { vm.console.post("/api/v1/console/flow-issues/${o.i("id")}", buildJsonObject { put("status", "ignored") }) }
+                            issues.reload()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val FLOW_KINDS = mapOf("off_context" to "Tidak sesuai konteks", "promise_unkept" to "Janji tanpa tindakan",
+    "repeated" to "Jawaban berulang", "error_reply" to "Jawaban error", "slow_reply" to "Jawaban lambat",
+    "task_failed" to "Tugas gagal", "task_slow" to "Tugas sangat lama", "report_unheard" to "Laporan tak terdengar")
+private val FLOW_STATUS = mapOf("open" to "baru", "fixing" to "sedang diperbaiki", "fixed" to "sudah ditangani", "ignored" to "diabaikan")
+
+private val DEV_STATUS = mapOf("testing" to "sedang diuji", "test_failed" to "tes gagal (JARVIS memperbaiki)",
+    "awaiting_approval" to "menunggu persetujuanmu", "rejected" to "ditolak", "deploying" to "sedang dipasang",
+    "deployed" to "aktif", "deploy_failed" to "gagal dipasang", "rolled_back" to "dikembalikan (cek kesehatan gagal)")
 
 // ---------- Perangkat ----------
 
@@ -546,6 +637,35 @@ fun ServerSettingsScreen(vm: JarvisViewModel, onBack: () -> Unit) {
                 }
             }
             result?.let { Card(border = JarvisColors.Cyan) { Small(it, JarvisColors.Text) } }
+        }
+        AdminPasswordCard(vm)
+    }
+}
+
+/** The web admin's (jar1) login password — same rules as the web form; old sessions end. */
+@Composable
+private fun AdminPasswordCard(vm: JarvisViewModel) {
+    val scope = rememberCoroutineScope()
+    val gate = rememberOwnerGate()
+    var current by remember { mutableStateOf("") }
+    var new by remember { mutableStateOf("") }
+    var again by remember { mutableStateOf("") }
+    Card {
+        Label("Password web admin")
+        OutlinedTextField(current, { current = it }, Modifier.fillMaxWidth(), label = { Text("Password lama") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation())
+        OutlinedTextField(new, { new = it }, Modifier.fillMaxWidth(), label = { Text("Password baru (min. 12 karakter)") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation())
+        OutlinedTextField(again, { again = it }, Modifier.fillMaxWidth(), label = { Text("Ulangi password baru") }, singleLine = true,
+            visualTransformation = PasswordVisualTransformation(), isError = again.isNotEmpty() && again != new)
+        Action("Ganti password", enabled = current.isNotBlank() && new.length >= 12 && new == again) {
+            gate("Ganti password web admin") {
+                scope.launch {
+                    runCatching { vm.console.post("/api/v1/console/admin-password", buildJsonObject { put("current", current); put("new", new) }) }
+                        .onSuccess { vm.notify("Password web admin diganti. Login ulang di jar1."); current = ""; new = ""; again = "" }
+                        .onFailure { vm.notify(it.message ?: "Gagal") }
+                }
+            }
         }
     }
 }

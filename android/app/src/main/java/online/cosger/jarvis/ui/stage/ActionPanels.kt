@@ -263,7 +263,9 @@ fun DocPanel(panel: Panel, actions: StageActions) {
         scope.launch {
             runCatching {
                 val dir = File(context.cacheDir, "docs")
-                actions.console.download(panel.str("url"), File(dir, "${panel.str("title").take(60).replace(Regex("[^A-Za-z0-9 _-]"), "")}.$format"))
+                val target = File(dir, "${panel.str("title").ifBlank { "dokumen" }.take(60).replace(Regex("[^A-Za-z0-9 _-]"), "")}.$format")
+                val url = panel.str("url")
+                if (url.startsWith("https://")) actions.console.downloadExternal(url, target) else actions.console.download(url, target)
             }.onSuccess(open).onFailure { actions.notice("Dokumen gagal diunduh: ${it.message}") }
             busy = false
         }

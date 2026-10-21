@@ -442,7 +442,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 if (event.items.isNotEmpty()) _notice.value = "JARVIS menampilkan: ${event.caption.ifBlank { "${event.items.size} gambar/video" }}"
             }
             is ServerEvent.Stage -> _stage.update { it.reduce(event) }
-            is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind) }
+            is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind, event.labels) }
             is ServerEvent.Approval -> _notice.value = "Butuh persetujuanmu: ${event.title} (menu Tugas & Persetujuan)"
             is ServerEvent.Transcript -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return

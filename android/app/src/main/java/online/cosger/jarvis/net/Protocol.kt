@@ -36,7 +36,10 @@ sealed interface ServerEvent {
         override val sessionId: String? = null
     }
     /** Memories just read or written — the 3D brain flashes them. */
-    data class BrainPulse(val ids: List<String>, val kind: String) : ServerEvent { override val sessionId: String? = null }
+    /** Memories an agent just read or wrote; labels = their text (shown as "memori terlibat"). */
+    data class BrainPulse(val ids: List<String>, val kind: String, val labels: List<String> = emptyList()) : ServerEvent {
+        override val sessionId: String? = null
+    }
     /** Hermes paused before a risky command and asks the owner (Approval Center). */
     data class Approval(val id: Long, val title: String, val risk: String) : ServerEvent { override val sessionId: String? = null }
     data class Error(val message: String, override val sessionId: String?) : ServerEvent
@@ -118,6 +121,7 @@ object Protocol {
             )
             "brain_pulse" -> ServerEvent.BrainPulse(
                 o["ids"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(), o.str("kind"),
+                o["labels"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
             )
             "approval" -> ServerEvent.Approval(o.long("id") ?: return null, o.str("title"), o.str("risk"))
             "error" -> ServerEvent.Error(o.str("message"), sid)
