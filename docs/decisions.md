@@ -283,10 +283,15 @@ docx/pdf/pptx/xlsx skills (proprietary licence forbids copying), "use before eve
 From v0.9.0 the app checks `/api/v1/app/latest` on connect and every ~3 h; a newer version opens a dialog
 "Update sekarang" (download, SHA-256 check, Android installer) or "Tunda" (asked again after 24 h).
 
-## ADR-026 — Performance-only self-improvement, owner-approved (2026-10-21)
-Supersedes the "not built" note in ADR-022. The owner allowed JARVIS to change its own code **only to do
-what the owner asks faster, cheaper or with fewer failures** — no new features, nothing touching
-security, permissions, approvals, secrets, the AI composition, budgets or tests.
+## ADR-026 — Self-improvement: performance + minor features, owner-approved (2026-10-21)
+Supersedes the "not built" note in ADR-022. The owner allowed JARVIS to change its own code **to do what
+the owner asks faster, cheaper or with fewer failures, and (same day, later) to add MINOR missing
+abilities** — e.g. a new music source after a requested song could not be played. No big features, nothing
+touching security, permissions, approvals, secrets, the AI composition, budgets, Android permissions or
+tests. New Python packages only in `core/requirements.txt`, pinned `name==version`; the approval and the
+report list them. Legal/terms-of-service risks must be stated in the proposal; the owner decides.
+- Capability gaps: when a direct action (e.g. play music) or an owner task fails, `perf.capability_gap`
+  starts one task per kind of gap per day in which JARVIS analyses the cause and finds its own way.
 - Triggers: a weekly efficiency review (Sunday 02:00 WIB, digest of task duration/failures, model cost,
   cache hits, voice latency, errors), the same error ≥ 3× in an hour (one repair task per signature per
   day), the daily self-check's "code" proposals, or `POST /admin/efficiency-review`.
@@ -301,3 +306,23 @@ security, permissions, approvals, secrets, the AI composition, budgets or tests.
   merged; the changed services are rebuilt and health-checked; failure → main is reset and redeployed
   (`rolled_back`); success → push to GitHub, refresh the mirror, and a new APK if android/ changed.
 - jarvis-core never runs git or docker; it only exchanges JSON files in `data/dev/{requests,results}`.
+
+## ADR-027 — Main agent talks, workers work; reliable on the small local model (2026-10-21)
+Concept (owner): only the MAIN AGENT talks with the owner — it understands, builds the context, delegates
+and reports results. WORKERS only do the work and report back to the main agent (reports), which tells
+the owner. Findings from the chat log of 2026-10-21 (no cloud credit → main agent on Qwen3.5-2B, workers
+on the 4B through full Hermes sessions):
+- The 2B often SAID it would check/find/play something without calling spawn_task, so no worker ran
+  (1 delegation in 15 owner turns); it parroted phone notifications and its own previous reply
+  ("berita crypto … Prabowo" six times); a local Hermes session (≈26k-token prompt) took 40–90 min.
+Changes:
+- Clear actions (play X, route to X, news) are recognised without a model (`router.parse_action`) and
+  executed directly (music/route) or delegated (news) by the main agent.
+- A reply that promises work without starting any spawns a worker with the owner's words + context.
+- Workers always get the last turns of the conversation (after `---KONTEKS OBROLAN---`).
+- Local model context: notifications only when asked about them; duplicate replies removed from history.
+- Fast worker (`quick.py`): while workers run locally, simple look-ups are answered in seconds from Google
+  News RSS / DuckDuckGo + a short summary; anything else (or no answer) goes to Hermes as before.
+- While workers are local, situation preparation does not start a Hermes session (keeps the CPU for the owner).
+- "pakai model apa" is answered from the composition without a model.
+The real fix for quality is a cloud model for the main agent (Groq free key or OpenRouter credit).

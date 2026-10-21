@@ -8,7 +8,7 @@ result becomes a spoken report (see reports.py).
 import asyncio
 import logging
 
-from . import approvals, audit, db, hermes, hub, memory, reports
+from . import approvals, audit, db, gateway, hermes, hub, memory, quick, reports
 from .config import settings
 from .location import Location, context_prefix
 
@@ -85,8 +85,15 @@ async def _run(task_id: int, context: str) -> None:
 
         try:
             result = None
-            async for ev in hermes.stream(context + brief + row["instruction"], f"task-{task_id}", row["image"],
-                                          model=f"jarvis-{row['category']}", on_run=remember_run):
+            if await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
+                await hub.broadcast({"type": "task_event", "task_id": task_id,
+                                     "event": {"type": "thought", "text": "mencari cepat di web"}})
+                if text := await quick.answer(row["instruction"]):
+                    result = hermes.HermesReply(text, None, None, 0)
+            events = _nothing() if result else hermes.stream(
+                context + brief + row["instruction"], f"task-{task_id}", row["image"],
+                model=f"jarvis-{row['category']}", on_run=remember_run)
+            async for ev in events:
                 if ev["type"] == "done":
                     result = ev["reply"]
                     continue
@@ -122,6 +129,20 @@ async def _run(task_id: int, context: str) -> None:
             # reported once by billing.notify_exhausted instead of once per task.
             if kind in ("owner", "selfcheck") and "saldo OpenRouter habis" not in str(e):
                 await reports.from_failure(task_id, row["title"], str(e), row["session_id"])
+            if kind == "owner" and "saldo OpenRouter habis" not in str(e):  # JARVIS looks for its own way next time
+                from . import perf
+                await perf.capability_gap("tugas", row["title"] + ": " + row["instruction"][:300], str(e))
+
+
+async def _nothing():
+    return
+    yield
+
+
+async def _quick_first(kind: str, row) -> bool:
+    if kind != "owner" or row["image"] or row["category"] != "web" or not quick.suitable(row["instruction"]):
+        return False
+    return not (await gateway.plan("web", caller="worker", private=row["private"], worker=True))[0].cloud
 
 
 async def _bridge_approval(task_id: int, title: str, ev: dict) -> None:

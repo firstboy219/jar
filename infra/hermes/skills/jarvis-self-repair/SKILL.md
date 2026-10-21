@@ -23,5 +23,5 @@ metadata:
    (cabang `jarvis/<topik>`, tes yang membuktikan, `propose_code_change`, `check_code_change`). Pemilik menyetujui sebelum dipasang;
    gagal cek kesehatan → otomatis dikembalikan.
 5. **Bug di area terlarang** (keamanan, izin, persetujuan, rahasia, komposisi, anggaran, skrip infra) atau perbaikan yang berarti
-   fitur baru: JANGAN diubah. Buat laporan (`create_document`, md: gejala, bukti, akar masalah, usulan, cara uji) dan beri tahu pemilik.
+   fitur besar: JANGAN diubah. Buat laporan (`create_document`, md: gejala, bukti, akar masalah, usulan, cara uji) dan beri tahu pemilik.
 Jangan pernah "memperbaiki" dengan mematikan pemeriksaan keamanan, persetujuan, atau tes.

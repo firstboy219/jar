@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# JARVIS performance self-improvement runner (ADR-026). Run as root by jarvis-dev.service when jarvis-core
+# JARVIS self-improvement runner (ADR-026: performance + minor features). Run as root by jarvis-dev.service when jarvis-core
 # drops a request in data/dev/requests/. Never edit this file from the workspace — it is refused.
 #
 #   test    fetch branch jarvis/<topic> from Hermes' workspace into the live repo (as refs/jarvis/<id>),
@@ -24,7 +24,7 @@ OWNER=$(stat -c %U "$REPO")
 export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$REPO GIT_CONFIG_KEY_1=safe.directory GIT_CONFIG_VALUE_1=$REPO/.git
 MAX_CHANGED_LINES=1500
 # Out of scope for self-improvement (security, permissions, secrets, money guards, build/supply chain, itself)
-FORBIDDEN='^(infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|infra/admin/app/(auth|main)\.py|infra/admin/Dockerfile|infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements|core/app/(main|approvals|devices|vault|sensitive|dev|perf|composition|budget|errors|config|db)\.py|android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|\.github/|\.claude/|BRD\.docx)'
+FORBIDDEN='^(infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|infra/admin/app/(auth|main)\.py|infra/admin/Dockerfile|infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements-dev|core/app/(main|approvals|devices|vault|sensitive|dev|perf|composition|budget|errors|config|db)\.py|android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|\.github/|\.claude/|BRD\.docx)'
 
 mkdir -p "$DEV/requests" "$DEV/results" "$DEV/done"
 as_owner() { runuser -u "$OWNER" -- "$@"; }
@@ -43,8 +43,9 @@ for p in pairs:
         except OSError:
             v = ""
     data[k] = v
-if "files" in data:
-    data["files"] = [f for f in data["files"].splitlines() if f]
+for k in ("files", "deps"):
+    if k in data:
+        data[k] = [f for f in data[k].splitlines() if f]
 if "id" in data:
     data["id"] = int(data["id"])
 tmp = out + ".tmp"
@@ -74,7 +75,7 @@ ensure_workspace() {
   as_owner git -C "$WS" config user.email "jarvis@vis1.cosger.online"
 }
 
-test_steps() { # uses id branch wt; sets commit files diffstat
+test_steps() { # uses id branch wt; sets commit files diffstat deps
     [[ $branch =~ ^jarvis/[a-z0-9][a-z0-9-]{2,60}$ ]] || { echo "nama cabang tidak valid"; return 1; }
     as_owner git -C "$REPO" fetch -q --no-tags "$WS" "+refs/heads/$branch:refs/jarvis/$id" || { echo "cabang $branch tidak ada di workspace"; return 1; }
     commit=$(git -C "$REPO" rev-parse "refs/jarvis/$id")
@@ -86,6 +87,12 @@ test_steps() { # uses id branch wt; sets commit files diffstat
       echo "DITOLAK — migrasi lama tidak boleh diubah: $edited"; return 1; fi
     changed=$(git -C "$REPO" diff --numstat "main...refs/jarvis/$id" | awk '{a+=$1; d+=$2} END {print a+d}')
     (( changed <= MAX_CHANGED_LINES )) || { echo "DITOLAK — perubahan terlalu besar ($changed baris > $MAX_CHANGED_LINES)"; return 1; }
+    if grep -qx 'core/requirements.txt' <<<"$files"; then  # new packages: pinned exactly, shown to the owner
+      deps=$(git -C "$REPO" diff "main...refs/jarvis/$id" -- core/requirements.txt | grep '^+[^+]' | cut -c2- | grep -v '^[[:space:]]*$')
+      if [[ -n $deps ]] && bad=$(grep -vE '^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[0-9][A-Za-z0-9.+!-]*$' <<<"$deps"); then
+        echo "DITOLAK — pustaka harus dipin persis (nama==versi), tanpa opsi pip/URL:"; echo "$bad"; return 1; fi
+      echo "== pustaka baru/berubah:"; echo "$deps"
+    fi
     echo "== $changed baris berubah; file:"; echo "$files"
     rm -rf "$wt"
     as_owner git -C "$REPO" worktree add -q --detach "$wt" main
@@ -107,14 +114,15 @@ test_steps() { # uses id branch wt; sets commit files diffstat
 }
 
 do_test() { # id branch
-  local id=$1 branch=$2 L=$DEV/results/$1-test.log wt=/tmp/jarvis-dev-$1 status=failed commit="" files="" diffstat=""
+  local id=$1 branch=$2 L=$DEV/results/$1-test.log wt=/tmp/jarvis-dev-$1 status=failed commit="" files="" diffstat="" deps=""
   : > "$L"
   test_steps >>"$L" 2>&1 && status=passed
   as_owner git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1; rm -rf "$wt"
   [[ $status == passed ]] && echo "== SEMUA TES LULUS" >>"$L"
-  printf '%s\n' "$files" > "$L.files"
+  printf '%s\n' "$files" > "$L.files"; printf '%s\n' "$deps" > "$L.deps"
   result "$DEV/results/$id-test.json" id="$id" action=test status="$status" commit="$commit" files="@$L.files" \
-    diffstat="$diffstat" log="@$L"
+    deps="@$L.deps" diffstat="$diffstat" log="@$L"
+  rm -f "$L.files" "$L.deps"
 }
 
 services_for() { # files → compose services to rebuild

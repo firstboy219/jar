@@ -23,7 +23,11 @@ async def pool(monkeypatch):
     await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
         WHEN name IN ('ngobrol', 'cepat', 'penglihatan', 'balas-pesan') THEN '[{"provider": "lokal", "model": "qwen-lokal"}]'::jsonb
         ELSE '[{"provider": "lokal-kerja", "model": "qwen-lokal"}]'::jsonb END""")
-    from app import budget, gateway
+    from app import budget, gateway, quick
+
+    async def no_quick(instruction):  # the fast worker searches the real web; tests opt in explicitly
+        return None
+    monkeypatch.setattr(quick, "answer", no_quick)
     gateway.invalidate()
     budget.forget()
     budget._notified.clear()
@@ -802,3 +806,59 @@ async def test_rejected_code_change_is_never_deployed(pool, monkeypatch, tmp_pat
     await dev.poll()
     assert (await dev.get(c["id"]))["status"] == "rejected"
     assert not list((tmp_path / "requests").glob("*-deploy.json"))
+
+
+
+async def test_clear_requests_are_done_directly_and_failures_start_a_capability_gap(pool, monkeypatch):
+    from app import chat, hermes, media_tools, workers
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    monkeypatch.setattr(hermes, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no LLM worker")))
+    _fake_llm(monkeypatch, [])  # the main agent's model must not be needed at all
+
+    async def no_song(query):
+        return {"error": "tidak ada lagu berlisensi bebas yang cocok"}
+    monkeypatch.setattr(media_tools, "play", no_song)
+    t = await chat.handle("tolong putarkan lagu ada band", "s30", actor="test")
+    assert "ada band" in t.reply and "mencari cara sendiri" in t.reply
+    gap = await pool.fetchrow("SELECT kind, category, instruction FROM tasks")
+    assert gap["kind"] == "selfimprove" and "putar lagu ada band" in gap["instruction"] and "FITUR MINOR" in gap["instruction"]
+    t = await chat.handle("putarkan lagu ada band", "s30", actor="test")
+    assert "mencari cara" not in t.reply and await pool.fetchval("SELECT count(*) FROM tasks") == 1  # once a day
+
+    t = await chat.handle("Coba cek berita hari ini.", "s30", actor="test")
+    assert t.reply.startswith("Oke, kucek berita")
+    news = await pool.fetchrow("SELECT kind, category FROM tasks WHERE title LIKE 'Berita%'")
+    assert (news["kind"], news["category"]) == ("owner", "web")
+
+
+async def test_a_promise_without_action_still_starts_the_work(pool, monkeypatch):
+    from app import chat, memory, workers
+    monkeypatch.setattr(memory, "search", _no_memory)
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    _fake_llm(monkeypatch, [("Oke, aku cek dulu harga tiket kereta ke Bandung, nanti aku kabari.", [])])
+    await chat.handle("berapa harga tiket kereta ke Bandung besok", "s31", actor="test")
+    t = await pool.fetchrow("SELECT kind, instruction FROM tasks")
+    assert t["kind"] == "owner" and "harga tiket kereta ke Bandung besok" in t["instruction"]
+    _fake_llm(monkeypatch, [("Sama-sama, nanti aku kabari.", [])])
+    await chat.handle("oke makasih", "s31", actor="test")
+    assert await pool.fetchval("SELECT count(*) FROM tasks") == 1  # an acknowledgement is not a new request
+
+
+async def test_fast_worker_answers_lookups_without_a_hermes_session(pool, monkeypatch):
+    import asyncio
+    from app import hermes, quick, reports, workers
+    monkeypatch.setattr(hermes, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no Hermes")))
+    _fake_llm(monkeypatch, [])
+
+    async def fast(instruction):
+        assert quick.CONTEXT_MARK in instruction
+        return "HASIL: Berita terbaru: 1. Sidang kabinet (detikNews)"
+    monkeypatch.setattr(quick, "answer", fast)
+    t = await workers.spawn("Berita terbaru", "Cari berita terbaru hari ini" + quick.CONTEXT_MARK + "Pemilik: berita?",
+                            "s32", "test", category="web")
+    for _ in range(50):
+        if (await pool.fetchval("SELECT status FROM tasks WHERE id = $1", t["id"])) == "completed":
+            break
+        await asyncio.sleep(0.05)
+    assert "Sidang kabinet" in await pool.fetchval("SELECT result FROM tasks WHERE id = $1", t["id"])
+    assert await reports.unconfirmed()

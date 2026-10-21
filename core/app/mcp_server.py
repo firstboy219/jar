@@ -348,9 +348,10 @@ async def show_route(destination: str, origin: str = "", mode: str = "driving") 
 
 @mcp.tool()
 async def propose_code_change(branch: str, title: str, why: str, task_id: int | None = None) -> dict:
-    """Submit a PERFORMANCE change to JARVIS' own code (faster, cheaper, fewer failed tasks — nothing else).
-    Commit it first on branch `jarvis/<topic>` in /opt/data/workspace/jar (branched from `jarvis-main`).
-    `why` must state the measured problem and the expected gain. The server runs the full test suite in
+    """Submit a change to JARVIS' own code: PERFORMANCE (faster, cheaper, fewer failed tasks) or a MINOR missing
+    ability (e.g. a new music source) — nothing bigger. Commit it first on branch `jarvis/<topic>` in
+    /opt/data/workspace/jar (branched from origin/main). `why` must state the problem, the expected gain, and
+    any legal/terms-of-service risk; new packages go in core/requirements.txt pinned as name==version. The server runs the full test suite in
     throwaway containers (3–10 min); if it passes the owner is asked to approve on the phone; once approved it
     is merged, deployed, health-checked and rolled back automatically on failure. Poll with check_code_change.
     Changes to security, permissions, approvals, secrets, the composition or the runner are refused."""

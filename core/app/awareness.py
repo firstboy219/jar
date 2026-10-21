@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel, Field
 
-from . import db, hub, memory, notifications
+from . import db, gateway, hub, memory, notifications
 from .config import settings
 from .location import WIB, Location, remember_last
 
@@ -182,7 +182,10 @@ async def tick(now: datetime | None = None) -> str | None:
         return None
     s = parse_json(raw)
     prepare = str(s.get("prepare") or "").strip()
-    if prepare and float(s.get("confidence") or 0) >= 0.5:
+    # While workers run on the local CPU model, one Hermes session takes it for 30+ minutes — keep it free
+    # for what the owner asks; the understanding itself is still kept.
+    on_cpu = not (await gateway.plan("web", caller="awareness", worker=True))[0].cloud
+    if prepare and float(s.get("confidence") or 0) >= 0.5 and not on_cpu:
         understanding = json.dumps({k: s.get(k) for k in ("where", "doing", "likely_need", "confidence")}, ensure_ascii=False)
         await workers.spawn("Menyiapkan info situasi", SITUATION_PREP.format(understanding=understanding, prepare=prepare),
                             "awareness", "jarvis-core", kind="situation", location=ctx.location, category="web")

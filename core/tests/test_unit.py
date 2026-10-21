@@ -350,3 +350,33 @@ def test_error_signature_ignores_values():
     assert errors.signature("jarvis-core.x", "m", tb1) == errors.signature("jarvis-core.x", "m", tb2)
     cleaned = errors._clean("key sk-or-abcdefghijklmnopqrstu leaked")
     assert "abcdefghijklmnopqrstu" not in cleaned and "…" in cleaned
+
+
+
+def test_direct_actions_and_model_question():
+    from app.router import parse_action
+    assert parse_action("tolong putarkan lagu ada band") == Intent("play_music", {"query": "ada band"})
+    assert parse_action("jarvis, mainkan musik jazz santai") == Intent("play_music", {"query": "jazz santai"})
+    assert parse_action("putar lagi") is None and parse_action("putar balik") is None
+    assert parse_action("Coba cek berita hari ini.") == Intent("news", {"topic": ""})
+    assert parse_action("berita tentang harga emas") == Intent("news", {"topic": "harga emas"})
+    assert parse_action("rute ke bandara soekarno hatta") == Intent("show_route", {"destination": "bandara soekarno hatta"})
+    assert parse_action("apakah kamu berhasil cek ke web terkait berita?") is None
+    assert parse("Kamu sekarang pakai model apa untuk ngobrol?") == Intent("model")
+
+
+def test_fast_worker_only_takes_lookups():
+    from app import quick
+    assert quick.suitable("Cari harga emas Antam hari ini")
+    assert quick.suitable("Cari berita crypto yang melonjak hari ini" + quick.CONTEXT_MARK + "Pemilik: buatkan dokumen")
+    assert not quick.suitable("Buatkan dokumen ringkasan rapat dan kirim ke email")
+    assert not quick.suitable("Bandingkan tiga laptop untuk desain")
+    assert quick.news_topic("Cari berita crypto yang melonjak hari ini, khususnya ICNT") == "crypto melonjak ICNT"
+    assert quick.news_topic("Cek berita terbaru hari ini") == ""
+
+
+def test_promise_detection():
+    from app.assistant import _PROMISE
+    assert _PROMISE.search("Oke, aku cek dulu ya, nanti aku kabari.")
+    assert _PROMISE.search("Oke, saya akan cari lagu band dan tampilkan di layar HP.")
+    assert not _PROMISE.search("Kopi, biar melek.")

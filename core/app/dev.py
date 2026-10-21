@@ -1,7 +1,7 @@
-"""Performance self-improvement (ADR-026, enabled by the owner 2026-10-21): JARVIS changes its own code
-ONLY to do what the owner asks faster, cheaper or more reliably — every change tested, every deploy
-approved by the owner, every failure rolled back. New features and anything touching security,
-permissions, approvals, secrets or the composition are out of scope (the runner refuses those files).
+"""Self-improvement (ADR-026, enabled by the owner 2026-10-21): JARVIS changes its own code ONLY to do what
+the owner asks faster, cheaper or more reliably, or to add a MINOR missing ability — every change tested,
+every deploy approved by the owner, every failure rolled back. Big features and anything touching security,
+permissions, approvals, secrets, the composition or budgets are out of scope (the runner refuses those files).
 
 Flow:
   Hermes edits a branch `jarvis/<topic>` in its workspace (/opt/data/workspace/jar, a clone of the repo)
@@ -120,12 +120,14 @@ async def _apply(res: dict) -> None:
         a = await approvals.create(
             "code_change", f"JARVIS ingin memperbarui dirinya: {change['title']}",
             {"change_id": cid, "branch": change["branch"], "commit": res.get("commit"), "why": change["why"][:1500],
-             "files": (res.get("files") or [])[:60], "diffstat": (res.get("diffstat") or "")[:3000]},
+             "files": (res.get("files") or [])[:60], "diffstat": (res.get("diffstat") or "")[:3000],
+             "new_packages": (res.get("deps") or [])[:20]},
             "hermes", "high", idempotency_key=f"dev:{cid}:{res.get('commit')}")
         await db.pool().execute("UPDATE dev_changes SET approval_id = $2 WHERE id = $1", cid, a["id"])
         await reports._create(change["task_id"], "system",
                               f"Aku sudah membuat dan menguji perubahan pada diriku: {change['title']}. Semua tes lulus. "
-                              f"Setujui atau tolak di Persetujuan nomor {a['id']}.")
+                              + (f"Perubahan ini menambah pustaka {', '.join(res['deps'][:5])}. " if res.get("deps") else "")
+                              + f"Setujui atau tolak di Persetujuan nomor {a['id']}.")
     elif res.get("action") == "deploy":
         final = {"deployed": "deployed", "rolled_back": "rolled_back"}.get(status, "deploy_failed")
         await db.pool().execute(

@@ -62,6 +62,17 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
             if not active:
                 return "Tidak ada tugas worker yang sedang berjalan."
             return "Tugas worker:\n" + "\n".join(f"• #{t['id']} {t['title']} — {t['status']}" for t in active)
+        case "model":
+            from . import composition
+            c = await composition.get()
+            routes = {k["name"]: k["routes"] for k in c["categories"]}
+
+            def first(cat: str) -> str:
+                r = (routes.get(cat) or [{}])[0]
+                return "model lokal di server (Qwen)" if str(r.get("provider", "")).startswith("lokal") or not r \
+                    else f"{r.get('model')} lewat {r.get('provider')}"
+            return (f"Komposisi '{c['preset']}': ngobrol pakai {first('ngobrol')}, tugas web pakai {first('web')}, "
+                    f"coding pakai {first('coding')}. Bisa diganti di menu Komposisi AI.")
         case "workflows":
             flows = await n8n.list_workflows()
             if not flows:

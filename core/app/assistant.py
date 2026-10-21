@@ -13,7 +13,8 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import awareness, db, drafts, gateway, llm, memory, notifications, questions, reports, self_model, stage, workers
+from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
+               self_model, stage, workers)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -32,7 +33,8 @@ sedang mengurusnya (mis. "Oke, aku cek dulu ya, nanti aku kabari."). Pilih categ
 web (cari/baca info), coding (kode, script, workflow n8n), produktivitas (dokumen, email, ringkasan, \
 jadwal), analisis (penalaran berat, membandingkan, merencanakan — juga bila pemilik minta "pikir lebih \
 dalam"). Jangan menyebut istilah teknis seperti worker, delegasi, atau tugas latar belakang. Jangan \
-menunggu hasil dan jangan mengarang hasil — hasilnya akan kamu sampaikan sendiri nanti. \
+menunggu hasil dan jangan mengarang hasil — hasilnya akan kamu sampaikan sendiri nanti. Kalau kamu \
+bilang akan mengecek/mencari/mengerjakan sesuatu, WAJIB panggil spawn_task di giliran yang sama. \
 Obrolan biasa, pertanyaan ringan, atau yang bisa dijawab dari memori/konteks: jawab langsung.
 
 Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu sampaikan. Jika ucapan \
@@ -162,7 +164,22 @@ async def _history(session_id: str, limit: int = 16, private: bool = False) -> l
         """SELECT role, content FROM messages WHERE session_id = $1
            AND route NOT IN ('blocked', 'silent') AND (route <> 'private' OR $3)
            ORDER BY id DESC LIMIT $2""", session_id, limit, private)
-    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+    turns, seen = [], set()
+    for r in reversed(rows):
+        if r["role"] == "assistant":
+            key = " ".join(r["content"].lower().split())[:200]
+            if key in seen:  # the same reply again teaches a small model to repeat it once more
+                continue
+            seen.add(key)
+        turns.append({"role": r["role"], "content": r["content"]})
+    return turns
+
+
+async def _conversation(session_id: str, private: bool, turns: int = 4) -> str:
+    """The last few turns, for a worker to understand what the owner meant (the main agent's
+    instruction may be terse — especially from a small local model)."""
+    rows = (await _history(session_id, limit=turns, private=private))
+    return "\n".join(f"{'Pemilik' if r['role'] == 'user' else 'JARVIS'}: {r['content'][:240]}" for r in rows)
 
 
 async def _situation(text: str, location: Location | None, compact: bool = False) -> str:
@@ -185,7 +202,9 @@ async def _situation(text: str, location: Location | None, compact: bool = False
             f"- pertanyaan #{q['id']} (tugas: {q['title'] or '-'}): {q['question']}" for q in asked))
     if on_stage := stage.describe():
         parts.append(on_stage)
-    recent = await notifications.recent(3 if compact else 6)
+    # The small local model parrots whatever is in front of it (it kept "answering" with two news
+    # notifications, 2026-10-21): give it notifications only when the owner is asking about them.
+    recent = await notifications.recent(6) if not compact or _ABOUT_NOTIFICATIONS.search(text) else []
     if recent:
         parts.append("NOTIFIKASI HP TERBARU (terbaru dulu):\n" + "\n".join(
             f"- {n['posted_at'].astimezone(WIB):%H:%M} {n['app']}: {n['title']} — {n['text'][:160]}" for n in recent))
@@ -207,7 +226,9 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 if len(str(a.get("instruction") or "").strip()) < 10:
                     # A task without instructions makes a worker report "the task was empty" (seen in real use).
                     return json.dumps({"error": "instruction kosong — tulis instruksi lengkap, atau tanya pemilik dulu"})
-                t = await workers.spawn(a.get("title", "Tugas"), a.get("instruction") or a.get("title", ""),
+                ctx = await _conversation(session_id, private)
+                t = await workers.spawn(a.get("title", "Tugas"),
+                                        (a.get("instruction") or a.get("title", "")) + (quick.CONTEXT_MARK + ctx if ctx else ""),
                                         session_id, actor, device_id, location,
                                         image=image if a.get("attach_image") else None,
                                         category=a.get("category"), private=private)
@@ -278,6 +299,12 @@ def _user_content(text: str, image: str | None, image_source: str | None = None,
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]
 
 
+_ABOUT_NOTIFICATIONS = re.compile(r"notif|pesan|chat|whatsapp|\bwa\b|email|surel|yang masuk|siapa yang", re.IGNORECASE)
+# The reply promises work ("aku cek dulu", "akan kucari") — then work must actually start.
+_PROMISE = re.compile(r"\b(aku|saya|ku)\s*(akan |mau |coba |segera )?(cek|cari|carikan|putar|putarkan|tampilkan|siapkan|"
+                      r"buatkan|kerjakan|urus|lihat|periksa|kabari)|\b(akan|nanti|segera) (ku|aku |saya )?(cek|cari|kabari)|"
+                      r"\bcek dulu\b", re.IGNORECASE)
+
 _SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*\s+|\n+")
 
 
@@ -292,6 +319,13 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await emit(ev)
 
     started = time.monotonic()
+    if action := _direct_action(text, stt, screen, screen_text):
+        reply = await _act(action, session_id, actor, device_id, location, private)
+        if speak_live:
+            await send({"type": "say", "text": reply})
+        ms = int((time.monotonic() - started) * 1000)
+        return Answer(reply, spoken_live=speak_live, first_say_ms=ms if speak_live else None,
+                      route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
     first_route = (await gateway.plan("ngobrol", caller="chat", private=private))[0]
     compact = not first_route.cloud
     # Static first (cacheable), then the append-only history, then everything that changes per turn.
@@ -299,7 +333,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
                 *await _history(session_id, limit=8 if compact else 16, private=private),
                 {"role": "user", "content": _user_content(
                     text, screen, image_source, stt, await _situation(text, location, compact), screen_text)}]
-    spoken, usage_in, usage_out, silent = "", 0, 0, False
+    spoken, usage_in, usage_out, silent, called = "", 0, 0, False, []
     said_any, buffer, first_token_ms, first_say_ms, route = False, "", None, None, None
 
     async def say(sentence: str) -> None:
@@ -337,6 +371,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.arguments)}}
             for c in completion.tool_calls]})
         for c in completion.tool_calls:
+            called.append(c.name)
             result = await _run_tool(c, session_id, actor, device_id, location, send, screen, private, screen_text)
             messages.append({"role": "tool", "tool_call_id": c.id, "content": result})
             silent = silent or c.name == "stay_silent"
@@ -346,12 +381,61 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
     if silent or announces_silence(spoken):
         return Answer("", usage_in or None, usage_out or None, silent=True, spoken_live=said_any, route=route,
                       first_token_ms=first_token_ms)
+    if not called and await _promised_without_doing(spoken, text, session_id):
+        # It said it would check/find/play something but started nothing (the small local model does this
+        # often): keep the promise — a worker gets the owner's own words plus the conversation.
+        ctx = await _conversation(session_id, private)
+        await workers.spawn(text[:80], f"Permintaan pemilik: {text}\n(Agen utama sudah menjawab: \"{spoken[:300]}\")"
+                            + (quick.CONTEXT_MARK + ctx if ctx else ""), session_id, actor, device_id, location,
+                            private=private)
     if speak_live:
         await say(buffer)
         if not said_any:
             await say(spoken or "Oke.")
     return Answer(spoken or "Oke.", usage_in or None, usage_out or None, spoken_live=speak_live and said_any,
                   route=route, first_token_ms=first_token_ms, first_say_ms=first_say_ms)
+
+
+def _direct_action(text: str, stt: dict | None, screen: str | None, screen_text: str):
+    """A clear 'play X' / 'route to X' / 'news' from the owner is done directly, not left to the model."""
+    stt = stt or {}
+    if screen or screen_text or stt.get("is_owner") is False:
+        return None
+    if isinstance(stt.get("confidence"), (int, float)) and stt["confidence"] < 0.45:
+        return None  # possibly misheard: let the main agent ask back
+    return router.parse_action(text)
+
+
+async def _act(action, session_id: str, actor: str, device_id, location, private: bool) -> str:
+    from . import media_tools, perf
+    a = action.args
+    match action.name:
+        case "play_music":
+            r = await media_tools.play(a["query"])
+            if r.get("playing"):
+                return f"Oke, kuputar {r['playing']} dari {r['artist']}."
+            gap = await perf.capability_gap("musik", f"putar lagu {a['query']}", str(r.get("error") or ""))
+            return (f"Maaf, {a['query']} belum bisa kuputar: {r.get('error')}."
+                    + (" Aku akan mencari cara sendiri supaya lain kali bisa, nanti kulaporkan." if gap else ""))
+        case "show_route":
+            r = await media_tools.route(a["destination"], "", "driving", location)
+            if r.get("error"):
+                return f"Maaf, rutenya belum bisa kutampilkan: {r['error']}."
+            return f"Ini {len(r['routes'])} pilihan rute ke {a['destination']} di layar."
+        case "news":
+            topic = a["topic"]
+            await workers.spawn("Berita terbaru" + (f": {topic}" if topic else ""),
+                                f"Cari berita terbaru{' tentang ' + topic if topic else ' hari ini di Indonesia'} "
+                                "dan sampaikan judul-judul terpentingnya beserta sumbernya.",
+                                session_id, actor, device_id, location, category="web", private=private)
+            return f"Oke, kucek berita terbaru{' soal ' + topic if topic else ''}, sebentar ya."
+    return "Oke."
+
+
+async def _promised_without_doing(spoken: str, text: str, session_id: str) -> bool:
+    if not spoken or len(text.split()) < 3 or not _PROMISE.search(spoken):
+        return False  # "oke makasih" → "nanti aku kabari" is not a new request
+    return not any(t["kind"] == "owner" for t in await workers.active())
 
 
 _SILENCE = re.compile(

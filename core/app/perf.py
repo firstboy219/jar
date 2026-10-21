@@ -1,9 +1,11 @@
-"""Efficiency self-review (ADR-026): once a week — and when the same error keeps failing work — JARVIS
-looks at how well it did what the owner asked (speed, cost, failures) and makes itself better at it.
+"""Self-improvement triggers (ADR-026): a weekly efficiency review, repair tasks for recurring errors, and
+capability gaps — something the owner asked for failed because JARVIS lacks a small ability (e.g. a song
+it could not find). JARVIS analyses the cause and finds its own way.
 
 Allowed means, lightest first: a Hermes skill (applies at once), a whitelisted setting (owner approval),
-or a code change via propose_code_change (tests + owner approval + automatic rollback). The scope is
-performance only: new features and anything about security, permissions, approvals or secrets are not.
+or a code change via propose_code_change (tests + owner approval + automatic rollback). Scope (owner,
+2026-10-21): performance, and MINOR features that help do what the owner asks; never security,
+permissions, approvals, secrets, the composition, budgets or tests.
 """
 
 import logging
@@ -14,10 +16,14 @@ from .location import WIB
 
 log = logging.getLogger("jarvis-core.perf")
 
-SCOPE = """BATAS (ditetapkan pemilik): perbaikan HANYA untuk membuat JARVIS mengerjakan permintaan pemilik lebih
-cepat, lebih murah, atau lebih jarang gagal. TIDAK BOLEH: fitur baru, mengubah keamanan/izin/persetujuan/
-rahasia/komposisi AI, atau melemahkan tes. Setiap perubahan kode lewat propose_code_change (diuji otomatis,
-pemilik menyetujui di HP, otomatis dikembalikan bila gagal)."""
+SCOPE = """BATAS (ditetapkan pemilik): perubahan diri HANYA untuk (1) membuat JARVIS mengerjakan permintaan pemilik
+lebih cepat, lebih murah, atau lebih jarang gagal, dan (2) FITUR MINOR yang menutup kemampuan kecil yang kurang
+(mis. sumber lagu baru, format file baru, sumber data baru) di dalam arsitektur yang ada. TIDAK BOLEH: fitur
+besar/arsitektur baru, mengubah keamanan/izin/persetujuan/rahasia/komposisi AI/anggaran, izin Android baru,
+atau melemahkan tes. Pustaka baru hanya di core/requirements.txt, dipin persis (nama==versi). Patuhi hukum dan
+hak cipta; bila satu-satunya cara berisiko melanggar ketentuan layanan/hak cipta, tulis risikonya dengan jelas
+di alasan perubahan supaya pemilik yang memutuskan. Setiap perubahan kode lewat propose_code_change (diuji
+otomatis, pemilik menyetujui di HP, otomatis dikembalikan bila gagal)."""
 
 REVIEW_TASK = """[tinjauan efisiensi mingguan] Tinjau seberapa efisien JARVIS mengerjakan permintaan pemilik minggu ini
 dan perbaiki SATU atau DUA hal dengan dampak terbesar.
@@ -122,3 +128,36 @@ async def watch_recurring_errors() -> int:
                ON CONFLICT (signature) DO UPDATE SET task_id = EXCLUDED.task_id, at = now()""", r["signature"], t["id"])
         started += 1
     return started
+
+
+GAP_TASK = """[kemampuan kurang] Pemilik meminta sesuatu yang gagal kupenuhi.
+Jenis: {what}
+Permintaan: {request}
+Yang terjadi: {error}
+
+{scope}
+
+Pakai skill jarvis-self-development. Langkah:
+1. Analisis akar penyebabnya (kenapa gagal, apa yang kurang — sumber data, alat, format, setelan?).
+2. Cari cara sendiri: riset web, pustaka yang sudah terpasang di server (lihat core/requirements.txt), API
+   gratis tanpa kunci. Uji idenya di workspace sebelum mengubah apa pun.
+3. Pilih yang paling ringan: skill Hermes → setelan → fitur minor lewat propose_code_change (dengan tes).
+   Fitur yang terlihat di HP (mis. pemutar) memakai panel Panggung yang sudah ada.
+4. Akhiri dengan ringkasan lisan 2–3 kalimat: penyebab, solusi, dan apa yang perlu pemilik setujui."""
+
+
+async def capability_gap(what: str, request: str, error: str) -> dict | None:
+    """Start (at most once per kind of gap per day) a task in which JARVIS finds its own way to do
+    what just failed. Returns the task, or None when one already ran today."""
+    from . import workers
+    signature = "gap:" + what + ":" + " ".join(error.lower().split())[:60]
+    if await db.pool().fetchval(
+            "SELECT 1 FROM repair_attempts WHERE signature = $1 AND at > now() - interval '1 day'", signature):
+        return None
+    t = await workers.spawn(f"Cari cara: {request[:60]}", GAP_TASK.format(
+        what=what, request=request[:600], error=error[:800] or "-", scope=SCOPE),
+        "selfimprove", "jarvis-core", kind="selfimprove", category="coding")
+    await db.pool().execute(
+        """INSERT INTO repair_attempts (signature, task_id) VALUES ($1, $2)
+           ON CONFLICT (signature) DO UPDATE SET task_id = EXCLUDED.task_id, at = now()""", signature, t["id"])
+    return t

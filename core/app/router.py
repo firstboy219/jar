@@ -26,6 +26,8 @@ _RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^(daftar )?(workflow|workflows|alur kerja)( n8n)?\??$"), "workflows"),
     (re.compile(r"^(daftar )?(tugas|task|tasks|worker)( (aktif|worker))?\??$"), "tasks"),
     (re.compile(r"^(di ?mana (saya|aku)( sekarang)?|lokasi (saya|aku)( sekarang)?|where am i)\??$"), "whereami"),
+    (re.compile(r"^(jarvis,? )?(kamu |anda )?(sekarang |lagi )?(pakai|pake|memakai|menggunakan) (model|ai|otak) apa"
+                r"( (untuk|buat) \w+)?( sekarang)?\??$"), "model"),
 ]
 
 
@@ -45,6 +47,36 @@ def parse(text: str) -> Intent | None:
     return None
 
 
+# Clear action requests the main agent executes directly (no model guessing whether to call a tool —
+# the small local model often only SAID it would). Pure; executed by assistant.respond.
+_POLITE = r"^(?:(?:jarvis|tolong|coba|dong|bisa|bisakah|boleh|kamu|ayo)[, ]+)*"
+_ACTIONS: list[tuple[re.Pattern, str]] = [
+    (re.compile(_POLITE + r"(?:putar(?:kan|in)?|puterin|mainkan|setel(?:kan)?|play)\s+(?:lagu(?:nya)?\s+|musik\s+)?"
+                r"(?P<query>.{2,80}?)(?:\s+(?:dong|ya|ke hp|di hp))?[.!?]*$"), "play_music"),
+    (re.compile(_POLITE + r"(?:tunjukkan |tampilkan |cari(?:kan)? |lihat )?(?:rute|jalan|arah|navigasi)\s+(?:ke|menuju)\s+"
+                r"(?P<destination>.{2,80}?)[.!?]*$"), "show_route"),
+    (re.compile(_POLITE + r"(?:cek |cari(?:kan)? |lihat |bacakan |apa |ada )?(?:berita|kabar terkini)"
+                r"(?:\s+(?:tentang|soal|mengenai|terkait))?\s*(?P<topic>.{0,80}?)[.!?]*$"), "news"),
+]
+_NOT_A_SONG = {"lagi", "ulang", "terus", "balik", "kembali", "sebelumnya", "berikutnya", "selanjutnya"}
+_NO_TOPIC = re.compile(r"^(hari ini|terkini|terbaru|sekarang|apa|apa saja|apa aja|hari ini apa|pagi ini|malam ini)?$")
+
+
+def parse_action(text: str) -> Intent | None:
+    lowered = " ".join(text.strip().lower().split())
+    for rx, name in _ACTIONS:
+        m = rx.match(lowered)
+        if not m:
+            continue
+        args = {k: v.strip() for k, v in m.groupdict().items()}
+        if name == "play_music" and (args["query"] in _NOT_A_SONG or args["query"].split()[0] in _NOT_A_SONG):
+            return None
+        if name == "news" and _NO_TOPIC.match(args["topic"]):
+            args["topic"] = ""
+        return Intent(name, args)
+    return None
+
+
 HELP = """Perintah cepat (dijawab langsung tanpa model AI):
 • status — kesehatan layanan
 • persetujuan — daftar tindakan yang menunggu persetujuan
@@ -55,5 +87,6 @@ HELP = """Perintah cepat (dijawab langsung tanpa model AI):
 • workflow — daftar workflow n8n
 • tugas — tugas worker yang sedang berjalan
 • di mana saya — lokasi HP saat ini (jika berbagi lokasi aktif)
+• pakai model apa — AI yang sedang dipakai
 Awali pesan dengan /privat agar tidak dikirim ke model cloud.
 Pesan lain dijawab JARVIS (agen utama), yang menugaskan worker bila perlu."""
