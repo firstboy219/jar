@@ -120,6 +120,37 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
                 if (!on) vm.setUseCalendar(false) else askCalendar.launch(android.Manifest.permission.READ_CALENDAR)
             })
         }
+        Spacer(Modifier.height(8.dp))
+        val askMicForWake = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+            if (ok) vm.setWakeWord(true, s.wakeSensitive)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Panggil dengan \"Hey Jarvis\"", color = JarvisColors.Text)
+                Text("Saat mic mati, HP menunggu kata panggil (diproses di HP, tidak dikirim). Menambah pemakaian baterai.",
+                    color = JarvisColors.Muted, fontSize = 12.sp)
+            }
+            Switch(s.wakeWord, { on ->
+                if (!on) vm.setWakeWord(false, s.wakeSensitive) else askMicForWake.launch(android.Manifest.permission.RECORD_AUDIO)
+            })
+        }
+        if (s.wakeWord) Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Lebih peka", color = JarvisColors.Text)
+                Text("Kalau \"Hey Jarvis\" sering tidak terdengar (logat), tapi bisa lebih sering salah panggil.",
+                    color = JarvisColors.Muted, fontSize = 12.sp)
+            }
+            Switch(s.wakeSensitive, { vm.setWakeWord(true, it) })
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Boleh memotong JARVIS", color = JarvisColors.Text)
+                Text("Bicara saat JARVIS bicara langsung menghentikannya. Hanya aktif saat memakai headset (tanpa headset suara JARVIS terdengar mic).",
+                    color = JarvisColors.Muted, fontSize = 12.sp)
+            }
+            Switch(s.bargeIn, { vm.setBargeIn(it) })
+        }
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = {

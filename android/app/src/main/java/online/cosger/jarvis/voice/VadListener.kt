@@ -33,6 +33,11 @@ class VadListener(private val context: Context, private val scope: CoroutineScop
     override val audio: SharedFlow<ByteArray> = _audio
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 4)
     override val errors: SharedFlow<String> = _errors
+    /** Speech began — used for barge-in (the owner talks over JARVIS). */
+    private val _speechStarts = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val speechStarts: SharedFlow<Unit> = _speechStarts
+    /** VOICE_COMMUNICATION enables the phone's echo canceller (needed to hear the owner over JARVIS' voice). */
+    @Volatile var echoCancel = false
 
     @Volatile private var paused = false
     @Volatile override var lastSpeechAtMs = 0L
@@ -62,7 +67,8 @@ class VadListener(private val context: Context, private val scope: CoroutineScop
         model.reset()
         segmenter.reset()
         val minBuf = AudioRecord.getMinBufferSize(SR, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val rec = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SR, AudioFormat.CHANNEL_IN_MONO,
+        val source = if (echoCancel) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.VOICE_RECOGNITION
+        val rec = AudioRecord(source, SR, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, SileroVad.FRAME_BYTES * 8))
         recorder = rec
         rec.startRecording()
@@ -88,6 +94,7 @@ class VadListener(private val context: Context, private val scope: CoroutineScop
             val p = model.probability(frame)
             when (val ev = segmenter.feed(frame.copyOf(), p)) {
                 VadSegmenter.Event.Started -> {
+                    _speechStarts.tryEmit(Unit)
                     _state.value = MicState.Hearing
                     lastSpeechAtMs = System.currentTimeMillis()
                 }

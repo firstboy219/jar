@@ -100,6 +100,7 @@ fun TalkScreen(vm: JarvisViewModel) {
     val sharing by vm.screenSharing.collectAsStateWithLifecycle()
     val cameraOn by vm.cameraOn.collectAsStateWithLifecycle()
     val stage by vm.stage.collectAsStateWithLifecycle()
+    val wakeListening by vm.wakeListening.collectAsStateWithLifecycle()
     val brain by vm.brain.collectAsStateWithLifecycle()
     var card by remember { mutableStateOf<String?>(null) }
     var frontCamera by remember { mutableStateOf(false) }
@@ -157,6 +158,7 @@ fun TalkScreen(vm: JarvisViewModel) {
                 onNode = { card = it })
         },
         onReply = { vm.askReplyDraft() },
+        wakeListening = wakeListening,
     )
     card?.let { id -> MemoryCardDialog(vm, id) { card = null } }
 }
@@ -195,6 +197,7 @@ fun TalkContent(
     panelOpen: Boolean = false,
     stageContent: (@Composable () -> Unit)? = null,
     onReply: () -> Unit = {},
+    wakeListening: Boolean = false,
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
@@ -236,7 +239,7 @@ fun TalkContent(
                 }
             }
         }
-        ReadinessLabel(mic, connected)
+        ReadinessLabel(mic, connected, wakeListening)
 
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).animateContentSize(),
@@ -339,9 +342,10 @@ private fun ReadinessRing(mic: MicState, modifier: Modifier) {
 }
 
 @Composable
-private fun ReadinessLabel(mic: MicState, connected: Boolean) {
+private fun ReadinessLabel(mic: MicState, connected: Boolean, wakeListening: Boolean = false) {
     val (text, sub) = when {
         !connected && mic != MicState.Muted -> "Menghubungkan ke JARVIS…" to "Ucapanmu ditahan dulu, tidak hilang"
+        mic == MicState.Muted && wakeListening -> "Ucapkan \"Hey Jarvis\"" to "HP menunggu kata panggil — tidak ada suara yang dikirim"
         else -> when (mic) {
             MicState.Muted -> "Mic mati" to "Ketuk tombol di bawah untuk bicara"
             MicState.Preparing -> "Menyiapkan… tunggu sebentar" to "Kalau langsung bicara, suaramu tetap direkam"

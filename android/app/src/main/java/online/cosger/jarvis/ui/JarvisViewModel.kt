@@ -47,6 +47,9 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun setUseCalendar(enabled: Boolean) = engine.setUseCalendar(enabled)
     fun stageEvent(event: String, detail: Map<String, Int>) = engine.stageEvent(event, detail)
     fun prepareMeeting() = engine.prepareMeeting()
+    fun setWakeWord(enabled: Boolean, sensitive: Boolean) = engine.setWakeWord(enabled, sensitive)
+    fun setBargeIn(enabled: Boolean) = engine.setBargeIn(enabled)
+    val wakeListening = engine.wakeListening
     fun notify(text: String) = engine.notify(text)
     fun askReplyDraft() = engine.askReplyDraft()
     suspend fun refreshComposition() = engine.refreshComposition()

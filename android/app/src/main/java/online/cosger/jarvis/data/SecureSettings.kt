@@ -16,6 +16,12 @@ data class AppSettings(
     val shareLocation: Boolean = true,
     val readNotifications: Boolean = false,
     val useCalendar: Boolean = false,
+    /** Listen for "Hey Jarvis" while muted (on the phone only). */
+    val wakeWord: Boolean = false,
+    /** Wake word sensitivity: 0.5 normal, 0.25 for Indonesian-accented pronunciation. */
+    val wakeSensitive: Boolean = false,
+    /** Talking over JARVIS stops it (best with a headset; phone speakers can echo). */
+    val bargeIn: Boolean = false,
     val sessionId: String = UUID.randomUUID().toString(),
 ) {
     val isConfigured: Boolean get() = deviceToken.startsWith("jdv_")
@@ -46,6 +52,9 @@ class SecureSettings(context: Context) {
             shareLocation = prefs.getBoolean("share_location", true),
             readNotifications = prefs.getBoolean("read_notifications", false),
             useCalendar = prefs.getBoolean("use_calendar", false),
+            wakeWord = prefs.getBoolean("wake_word", false),
+            wakeSensitive = prefs.getBoolean("wake_sensitive", false),
+            bargeIn = prefs.getBoolean("barge_in", false),
             sessionId = session,
         )
     }
@@ -59,6 +68,9 @@ class SecureSettings(context: Context) {
             .putBoolean("share_location", next.shareLocation)
             .putBoolean("read_notifications", next.readNotifications)
             .putBoolean("use_calendar", next.useCalendar)
+            .putBoolean("wake_word", next.wakeWord)
+            .putBoolean("wake_sensitive", next.wakeSensitive)
+            .putBoolean("barge_in", next.bargeIn)
             .putString("session_id", next.sessionId)
             .apply()
         _state.value = next.copy(serverUrl = next.serverUrl.trim().trimEnd('/'), deviceToken = next.deviceToken.trim())

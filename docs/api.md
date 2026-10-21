@@ -50,14 +50,34 @@ Client control messages:
 ```
 `user_command` may also carry `"screen": "<base64 JPEG>"` while the owner shares their screen.
 
+### v0.7 additions
+Send header `X-App-Caps: say,stage,utterance,brain` to receive the events below.
+```json
+// client → server
+{"type": "utterance", "session_id": "…", "seq": 7, "audio": "<base64 PCM16 mono 16 kHz>",   // one VAD-cut utterance
+ "location": {…}, "screen": "<jpeg>", "image_source": "screen|camera", "screen_text": "<text read on the phone>"}
+{"type": "stage_event", "id": "<stage id>", "event": "closed|login_done|route_selected|draft_copied|draft_sent|paused",
+ "detail": {"index": 1}}
+// user_command may also carry "screen_text"
+// server → client
+{"type": "transcript", "seq": 7, "text": "…", "engine": "whisper|groq|deepgram", "confidence": 0.84, "is_owner": true}
+{"type": "say", "text": "Oke, aku cek dulu ya.", "session_id": "…"}     // speak now, sentence by sentence
+{"type": "reply", …, "spoken": true}                                        // already said via "say"
+{"type": "stage", "id": "…", "panel": "music|video|map|web|doc|draft|gallery", "mode": "show|update|close",
+ "payload": {…}, "caption": "…"}
+{"type": "brain_pulse", "ids": ["<memory id>"], "kind": "read|write"}
+{"type": "approval", "id": 12, "title": "…", "risk": "high"}
+```
+
 `reply` is authoritative (it may differ slightly from the concatenated deltas). Closing the socket
 mid-turn cancels the agent run on the server.
 Several commands may be in flight on one socket; match replies by `session_id`.
 Fail-safe auto-reconnect (BRD §4): reconnect with exponential backoff (1 s → 30 s) on any close except 4401,
 send `ping` every 20 s, and treat 2 missed `pong`s as a dead connection.
 
-`route` tells the UI who answered: `core` = instant command without AI (tier 1), `hermes` = the agent,
-`blocked` = not sent to the cloud (sensitive content or `/privat`), `error` = something failed.
+`route` tells the UI who answered: `core` = instant command without AI, `assistant` = the main agent,
+`private` = answered by the local model only (sensitive content or `/privat`), `silent` = not for
+JARVIS, `error` = something failed.
 
 ## REST
 | Method | Path | Body / result |
@@ -65,9 +85,20 @@ send `ping` every 20 s, and treat 2 missed `pong`s as a dead connection.
 | POST | `/api/v1/chat` | `{"user_command","session_id"}` → `{"reply","route","session_id"}` |
 | GET | `/api/v1/deepgram/token` | → `{"access_token","expires_in","model","language","keywords"}` — 60 s Deepgram token plus the STT settings to use (tuned on the server); 503 if no Deepgram key |
 | GET | `/healthz` | → `{"ok":true}` (no auth) |
+| GET/PUT | `/api/v1/composition` | AI per category, speech engine, Mode Kuat; PUT `{"preset"}` or `{"changes"}` (owner devices only) |
+| POST | `/api/v1/composition/test` | `{"category"}` → which model answered, ms |
+| GET | `/api/v1/brain`, `/api/v1/brain/{id}` | 3D memory graph / one memory |
+| GET/POST/DELETE | `/api/v1/voiceprint` | enrolment status / one PCM sample / delete |
+| POST | `/api/v1/meetings` | `{"title","confidential","consent":true}` → `{"id"}` |
+| PUT | `/api/v1/meetings/{id}/chunks/{n}` | audio chunk (idempotent) |
+| POST | `/api/v1/meetings/{id}/marks`, `/finish`, `/ask` | mark, finish `{"duration_s","chunks"}`, question → answer |
+| GET/DELETE | `/api/v1/meetings[/{id}]`, `/api/v1/meetings/{id}/chunks/{n}` | list / detail (transcript, summary) / audio |
+| GET | `/api/v1/documents/{id}`, `/api/v1/media/{id}` | file JARVIS made / music it fetched (Range) |
+| * | `/api/v1/console/…` | every web-admin endpoint (`/admin/…`) for owner-scope devices, plus `settings`, `releases` |
 
-Errors: `401` bad/revoked token, `422` validation, `503` dependency not configured.
+Errors: `401` bad/revoked token, `403` device without owner scope, `422` validation, `503` dependency not configured.
 
 ## Quick commands (tier 1, answered by core without any model)
 `bantuan`, `status`, `persetujuan`, `setujui <id>`, `tolak <id>`, `ingat: <teks>`, `memori <kata kunci>`,
-`lupakan <id memori>`, `workflow`, `di mana saya`. Prefix `/privat` keeps a message off the cloud.
+`lupakan <id memori>`, `workflow`, `di mana saya`. Prefix `/privat` keeps a message (and its answer) on
+the local model.

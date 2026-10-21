@@ -6,9 +6,9 @@ Spec hierarchy: `BRD.docx` is primary; `JARVIS_KNOWLEDGE_BASE (1).md` is referen
 The KB says to reuse an existing n8n, but the target server had none. Per the BRD, n8n + PostgreSQL
 run in the JARVIS compose stack.
 
-## ADR-002 — Hermes Agent only; OpenClaw deferred (2026-10-17)
-BRD runs both. We start with Hermes Agent (its built-in OpenAI-compatible API server on :8642
-serves as the backend endpoint) and add OpenClaw only when a concrete need appears.
+## ADR-002 — Hermes Agent only; OpenClaw dropped (2026-10-17, updated 2026-10-21)
+BRD runs both. OpenClaw was never installed; on 2026-10-21 the owner decided to drop it. Its role
+(gateway, WSS, admin) is covered by jarvis-core + the web admin; Hermes is the brain.
 
 ## ADR-003 — Generated n8n workflows need owner approval (2026-10-17)
 Deviation from BR-002 "100% autonomous". Workflows Hermes generates are created **inactive** in n8n
@@ -42,7 +42,7 @@ Auth: scrypt password hash in `.env`, HMAC-signed HttpOnly/Secure/SameSite=Stric
 invalidated on password change), Origin check on POSTs, 5 failed logins / 15 min per IP.
 Secrets are write-only in the UI (only the last 4 chars are shown).
 
-## ADR-007 — Tiered routing; no local LLM on this server (2026-10-17)
+## ADR-007 — Tiered routing; no local LLM on this server (2026-10-17) — superseded by ADR-017
 The owner does not want every chat sent straight to OpenRouter. A local model was benchmarked here
 (qwen3:4b, Ollama, 4 vCPU Xeon 8175M, no GPU): ~13 tok/s prompt processing, 4.5 tok/s generation —
 a single Hermes turn (≈13k-token prompt) would take ~17 minutes. So, chosen by the owner:
@@ -72,7 +72,7 @@ OkHttp WebSockets, EncryptedSharedPreferences for the device token, minSdk 26 / 
   Android TTS (id-ID) — free and no extra round trip, unlike the BRD's OpenAI TTS.
 - Built in Docker (`infra/android-builder`), signed with a server-side keystore, published to the web admin.
 
-## ADR-010 — Hermes built-in memory disabled (2026-10-17)
+## ADR-010 — Hermes built-in memory disabled (2026-10-17) — superseded by ADR-018
 Hermes was writing its own MEMORY.md/USER.md entries alongside the jarvis memory. Two unmanaged stores
 violate "memory is visible/editable by the owner", so `memory.memory_enabled` and
 `user_profile_enabled` are off; all long-term memory goes through the jarvis MCP tools.
@@ -173,14 +173,14 @@ diriku." Fixes (`billing.py`): balance is a health check and part of the self-de
 recognised in the main agent and workers; the owner gets one plain report per 12 h; worker 402s count as
 failures; unreadable self-checks say so. A self-check also misread planned restarts (logged as
 `exit_nonzero`) as a "crash loop" — that proposal was rejected and the fact added to the self-description.
-**Action for the owner: add credits (≈$5 lasts months at the observed ~$0.05/day).**
+Since ADR-017 an empty balance only means "local models, slower" — JARVIS keeps working.
 
 ## Ops note — never run two `docker compose up` at once
 Editing `.env` triggers the watcher, which runs `docker compose up -d`. A concurrent manual `up` once
 left a container renamed `<id>_jarvis-core`. Both now take `data/admin/compose.lock`; deploy with
 `sudo infra/scripts/compose.sh up -d --build <service>`.
 
-## Known gap — latency vs BR-001
+## Known gap — latency vs BR-001 (see ADR-019 for what changed)
 Measured end-to-end: tier-1 commands ~0.1 s; Hermes turns 6–23 s (cloud model + 13k-token agent prompt +
 tool calls). BR-001's < 1.5 s target is not met for agent answers. Since streaming (ADR-009) the first
 visible sign of thinking arrives in ~3 s and the answer streams as it is written. Since ADR-012 the owner
@@ -189,4 +189,64 @@ stream partial text over WSS, a faster tier-2 model, prompt caching, trimming He
 
 ## Known risk
 Hermes' terminal backend is `local`, i.e. commands run inside the `jarvis-brain` container. The
-container is the sandbox for now; revisit (`terminal.backend: docker`) before enabling Execute-level tools.
+container is the sandbox (no Docker socket, no-new-privileges, dropped capabilities, CPU/RAM/pid
+limits; ADR-018); dangerous commands still need the owner's approval on the phone.
+
+## ADR-017 — LLM gateway; local by default; the owner composes JARVIS from the APK (2026-10-21)
+After the $0-credit outage the owner wanted no single-vendor dependency: **default fully local**
+(Qwen + Whisper on this server), cloud only as chosen. Every model call (main agent, Hermes, its
+sub-agents/cron/auxiliary tasks, meetings, drafts) goes through `core/app/gateway.py`:
+- categories (ngobrol, cepat, penglihatan, web, coding, produktivitas, analisis, balas-pesan, rapat,
+  latar-belakang, privat) with ordered routes; presets *Lokal penuh* (default), *Hemat gratis*
+  (OpenRouter `:free`), *Seimbang* (recommended), *Kombinasi pemilik* (Haiku / Sonnet / ChatGPT);
+- only an owner-scope device (the APK) may change it; Hermes/Qdrant/n8n are the permanent core;
+- routes without a key are skipped, failover happens before the first byte, the local model closes
+  every list — no key or no credit means slower, never dead;
+- `/privat` and sensitive content only ever reach the local model, and are not replayed into later
+  cloud prompts; `:free` models are excluded for categories that may carry private content;
+- budget (`budget.py`): $20/month soft cap + per-category caps; 80% moves background work to
+  free/local, 95% prefers the cheapest route, 100% stops paid models; hard caps stay on openrouter.ai;
+- cost hygiene: `session_id` for sticky provider caching, Anthropic cache breakpoints, a static prompt
+  prefix with per-turn context last (also what makes the local prompt cache work).
+Measured here: Qwen3.5-2B ~42/7 tok/s (read/write) and **1.4–1.7 s replies once the prompt prefix is
+cached** (75 s cold); Qwen3.5-4B ~20/4.7 tok/s; Hermes' prompt with all features ≈20.5k tokens → ~1 h
+cold on this CPU, ~7 min per step warm. The warm prefix is saved to disk and restored after restarts.
+Hermes on local models is therefore a fallback, not a daily driver.
+
+## ADR-018 — Hermes decides its own flow; one shared memory (2026-10-21)
+Owner: "let Hermes think and act flexibly … enable all its features". Removed: prescriptive SOUL rules,
+`max_turns 30`, the fixed delegation model, disabled memory. Enabled: all API-server toolsets plus
+kanban, tts, video, project, debugging; skills (self-created ones scanned), cron (agent may schedule),
+delegation (4 children, 30 min child timeout), memory. Kept (the owner's KB rules): approvals for
+external/destructive/financial/production actions — Hermes' dangerous-command prompts now reach the
+phone through `/v1/runs` approval events; no credentials for n8n/DB/admin; web content is data;
+container hardening; budget via the gateway. Memory: Hermes' own MEMORY.md/USER.md are mirrored by the
+`jarvis-memory` plugin into JARVIS' single memory (Postgres + Qdrant), which also feeds Hermes' recall —
+one brain, visible and editable by the owner, drawn as the 3D brain on the phone. Cron results are
+delivered as spoken reports (Hermes has no messaging platform here); `ask_owner` / `notify_owner` reach
+the owner by voice. Not enabled by default: inbound messaging gateways and computer-use (needs a desktop).
+
+## ADR-019 — Voice: VAD on the phone, speech engine per composition, voiceprint, live speech (2026-10-21)
+Deepgram live streaming bills every second the mic is open (~$60/month at 8 h/day). Now Silero VAD on
+the phone sends only speech; the server transcribes with the owner's engine: local Whisper (default;
+measured `small` WER ~19%, ~3.5 s; `large-v3-turbo` WER ~10% but ~15 s), Groq turbo (same model, ~0.5 s,
+free up to ~8 h/day) or Deepgram. Whisper has no speaker count, so the owner can enrol a voiceprint
+(CAM++; same voice ≥ 0.86, other voices ≤ 0.45 measured) — non-owner speech is flagged for the main agent.
+The main agent's answer is spoken sentence by sentence while it streams. Wake word and barge-in: see ADR-021.
+
+## ADR-020 — Meetings and reply drafts respect other people's privacy (2026-10-21)
+Meetings: recording needs the owner's confirmation that participants consented (Indonesian KUHP art. 258
+from 2026-01-02); Android cannot record call audio, so the phone records the room. A "Rahasia" meeting is
+processed locally end to end. Diarization is local (sherpa-onnx); minutes are a .docx plus questions over
+the transcript; audio is deleted after 30 days. Drafts: the phone reads the chat itself (ML Kit) and
+sends text; a cloud model is used only after the owner agrees; JARVIS never sends — the owner copies,
+opens the app, or confirms sending through WhatsApp's notification reply.
+
+## ADR-021 — "Hey Jarvis" and barge-in, both opt-in (2026-10-21)
+Wake word: openWakeWord (ONNX via the onnxruntime already in the APK; pretrained models CC BY-NC-SA,
+acceptable for this personal assistant; Porcupine's free tier ended 2026-06-30). It runs on the phone
+only while the main mic is muted; after 60 s without speech JARVIS goes back to waiting. Validated with
+synthetic speech: English-pronounced "Hey Jarvis" 0.999, ordinary Indonesian sentences < 0.01, an
+Indonesian-accented voice 0.25 — hence a "lebih peka" (0.25) setting. Barge-in: speaking while JARVIS
+talks stops it, only with a headset (phone-speaker echo would trigger it), mic in VOICE_COMMUNICATION
+mode for the phone's echo canceller. Both cost battery on the Infinix; off by default.

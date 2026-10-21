@@ -66,7 +66,7 @@ class PhoneSensors(context: Context) {
         )
     }
 
-    private fun headset(): Boolean? = runCatching {
+    fun headset(): Boolean? = runCatching {
         val am = app.getSystemService(AudioManager::class.java)
         am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
             it.type in setOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,

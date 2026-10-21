@@ -70,6 +70,13 @@ class StageScreenshotTest {
     @Test fun webLoginAsksFirst() = talk(panel("web", """{"url":"https://ibank.klikbca.co.id","mode":"login","domain":"ibank.klikbca.co.id"}""",
         "Masuk ke KlikBCA"))
 
+    @Test fun waitingForHeyJarvis() = paparazzi.snapshot {
+        JarvisTheme {
+            TalkContent(TurnState(), MicState.Muted, 0f, "", false, Board(), true, {}, {}, {}, {},
+                stageContent = { StageHost(StageState(), brain, false, actions, Modifier.fillMaxSize()) }, wakeListening = true)
+        }
+    }
+
     @Test fun consoleMenu() = paparazzi.snapshot { JarvisTheme { Box(Modifier.background(JarvisColors.Background)) { MoreScreen {} } } }
 
 }

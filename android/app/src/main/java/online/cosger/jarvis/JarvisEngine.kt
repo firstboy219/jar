@@ -52,6 +52,7 @@ import online.cosger.jarvis.voice.Speaker
 import online.cosger.jarvis.voice.SttConfig
 import online.cosger.jarvis.voice.VadListener
 import online.cosger.jarvis.voice.VoiceInput
+import online.cosger.jarvis.voice.WakeListener
 
 /**
  * Everything that must outlive a screen: the link to jarvis-core, the microphone, the voice, the board
@@ -81,6 +82,9 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     val interim: StateFlow<String> = _input.flatMapLatest { it.interim }.stateIn(scope, SharingStarted.Eagerly, "")
     private val speaker = Speaker(context)
     val speaking: StateFlow<Boolean> = speaker.speaking
+    /** "Hey Jarvis" while muted (opt-in). */
+    private val wake = WakeListener(context, scope)
+    val wakeListening: StateFlow<Boolean> = wake.active
 
     /** Camera: while the preview is open, its current frame goes along with each thing the owner says. */
     private val _cameraOn = MutableStateFlow(false)
@@ -123,12 +127,24 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         scope.launch { reportContextForever() }
         scope.launch { deepgram.errors.collect { _notice.value = it } }
         scope.launch { vad.errors.collect { _notice.value = it } }
-        // JARVIS must not transcribe its own voice: mute input while speaking, resume a moment after.
+        // JARVIS must not transcribe its own voice: mute input while speaking, resume a moment after —
+        // unless barge-in is on and a headset keeps JARVIS' voice out of the mic.
         scope.launch {
             speaker.speaking.collect { talking ->
-                if (talking) listener.pause() else { delay(350); if (!speaker.speaking.value) listener.resume() }
+                if (talking) { if (!bargeInNow()) listener.pause() }
+                else { delay(350); if (!speaker.speaking.value) listener.resume() }
             }
         }
+        scope.launch { vad.speechStarts.collect { if (speaker.speaking.value && bargeInNow()) speaker.stop() } }
+        scope.launch {
+            wake.heard.collect {
+                wake.stop()
+                runCatching { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 70)
+                    .startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 150) }
+                unmute()
+            }
+        }
+        scope.launch { delay(2_000); syncWake() }
         scope.launch { speakReportsWhenFree() }
         scope.launch {
             connection.collect { c ->
@@ -165,6 +181,26 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     fun setShareLocation(enabled: Boolean) = settingsStore.update { it.copy(shareLocation = enabled) }
     fun setReadNotifications(enabled: Boolean) = settingsStore.update { it.copy(readNotifications = enabled) }
     fun setUseCalendar(enabled: Boolean) = settingsStore.update { it.copy(useCalendar = enabled) }
+    fun setWakeWord(enabled: Boolean, sensitive: Boolean = settings.value.wakeSensitive) {
+        settingsStore.update { it.copy(wakeWord = enabled, wakeSensitive = sensitive) }
+        syncWake()
+    }
+    fun setBargeIn(enabled: Boolean) = settingsStore.update { it.copy(bargeIn = enabled) }
+
+    private fun bargeInNow(): Boolean = settings.value.bargeIn && sensors.headset() == true && listener === vad
+
+    /** "Hey Jarvis" runs only while the main mic is muted (one app can't hold the mic twice). */
+    private fun syncWake() {
+        val want = settings.value.wakeWord && !listener.unmuted &&
+            context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        wake.threshold = if (settings.value.wakeSensitive) 0.25f else 0.5f
+        if (want && !wake.active.value) {
+            if (wake.start()) ListeningService.start(context)
+        } else if (!want && wake.active.value) {
+            wake.stop()
+            if (!listener.unmuted) context.stopService(Intent(context, ListeningService::class.java))
+        }
+    }
 
     /** Which speech engine the owner chose; the switch happens while muted. */
     suspend fun refreshComposition() {
@@ -235,8 +271,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     /** Unmute: the mic stays open (foreground service) until muted again or idle too long. */
     fun unmute() {
         if (listener.unmuted) return
+        wake.stop()
         val wanted = if (_sttEngine.value == "deepgram") deepgram else vad
         if (wanted !== _input.value) _input.value = wanted
+        vad.echoCancel = settings.value.bargeIn
         ListeningService.start(context)
         listener.unmute(::voiceConfig)
         scope.launch { delay(1_000); runCatching { sendContext() } } // "I'm here now" — fresh context
@@ -245,6 +283,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     fun mute() {
         listener.mute()
         context.stopService(Intent(context, ListeningService::class.java))
+        syncWake() // back to waiting for "Hey Jarvis" if enabled
     }
 
     fun toggleMute() = if (listener.unmuted) mute() else unmute()
@@ -253,15 +292,19 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     fun prepareMeeting() {
         speaker.stop()
         mute()
+        wake.stop()
+        context.stopService(Intent(context, ListeningService::class.java))
     }
 
     private suspend fun autoMuteWatchdog() {
         while (true) {
-            delay(30_000)
+            delay(15_000)
             val idleMs = System.currentTimeMillis() - listener.lastSpeechAtMs
-            if (listener.unmuted && !speaker.speaking.value && idleMs > AUTO_MUTE_MS) {
+            // With "Hey Jarvis" on, go back to wake-word listening sooner (it costs less battery).
+            val limit = if (settings.value.wakeWord) WAKE_IDLE_MS else AUTO_MUTE_MS
+            if (listener.unmuted && !speaker.speaking.value && idleMs > limit) {
                 mute()
-                _notice.value = "Mic dimatikan otomatis setelah ${AUTO_MUTE_MS / 60_000} menit tanpa suara."
+                if (!settings.value.wakeWord) _notice.value = "Mic dimatikan otomatis setelah ${AUTO_MUTE_MS / 60_000} menit tanpa suara."
             }
         }
     }
@@ -448,6 +491,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     companion object {
         const val AUTO_MUTE_MS = 5 * 60_000L
+        const val WAKE_IDLE_MS = 60_000L
         const val MIN_SCREEN_TEXT = 40
     }
 }
