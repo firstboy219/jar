@@ -359,3 +359,16 @@ The real fix for quality is a cloud model for the main agent (Groq free key or O
 - **Who uses the server:** `infra/scripts/usage-collector.sh` (`jarvis-usage.service`, docker stats every
   10 s → `data/ops/containers.json`) + the gateway's in-flight AI calls by caller + running/waiting tasks →
   the home strip says which service uses the CPU/RAM and for whose work (owner first, background waits).
+
+## ADR-030 — Background work only under 50% CPU, orphan watchdog, "Di balik layar" (2026-10-21)
+Bug: the local worker model kept computing for minutes after its request was cancelled (286% CPU with no
+task) — llama.cpp only checks for cancellation between batches, and a 2048-token batch took 2–4 minutes on
+this CPU. Fixes: `-b 512` (a cancelled request stops within ~30 s) and a watchdog (core/app/ops.py) that
+restarts the worker model when it keeps computing while no call is waiting for it (3 checks ≈ 60 s; then the
+prompt cache is restored). Owner's rule: JARVIS' own work (self-improvement, flow watcher, self-check,
+situations, habits) only STARTS when the server CPU is < 50% and none of the owner's work runs; while only
+background work runs the worker model is limited to 2 of 4 threads (`docker update --cpus`, applied by
+usage-collector.sh from data/ops/policy.json), the owner's work gets all 4. Transparency: `/admin/background`
+and the APK screen "Di balik layar" list what runs now and for whom, why background work waits, the schedule,
+the last 24 hours (AI minutes per purpose, background tasks) and a log of everything started or stopped.
+`ops.py` is out of bounds for self-modification.

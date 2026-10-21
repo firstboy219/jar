@@ -1,8 +1,9 @@
 [Unit]
-Description=Watch for the owner's "Netralkan" request (free CPU & memory)
+Description=Watch for "Netralkan" (owner) and worker-model resets (orphan watchdog)
 
 [Path]
 PathExists=/home/ubuntu/my-project/infra/data/ops/relieve.request
+PathExists=/home/ubuntu/my-project/infra/data/ops/worker-reset.request
 
 [Install]
 WantedBy=multi-user.target

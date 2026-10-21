@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -70,6 +71,7 @@ enum class ConsoleRoute(val path: String, val title: String, val hint: String, v
     Memory("memory", "Memori", "cari, tambah, hapus ingatan JARVIS", Icons.Filled.Memory, "JARVIS"),
     Self("self", "Diri JARVIS", "pengetahuan diri, perbaikan, pengembangan diri, error", Icons.Filled.Psychology, "JARVIS"),
     Flow("flow", "Pengawas alur", "obrolan sesuai konteks? masalah & perbaikannya", Icons.Filled.Insights, "JARVIS"),
+    Background("background", "Di balik layar", "apa yang JARVIS kerjakan sendiri, kapan, berapa lama", Icons.Filled.Visibility, "JARVIS"),
     Studio("studio", "Hermes Studio", "jadwal, skill, kanban, memori Hermes", Icons.Filled.Hub, "JARVIS"),
     Documents("documents", "Dokumen", "file buatan JARVIS", Icons.Filled.Description, "JARVIS"),
     Composition("composition", "Komposisi AI", "AI per kategori, anggaran, mesin suara, Mode Kuat", Icons.Filled.Tune, "AI & server"),

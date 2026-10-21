@@ -325,18 +325,20 @@ async def stream(category: str, body: dict, *, caller: str, session_id: str | No
     _inflight[key] = {"caller": caller, "category": category, "since": time.time()}
     try:
         async for chunk in _stream(category, body, caller=caller, session_id=session_id, private=private,
-                                   worker=worker, on_route=on_route):
+                                   worker=worker, on_route=on_route, _key=key):
             yield chunk
     finally:
         _inflight.pop(key, None)
 
 
 async def _stream(category: str, body: dict, *, caller: str, session_id: str | None = None, private: bool = False,
-                  worker: bool = False, on_route: Callable[[Route], None] | None = None) -> AsyncIterator[dict]:
+                  worker: bool = False, on_route: Callable[[Route], None] | None = None, _key: int = 0) -> AsyncIterator[dict]:
     """Yield OpenAI `chat.completion.chunk` dicts from the first route that starts answering."""
     body = {**body, "stream": True}
     errors: list[str] = []
     for route in await plan(category, caller=caller, private=private, worker=worker):
+        if _key in _inflight:
+            _inflight[_key]["provider"] = route.provider
         b, headers = _prepare(body, route, session_id)
         started = time.monotonic()
         client = _client(_timeout(route, worker))
@@ -400,17 +402,19 @@ async def complete(category: str, body: dict, *, caller: str, session_id: str | 
     key = next(_seq)
     _inflight[key] = {"caller": caller, "category": category, "since": time.time()}
     try:
-        return await _complete(category, body, caller=caller, session_id=session_id, private=private, worker=worker)
+        return await _complete(category, body, caller=caller, session_id=session_id, private=private, worker=worker, _key=key)
     finally:
         _inflight.pop(key, None)
 
 
 async def _complete(category: str, body: dict, *, caller: str, session_id: str | None = None,
-                    private: bool = False, worker: bool = False) -> dict:
+                    private: bool = False, worker: bool = False, _key: int = 0) -> dict:
     """Non-streaming call with the same routing and failover; returns the OpenAI response JSON."""
     body = {**body, "stream": False}
     errors: list[str] = []
     for route in await plan(category, caller=caller, private=private, worker=worker):
+        if _key in _inflight:
+            _inflight[_key]["provider"] = route.provider
         b, headers = _prepare(body, route, session_id)
         started = time.monotonic()
         try:

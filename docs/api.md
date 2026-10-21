@@ -102,6 +102,7 @@ JARVIS, `error` = something failed.
 | GET / POST | `/admin/flow-issues`, `/admin/flow-issues/{id}` `{"status"}` (+ console) | flow watcher findings; mark open/ignored/fixed |
 | POST | `/admin/flow-check` (+ console) | run the flow watcher now |
 | GET | `/admin/server-usage` (+ console) | CPU %, load, RAM/swap/disk (GB, %), uptime, running tasks, AI spend, `containers` (who uses CPU/RAM), `who` (running/waiting work, AI calls by caller) — home-screen strip |
+| GET | `/admin/background` (+ console) | behind the scenes: now (tasks, AI calls, 50% rule state), schedule, last 24 h, log |
 | POST | `/admin/relieve` (+ console) | Netralkan: stop & keep all tasks, rest background work 15 min, host frees Hermes/worker-model memory |
 | POST | `/admin/tasks/{id}/retry`, `/admin/tasks/{id}/close` (+ console) | a stopped/failed task: continue it from its progress, or close it |
 | POST | `/api/v1/console/admin-password` | `{"current","new"}` change the web admin password (owner device) |

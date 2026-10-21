@@ -5,14 +5,23 @@
 #   1. restart Hermes (frees its browser/agent memory; its data is on the volume)
 #   2. the local worker model: restart only if it is still busy (a generation nobody waits for any more)
 #   3. swap back into RAM when there is room for it
+# Also: data/ops/worker-reset.request from the orphan watchdog (core/app/ops.py) — the local worker model
+# keeps computing an answer nobody waits for: restart it (core restores its prompt cache afterwards).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 OPS=data/ops
+log=()
+note() { log+=("$1"); echo "[$(date -Is)] $1"; }
+
+if [[ -f $OPS/worker-reset.request ]]; then
+  rm -f "$OPS/worker-reset.request" "$OPS/worker-reset.result"
+  flock data/admin/compose.lock docker restart jarvis-llm-worker >/dev/null && note "watchdog: jarvis-llm-worker dimulai ulang"
+  echo '{}' > "$OPS/worker-reset.result"; chown "$(stat -c %u:%g data/hermes)" "$OPS/worker-reset.result"
+fi
 REQ=$OPS/relieve.request
 [[ -f $REQ ]] || exit 0
 rm -f "$REQ"
 log=()
-note() { log+=("$1"); echo "[$(date -Is)] $1"; }
 
 flock data/admin/compose.lock docker restart jarvis-brain >/dev/null && note "Hermes kumulai ulang (memori browsernya bebas)."
 sleep 15

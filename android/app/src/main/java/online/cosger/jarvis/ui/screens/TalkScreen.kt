@@ -95,7 +95,7 @@ import kotlin.math.roundToInt
 val LOCATION_PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
 
 @Composable
-fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}) {
+fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}, onOpenBackground: () -> Unit = {}) {
     val turn by vm.turn.collectAsStateWithLifecycle()
     val interim by vm.interim.collectAsStateWithLifecycle()
     val level by vm.micLevel.collectAsStateWithLifecycle()
@@ -182,6 +182,7 @@ fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}) {
         involved = stage.involved.map { it.label },
         server = server,
         onServerTap = onOpenServer,
+        onBackgroundTap = onOpenBackground,
         onRelieve = { askRelieve = true },
         onRetryTask = vm::retryTask,
         onCloseTask = vm::closeTask,
@@ -235,6 +236,7 @@ fun TalkContent(
     involved: List<String> = emptyList(),
     server: ServerUsage? = null,
     onServerTap: () -> Unit = {},
+    onBackgroundTap: () -> Unit = {},
     onRelieve: () -> Unit = {},
     onRetryTask: (Long) -> Unit = {},
     onCloseTask: (Long) -> Unit = {},
@@ -254,7 +256,7 @@ fun TalkContent(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
-            server?.let { ServerStrip(it, onServerTap, onRelieve) }
+            server?.let { ServerStrip(it, onServerTap, onBackgroundTap, onRelieve) }
             if (sharing) ShareBanner(onToggleShare, onReply)
 
             if (cameraOn) {
@@ -332,7 +334,7 @@ fun TalkContent(
  * for whose work, who waits for a turn). Tap for the dashboard; "Netralkan" frees the server.
  */
 @Composable
-private fun ServerStrip(u: ServerUsage, onTap: () -> Unit, onRelieve: () -> Unit) {
+private fun ServerStrip(u: ServerUsage, onTap: () -> Unit, onBackground: () -> Unit, onRelieve: () -> Unit) {
     Column(
         Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp))
             .background(JarvisColors.Surface.copy(alpha = 0.78f)).border(1.dp, JarvisColors.Border, RoundedCornerShape(12.dp))
@@ -340,11 +342,11 @@ private fun ServerStrip(u: ServerUsage, onTap: () -> Unit, onRelieve: () -> Unit
     ) {
         MeterRow(u)
         Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).clickable(onClick = onBackground)) {  // → "Di balik layar"
                 if (u.busiest().isNotBlank()) {
                     Text("Dipakai: ${u.busiest()}", color = JarvisColors.Text, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text("untuk ${u.purpose()}", color = JarvisColors.Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("untuk ${u.purpose()} ›", color = JarvisColors.Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.width(8.dp))
             Text("Netralkan", color = if (u.cpuPct >= 85 || u.ramPct >= 85) JarvisColors.Red else JarvisColors.Cyan, fontSize = 11.sp,

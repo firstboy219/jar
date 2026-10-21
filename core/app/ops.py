@@ -9,11 +9,19 @@ Memories, chats, documents, passwords and settings are never touched.
 
 Per-container usage comes from infra/scripts/usage-collector.sh (docker stats on the host, every 10 s),
 because jarvis-core deliberately has no docker socket.
+
+Background work (owner, 2026-10-21): JARVIS' own work — self-improvement, flow watcher, self-check,
+situations, habits — only STARTS while the server CPU is under 50% and none of the owner's work is running,
+and while only background work runs, the local worker model is held to 2 of the 4 CPU threads (the owner's
+work gets all of them; the collector applies `docker update --cpus`). A watchdog stops the worker model when
+it keeps computing an answer nobody waits for any more (seen: 286% CPU with no task). Everything done
+behind the scenes is listed for the owner (background()).
 """
 
 import asyncio
 import json
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,7 +29,17 @@ from . import audit, gateway, reports, workers
 
 ROOT = Path("/data/ops")
 CALM_S = 15 * 60
-_state = {"calm_until": 0.0}
+BACKGROUND_MAX_CPU = 50.0  # background work only starts below this (% of the whole server)
+WORKER_CPUS_OWNER, WORKER_CPUS_BACKGROUND = 4.0, 2.0
+ORPHAN_CPU, ORPHAN_TICKS = 25.0, 3  # worker model busy with nobody waiting for 3 checks (~60 s) = orphan
+OWNER_CALLERS = ("chat", "meeting")
+_state = {"calm_until": 0.0, "cpu": 0.0, "worker_cpus": None, "orphan_ticks": 0, "reset_at": 0.0}
+_activity: deque = deque(maxlen=80)
+
+
+def note(text: str) -> None:
+    """One line in the owner-visible "Di balik layar" log."""
+    _activity.appendleft({"at": datetime.now(timezone.utc).isoformat(), "text": text})
 
 LABELS = {  # short: they share one line on the phone
     "jarvis-llm-worker": "AI kerja lokal", "jarvis-llm-chat": "AI ngobrol lokal", "jarvis-brain": "Hermes",
@@ -65,8 +83,134 @@ def containers(cores: int) -> list[dict]:
     return parse_stats(raw, cores)
 
 
+async def owner_busy() -> str:
+    """Why the owner's work needs the CPU now ('' = it does not)."""
+    from . import db
+    n = await db.pool().fetchval(
+        "SELECT count(*) FROM tasks WHERE kind IN ('owner', 'meeting') AND status IN ('queued', 'running')")
+    if n:
+        return f"{n} tugasmu berjalan"
+    if any(c.get("caller") in OWNER_CALLERS and c.get("provider") == gateway.LOCAL_WORKER for c in gateway.inflight()):
+        return "kamu sedang dilayani"
+    return ""
+
+
+async def background_ok() -> tuple[bool, str]:
+    """May JARVIS start its own (background) work now? (False, why) while not."""
+    if calm():
+        return False, "istirahat setelah Netralkan"
+    if busy := await owner_busy():
+        return False, f"mendahulukan pekerjaanmu ({busy})"
+    if _state["cpu"] >= BACKGROUND_MAX_CPU:
+        return False, f"CPU {_state['cpu']:.0f}% (kerja latar hanya mulai di bawah {BACKGROUND_MAX_CPU:.0f}%)"
+    return True, ""
+
+
+def worker_policy(owner: str) -> tuple[float, str]:
+    """How many CPU threads the local worker model may use. Pure."""
+    if owner:
+        return WORKER_CPUS_OWNER, f"penuh untuk pekerjaanmu ({owner})"
+    return WORKER_CPUS_BACKGROUND, "dibatasi 50% — hanya kerja latar JARVIS / menganggur"
+
+
+def orphaned(worker_cpu: float, inflight: list[dict]) -> bool:
+    """The worker model computes while no call is waiting for it. Pure."""
+    return worker_cpu >= ORPHAN_CPU and not any(c.get("provider") == gateway.LOCAL_WORKER for c in inflight)
+
+
+async def tick() -> None:
+    """Every ~20 s (main loop): CPU reading, the worker model's CPU limit, the orphan watchdog."""
+    from . import hostinfo
+    snap = await hostinfo.snapshot()
+    _state["cpu"] = snap["cpu_pct"]
+    cpus, why = worker_policy(await owner_busy())
+    if cpus != _state["worker_cpus"]:
+        _state["worker_cpus"] = cpus
+        ROOT.mkdir(parents=True, exist_ok=True)
+        tmp = ROOT / ".policy.tmp"
+        tmp.write_text(json.dumps({"worker_cpus": cpus, "why": why}))
+        tmp.rename(ROOT / "policy.json")  # usage-collector.sh applies it (docker update --cpus)
+        note(f"Model AI kerja lokal: {why}.")
+    worker = next((c for c in containers(snap["cpu_cores"] or 1) if c["name"] == "jarvis-llm-worker"), None)
+    if worker and orphaned(worker["cpu_pct"], gateway.inflight()):
+        _state["orphan_ticks"] += 1
+    else:
+        _state["orphan_ticks"] = 0
+    if _state["orphan_ticks"] >= ORPHAN_TICKS and time.time() - _state["reset_at"] > 600:
+        _state.update(orphan_ticks=0, reset_at=time.time())
+        (ROOT / ".reset.tmp").write_text(json.dumps({"at": time.time()}))
+        (ROOT / ".reset.tmp").rename(ROOT / "worker-reset.request")
+        note(f"Penjaga: model AI kerja lokal memakai {worker['cpu_pct']:.0f}% CPU untuk permintaan yang tidak ditunggu "
+             "siapa pun — kuhentikan dan kumulai ulang (cache-nya kupulihkan).")
+        await audit.record("jarvis-core", "ops.worker_orphan_reset", None, cpu=worker["cpu_pct"])
+        asyncio.create_task(_restore_after_reset())
+
+
+async def _restore_after_reset() -> None:
+    for _ in range(30):
+        await asyncio.sleep(10)
+        if (ROOT / "worker-reset.result").exists():
+            break
+    for _ in range(12):
+        if await gateway.restore_worker_slot():
+            return
+        await asyncio.sleep(10)
+
+
+KIND_TEXT = {"owner": "tugasmu", "meeting": "notulen rapat", "selfimprove": "perbaikan diri", "selfcheck": "cek diri harian",
+             "routine": "belajar kebiasaanmu", "situation": "menyiapkan info situasi", "flowcheck": "pengawas alur"}
+
+
+async def background() -> dict:
+    """Everything JARVIS does behind the scenes: now, scheduled, last 24 hours, and its log."""
+    from . import db, hermes_studio
+    now = time.time()
+    ok, reason = await background_ok()
+    tasks = await db.pool().fetch(
+        """SELECT id, title, kind, status, extract(epoch FROM now() - coalesce(started_at, created_at))::int AS s
+           FROM tasks WHERE status IN ('queued', 'running') ORDER BY id""")
+    calls = [{"what": CALLERS.get(c["caller"], c["caller"]), "category": c.get("category"),
+              "place": "lokal (CPU server)" if str(c.get("provider", "")).startswith("lokal") else (c.get("provider") or "-"),
+              "seconds": int(now - c["since"])} for c in gateway.inflight()]
+    usage = await db.pool().fetch(
+        """SELECT caller, count(*) AS n, round(sum(coalesce(latency_ms, 0)) / 60000.0, 1) AS minutes,
+                  coalesce(sum(cost_usd), 0)::float AS cost, bool_or(provider LIKE 'lokal%') AS local
+           FROM llm_usage WHERE at > now() - interval '24 hours' GROUP BY caller ORDER BY minutes DESC""")
+    done = await db.pool().fetch(
+        """SELECT kind, count(*) AS n, round(sum(extract(epoch FROM finished_at - started_at)) / 60.0, 1) AS minutes
+           FROM tasks WHERE kind <> 'owner' AND finished_at > now() - interval '24 hours' GROUP BY kind""")
+    try:
+        cron = [{"what": f"jadwal Hermes: {j.get('name')}", "when": j.get("schedule")} for j in hermes_studio.cron_jobs()
+                if j.get("enabled")]
+    except Exception:
+        cron = []
+    return {
+        "now": {"cpu_pct": _state["cpu"], "background_allowed": ok, "background_reason": reason,
+                "worker_cpus": _state["worker_cpus"], "worker_cpu_why": worker_policy(await owner_busy())[1],
+                "ai_calls": calls,
+                "tasks": [{"id": t["id"], "title": t["title"], "what": KIND_TEXT.get(t["kind"], t["kind"]),
+                           "mine": t["kind"] in ("owner", "meeting"), "status": "menunggu giliran" if t["id"] in workers.waiting
+                           or t["status"] == "queued" else "berjalan", "seconds": t["s"]} for t in tasks]},
+        "schedule": [
+            {"what": "pengawas alur — memeriksa obrolanmu", "when": "setelah obrolan jeda 2 menit, paling sering tiap 20 menit"},
+            {"what": "cek diri harian", "when": "setiap hari 03.00 WIB"},
+            {"what": "tinjauan efisiensi", "when": "Minggu 02.00 WIB"},
+            {"what": "memahami situasimu", "when": "saat ada kejadian (pindah tempat, agenda, notifikasi penting)"},
+            {"what": "perbaiki error berulang", "when": "bila error yang sama muncul ≥ 3× dalam 1 jam (maks 1×/hari)"},
+            *cron],
+        "rule": f"Kerja latar hanya mulai saat CPU < {BACKGROUND_MAX_CPU:.0f}% dan tidak ada pekerjaanmu; "
+                f"selama itu model AI kerja lokal dibatasi {WORKER_CPUS_BACKGROUND:.0f} dari {WORKER_CPUS_OWNER:.0f} inti.",
+        "last24h": {"ai": [{"what": CALLERS.get(r["caller"], r["caller"]), "calls": r["n"], "minutes": float(r["minutes"] or 0),
+                            "cost_usd": round(r["cost"], 4), "local": r["local"]} for r in usage],
+                    "tasks": [{"what": KIND_TEXT.get(r["kind"], r["kind"]), "count": r["n"], "minutes": float(r["minutes"] or 0)}
+                              for r in done]},
+        "activity": list(_activity)[:40],
+    }
+
+
 CALLERS = {"chat": "ngobrol denganmu", "worker": "tugas", "hermes": "Hermes", "flowwatch": "pengawas alur",
-           "awareness": "memahami situasimu", "meeting": "notulen rapat", "core": "menyusun laporan"}
+           "awareness": "memahami situasimu", "meeting": "notulen rapat", "core": "menyusun laporan",
+           "selfimprove": "perbaikan diri", "test": "uji model"}
 
 
 def ai_calls(calls: list[dict]) -> list[str]:
@@ -98,6 +242,7 @@ async def relieve(actor: str) -> dict:
     tmp.write_text(json.dumps({"at": datetime.now(timezone.utc).isoformat(), "actor": actor}))
     tmp.rename(ROOT / "relieve.request")  # infra/scripts/ops.sh (root) does the host part
     await audit.record(actor, "ops.relieve", None, stopped=[t["id"] for t in stopped])
+    note(f"Netralkan oleh pemilik: {len(stopped)} tugas dihentikan & disimpan; kerja latar istirahat 15 menit.")
     asyncio.create_task(_report(before, stopped))
     return {"stopped": [{"id": t["id"], "title": t["title"]} for t in stopped], "calm_minutes": CALM_S // 60,
             "before": {"cpu_pct": before["cpu_pct"], "memory_gb": before["memory_gb"]}}

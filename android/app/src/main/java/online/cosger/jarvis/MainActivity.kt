@@ -41,6 +41,7 @@ import online.cosger.jarvis.ui.console.CompositionScreen
 import online.cosger.jarvis.ui.console.ConsoleRoute
 import online.cosger.jarvis.ui.console.DashboardScreen
 import online.cosger.jarvis.ui.console.DevicesScreen
+import online.cosger.jarvis.ui.console.BackgroundScreen
 import online.cosger.jarvis.ui.console.DocumentsScreen
 import online.cosger.jarvis.ui.console.FlowScreen
 import online.cosger.jarvis.ui.console.MeetingDetailScreen
@@ -164,7 +165,10 @@ class MainActivity : FragmentActivity() {
                         modifier = Modifier.padding(padding),
                     ) {
                         val back: () -> Unit = { nav.popBackStack() }
-                        composable(Tab.Talk.route) { TalkScreen(vm) { nav.navigate("console/${ConsoleRoute.Dashboard.path}") } }
+                        composable(Tab.Talk.route) {
+                            TalkScreen(vm, onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
+                                onOpenBackground = { nav.navigate("console/${ConsoleRoute.Background.path}") })
+                        }
                         composable(Tab.Chat.route) { ChatScreen(vm) }
                         composable(Tab.Tasks.route) { TasksScreen(vm, null) }
                         composable(Tab.Meetings.route) { MeetingsScreen(vm, null) { id -> nav.navigate("meeting/$id") } }
@@ -179,6 +183,7 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Studio -> StudioScreen(vm, back)
                                     ConsoleRoute.Self -> SelfScreen(vm, back)
                                     ConsoleRoute.Flow -> FlowScreen(vm, back)
+                                    ConsoleRoute.Background -> BackgroundScreen(vm, back)
                                     ConsoleRoute.Documents -> DocumentsScreen(vm, back)
                                     ConsoleRoute.Notifications -> NotificationsScreen(vm, back)
                                     ConsoleRoute.Devices -> DevicesScreen(vm, back)

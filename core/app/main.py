@@ -95,9 +95,10 @@ async def lifespan(app: FastAPI):
         last_review = None
         while True:
             try:
+                await ops.tick()  # CPU reading, worker-model CPU limit, orphan watchdog
                 await dev.poll()
                 await perf.watch_recurring_errors()
-                if not ops.calm() and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
+                if (await ops.background_ok())[0] and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
                     await auditor.run()
                 if perf.weekly_due(last_review):
                     last_review = __import__("datetime").datetime.now(awareness.WIB).date()
@@ -846,6 +847,12 @@ async def admin_server_usage(_: str = admin):
             "tasks": {"owner": sum(t["kind"] == "owner" for t in tasks), "background": sum(t["kind"] != "owner" for t in tasks)},
             "ai": {"spent_usd": round(b["spent_usd"], 4), "budget_usd": b["budget_usd"], "pct": b["pct"]},
             "containers": ops.containers(snap["cpu_cores"] or 1)[:6], "who": await ops.who()}
+
+
+@app.get("/admin/background")
+async def admin_background(_: str = admin):
+    """What JARVIS does behind the scenes: now, scheduled, last 24 hours, its log — and the 50% rule."""
+    return jsonable(await ops.background())
 
 
 @app.post("/admin/relieve")

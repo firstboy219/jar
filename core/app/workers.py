@@ -59,6 +59,9 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
     await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
+    if kind not in ("owner", "meeting"):  # everything JARVIS starts by itself is listed for the owner
+        from . import ops
+        ops.note(f"Mulai {ops.KIND_TEXT.get(kind, kind)} #{task['id']}: {task['title']}.")
     _start(task["id"], context_prefix(location))
     return task
 
@@ -167,17 +170,21 @@ async def _yield_to_owner(task_id: int, kind: str, row) -> None:
     (self-improvement, self-check, habits) waits while the owner has work running or is talking."""
     if kind not in BACKGROUND_KINDS:
         return
+    from . import ops
     while not (await gateway.plan(row["category"], caller="worker", worker=True))[0].cloud:
-        busy = await db.pool().fetchval(
-            """SELECT EXISTS (SELECT 1 FROM tasks WHERE kind = 'owner' AND status IN ('queued', 'running'))
-                   OR EXISTS (SELECT 1 FROM messages WHERE role = 'user' AND created_at > now() - interval '5 minutes')""")
-        from . import ops
-        if not busy and not ops.calm():
+        talking = await db.pool().fetchval(
+            "SELECT EXISTS (SELECT 1 FROM messages WHERE role = 'user' AND created_at > now() - interval '5 minutes')")
+        ok, why = await ops.background_ok()
+        if ok and not talking:
+            if task_id in waiting:
+                ops.note(f"Giliran {ops.KIND_TEXT.get(kind, kind)} #{task_id} dimulai: {row['title']}.")
             waiting.discard(task_id)
             return
+        why = why or "kamu sedang mengobrol denganku"
+        if task_id not in waiting:
+            ops.note(f"{ops.KIND_TEXT.get(kind, kind).capitalize()} #{task_id} menunggu giliran — {why}.")
         waiting.add(task_id)
-        await hub.broadcast({"type": "task_event", "task_id": task_id,
-                             "event": {"type": "thought", "text": "menunggu: mendahulukan pekerjaan pemilik"}})
+        await hub.broadcast({"type": "task_event", "task_id": task_id, "event": {"type": "thought", "text": f"menunggu: {why}"}})
         await asyncio.sleep(60)
 
 

@@ -480,3 +480,13 @@ def test_who_uses_the_server():
 def test_ai_calls_in_words():
     from app import ops
     assert ops.ai_calls([{"caller": "flowwatch"}, {"caller": "chat"}, {"caller": "chat"}]) == ["pengawas alur", "ngobrol denganmu ×2"]
+
+
+def test_background_rules_and_orphan_watchdog():
+    from app import ops
+    assert ops.worker_policy("1 tugasmu berjalan")[0] == 4.0
+    assert ops.worker_policy("") == (2.0, "dibatasi 50% — hanya kerja latar JARVIS / menganggur")
+    assert ops.orphaned(71.0, [])  # computing while nobody waits: the 286% bug
+    assert ops.orphaned(71.0, [{"caller": "flowwatch", "provider": "lokal"}])  # the chat model is another server
+    assert not ops.orphaned(71.0, [{"caller": "hermes", "provider": "lokal-kerja"}])
+    assert not ops.orphaned(10.0, [])

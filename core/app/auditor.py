@@ -214,6 +214,8 @@ async def run(actor: str = "jarvis-core") -> dict:
                     task_id, summary)
     if serious:
         await _tell_owner(serious, fix)
+    from . import ops
+    ops.note(f"Pengawas alur memeriksa {len(new_turns)} pesan: {summary}")
     return {"task_id": task_id, "new": new, "fix_task_id": fix["id"] if fix else None}
 
 
