@@ -74,7 +74,7 @@ def parse_sse(lines: list[str]) -> tuple[str | None, dict | None]:
     return event, json.loads(raw)
 
 
-async def stream(text: str, session_id: str) -> AsyncIterator[dict]:
+async def stream(text: str, session_id: str, image: str | None = None) -> AsyncIterator[dict]:
     """Yields {"type": "thought"|"tool"|"delta"|"done", ...}; raises HermesError on failure."""
     started = time.monotonic()
     answer: list[str] = []
@@ -87,7 +87,9 @@ async def stream(text: str, session_id: str) -> AsyncIterator[dict]:
                 headers={"Authorization": f"Bearer {settings.hermes_api_key}",
                          "X-Hermes-Session-Id": session_header(session_id)},
                 json={"model": "hermes-agent", "stream": True,
-                      "messages": [{"role": "user", "content": text}]},
+                      "messages": [{"role": "user", "content": text if not image else [
+                          {"type": "text", "text": text},
+                          {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]}]},
             ) as r:
                 if r.status_code != 200:
                     body = (await r.aread()).decode(errors="replace")

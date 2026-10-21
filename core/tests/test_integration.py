@@ -155,7 +155,7 @@ async def test_delegation_runs_worker_and_reports_back(pool, monkeypatch):
     hub.register(phone)
     worker_prompts = []
 
-    async def fake_worker(text, session_id):
+    async def fake_worker(text, session_id, image=None):
         worker_prompts.append((text, session_id))
         yield {"type": "thought", "text": "Cari harga emas."}
         yield {"type": "done", "reply": hermes.HermesReply("Antam Rp1.900.000/gram (logammulia.com)", 900, 40, 5)}
@@ -370,3 +370,150 @@ async def test_quiet_hours_suppress_announcements(pool, monkeypatch):
     r = await notifications.triage([{"id": 1, "app": "WA", "title": "Ani", "text": "hai"}])
     assert r["level"] == "skip" and pushed == []
     hub.reset()
+
+
+async def test_main_agent_can_stay_silent(pool, monkeypatch):
+    from app import chat, memory
+    monkeypatch.setattr(memory, "search", _no_memory)
+    _fake_llm(monkeypatch, [("", [("stay_silent", {"reason": "obrolan orang lain"})])])
+    t = await chat.handle("bang sopin nanti bang? Bismillah dulu", "s7", actor="test",
+                          stt={"confidence": 0.71, "speakers": 2})
+    assert (t.route, t.reply) == ("silent", "")
+    row = await pool.fetchrow("SELECT stt_confidence FROM messages WHERE role = 'user' AND session_id = 's7'")
+    assert abs(row["stt_confidence"] - 0.71) < 1e-6
+    from app.assistant import _history
+    assert await _history("s7") == [{"role": "user", "content": "bang sopin nanti bang? Bismillah dulu"}]
+
+
+async def test_self_description_reflects_real_config(pool, monkeypatch):
+    from app import config, self_model, status
+
+    async def no_health():
+        return []
+
+    monkeypatch.setattr(status, "check_all", no_health)
+    monkeypatch.setattr(config.settings, "deepgram_model", "nova-2")
+    text = await self_model.describe(full=True)
+    assert "Deepgram (model nova-2, bahasa id" in text and "BELUM bisa mengenali identitas suara" in text
+
+
+async def test_selfcheck_applies_low_risk_and_queues_settings(pool, monkeypatch):
+    from app import deepgram, selfimprove, self_model
+    result = """Analisis selesai. {"summary_for_owner": "Aku sering salah dengar Deepgram dan tidak tahu kemampuanku sendiri.",
+      "improvements": [
+        {"kind": "stt_keyword", "term": "Deepgram", "reason": "terdengar Deep Drum"},
+        {"kind": "lesson", "text": "Jangan menyangkal punya Deepgram; cek self_info dulu.", "reason": "menyangkal kemampuan"},
+        {"kind": "setting", "key": "endpointing_ms", "value": "1200", "reason": "kalimat terpotong"},
+        {"kind": "setting", "key": "openrouter_api_key", "value": "x", "reason": "tidak boleh"},
+        {"kind": "code", "summary": "Tambah voiceprint untuk mengenali suara pemilik", "reason": "permintaan pemilik"}]}"""
+    said = await selfimprove.on_selfcheck(None, result)
+    assert "2 perbaikan langsung kuterapkan" in said and "1 butuh persetujuanmu" in said and "1 usulan" in said
+    assert "Deepgram" in (await deepgram.stt_config())["keywords"]
+    assert any("self_info" in l for l in await self_model.lessons())
+    pending = await pool.fetchrow("SELECT kind, status FROM approvals WHERE kind = 'setting_change'")
+    assert pending["status"] == "awaiting_approval"
+    # approving applies the override; reverting the lesson removes it from the prompt
+    from app import approvals, config
+    a = await pool.fetchval("SELECT id FROM approvals WHERE kind = 'setting_change'")
+    done = await approvals.decide(a, True, "owner")
+    assert done["status"] == "completed" and config.settings.endpointing_ms == 1200
+    lesson_id = await pool.fetchval("SELECT id FROM improvements WHERE kind = 'lesson'")
+    assert await selfimprove.revert(lesson_id, "owner")
+    assert await self_model.lessons() == []
+    config.settings.endpointing_ms = 1000
+
+
+async def test_situation_result_can_speak_first_but_rate_limited(pool, monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    from app import awareness, hub, notifications
+    hub.reset()
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    hub.register(phone)
+    monkeypatch.setattr(notifications, "quiet_now", lambda now=None: False)
+    awareness._state["last_proactive"] = None
+    now = datetime(2026, 10, 17, 0, 30, tzinfo=timezone.utc)
+    res = """{"where": "rumah, Pondok Aren", "doing": "bersiap berangkat kerja", "likely_need": "info macet",
+              "prepared": "Tol JORR padat, 40 menit", "confidence": 0.8, "speak": true,
+              "line": "Pagi! Kalau mau berangkat, tol JORR lagi padat, sekitar 40 menit ke kantor."}"""
+    r = await awareness.on_situation(1, res, now)
+    assert r["spoke"] and pushed[-1]["type"] == "proactive" and "JORR" in pushed[-1]["text"]
+    r = await awareness.on_situation(2, res, now + timedelta(minutes=10))
+    assert not r["spoke"]  # max one proactive line per 45 minutes
+    assert "bersiap berangkat kerja" in awareness.situation_block()
+    hub.reset()
+
+
+async def test_camera_image_reaches_the_worker(pool, monkeypatch):
+    import asyncio
+    from app import chat, hermes, hub, memory
+    hub.reset()
+    monkeypatch.setattr(memory, "search", _no_memory)
+    seen = {}
+
+    async def fake_worker(text, session_id, image=None):
+        seen["image"], seen["text"] = image, text
+        yield {"type": "done", "reply": hermes.HermesReply("Kampas rem Honda Beat ±Rp45.000", 1, 1, 1)}
+
+    monkeypatch.setattr(hermes, "stream", fake_worker)
+    _fake_llm(monkeypatch, [("", [("spawn_task", {"title": "Cek harga barang", "instruction": "Cari harga barang di gambar",
+                                                  "attach_image": True})]),
+                            ("Oke, aku cek harganya ya.", [])])
+    t = await chat.handle("berapa harga barang ini?", "s8", actor="test", screen="QUJD", image_source="camera")
+    assert t.reply == "Oke, aku cek harganya ya."
+    for _ in range(50):
+        if "image" in seen:
+            break
+        await asyncio.sleep(0.05)
+    assert seen["image"] == "QUJD" and "Gambar terlampir" in seen["text"]
+    hub.reset()
+
+
+async def test_empty_balance_is_told_plainly_once(pool, monkeypatch):
+    import asyncio
+    from app import billing, chat, hermes, hub, llm, memory, workers
+    hub.reset()
+    monkeypatch.setattr(memory, "search", _no_memory)
+    monkeypatch.setattr(billing, "_last_notified", 0.0)
+
+    async def broke(*a, **k):
+        raise llm.LLMError("OpenRouter HTTP 402: requires more credits")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(llm, "stream_chat", broke)
+    t = await chat.handle("hi", "s10", actor="test")
+    assert t.route == "error" and t.reply == billing.MESSAGE  # no raw "HTTP 402" text for the owner
+    t = await chat.handle("halo?", "s10", actor="test")
+    assert await pool.fetchval("SELECT count(*) FROM reports WHERE text = $1", billing.MESSAGE) == 1  # once per 12 h
+
+    async def worker_402(text, session_id, image=None):
+        yield {"type": "done", "reply": hermes.HermesReply("Billing or credits exhausted: HTTP 402: can only afford 81", 1, 1, 1)}
+
+    monkeypatch.setattr(hermes, "stream", worker_402)
+    task = await workers.spawn("Cek diri", "instruksi uji coba", "s10", "test", kind="selfcheck")
+    for _ in range(50):
+        if await pool.fetchval("SELECT status FROM tasks WHERE id = $1", task["id"]) == "failed":
+            break
+        await asyncio.sleep(0.05)
+    assert await pool.fetchval("SELECT status FROM tasks WHERE id = $1", task["id"]) == "failed"
+    # no misleading "Aku sudah mengecek diriku." and no second balance report
+    assert await pool.fetchval("SELECT count(*) FROM reports") == 1
+    hub.reset()
+
+
+async def test_spawn_without_instruction_is_refused(pool, monkeypatch):
+    from app import chat, memory
+    monkeypatch.setattr(memory, "search", _no_memory)
+    _fake_llm(monkeypatch, [("", [("spawn_task", {"title": "Tugas"})]), ("Mau aku kerjakan apa persisnya?", [])])
+    t = await chat.handle("kerjain itu dong", "s11", actor="test")
+    assert t.reply == "Mau aku kerjakan apa persisnya?"
+    assert await pool.fetchval("SELECT count(*) FROM tasks") == 0
+
+
+async def test_unreadable_selfcheck_is_not_reported_as_success(pool):
+    from app import selfimprove
+    said = await selfimprove.on_selfcheck(None, "Billing or credits exhausted")
+    assert "tidak menghasilkan temuan" in said and "Aku sudah mengecek diriku." != said

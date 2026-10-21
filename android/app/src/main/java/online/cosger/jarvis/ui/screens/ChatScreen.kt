@@ -106,6 +106,7 @@ private fun routeLabel(route: String?): String? = when (route) {
     "core" -> "perintah cepat · tanpa AI"
     "report" -> "laporan hasil kerja"
     "announce" -> "dari notifikasi"
+    "proactive" -> "JARVIS menyapa duluan"
     "blocked" -> "ditahan · tidak dikirim ke cloud"
     "error" -> "gagal"
     else -> null

@@ -155,6 +155,36 @@
   {% else %}<p class="hint">Belum ada perangkat.</p>{% endfor %}
 </section>
 
+{% elif tab == 'self' %}
+<section class="card">
+  <div class="row"><h2>Apa yang JARVIS tahu tentang dirinya</h2>
+    <form method="post" action="/selfcheck"><button type="submit">Cek &amp; perbaiki diri sekarang</button></form></div>
+  <p class="hint">Disusun otomatis dari konfigurasi yang sedang berjalan.</p>
+  <pre>{{ self }}</pre>
+</section>
+<section class="card">
+  <h2>Situasi yang dipahami</h2>
+  {% if situation %}
+  <p>Di <b>{{ situation.where }}</b>, kemungkinan sedang <b>{{ situation.doing }}</b>; kemungkinan butuh <b>{{ situation.likely_need }}</b>
+    <small>(keyakinan {{ situation.confidence }}, {{ (situation.at or '')[:16]|replace('T',' ') }} UTC)</small></p>
+  {% if situation.prepared %}<p class="hint">Disiapkan: {{ situation.prepared }}</p>{% endif %}
+  {% else %}<p class="hint">Belum ada — HP belum mengirim konteks atau pemeriksaan pertama belum selesai.</p>{% endif %}
+  {% if context %}<details><summary>Sinyal HP terakhir</summary><pre>{{ context | tojson(indent=2) }}</pre></details>{% endif %}
+</section>
+<section class="card">
+  <h2>Perbaikan diri</h2>
+  <p class="hint">Kosakata suara &amp; pelajaran diterapkan sendiri; setelan lewat Persetujuan; perubahan program = usulan untuk developer.</p>
+  {% for i in improvements or [] %}
+  <div class="item row">
+    <div><span class="pill {{ 'completed' if i.status == 'applied' else ('awaiting_approval' if i.status in ('awaiting_approval','proposed') else 'rejected') }}">{{ i.kind }} · {{ i.status }}</span>
+      <br>{{ i.summary }}<br><small>{{ i.created_at[:16]|replace('T',' ') }}</small></div>
+    {% if i.status in ('applied','proposed','awaiting_approval') %}
+    <form method="post" action="/improvements/{{ i.id }}/revert"><button class="ghost" type="submit">Batalkan</button></form>
+    {% endif %}
+  </div>
+  {% else %}<p class="hint">Belum ada.</p>{% endfor %}
+</section>
+
 {% elif tab == 'app' %}
 <section class="card">
   <h2>Aplikasi Android</h2>

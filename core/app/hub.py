@@ -9,22 +9,29 @@ log = logging.getLogger("jarvis-core.hub")
 Sender = Callable[[dict], Awaitable[None]]
 
 _clients: dict[int, Sender] = {}
+_meta: dict[int, dict] = {}
 _next_id = 0
 _connected = asyncio.Event()
 
 
-def register(send: Sender) -> int:
+def register(send: Sender, **meta) -> int:
     global _next_id
     _next_id += 1
     _clients[_next_id] = send
+    _meta[_next_id] = meta
     _connected.set()
     return _next_id
 
 
 def unregister(client_id: int) -> None:
     _clients.pop(client_id, None)
+    _meta.pop(client_id, None)
     if not _clients:
         _connected.clear()
+
+
+def clients() -> list[dict]:
+    return list(_meta.values())
 
 
 def online() -> bool:
@@ -50,4 +57,5 @@ async def wait_online() -> None:
 
 def reset() -> None:  # tests
     _clients.clear()
+    _meta.clear()
     _connected.clear()

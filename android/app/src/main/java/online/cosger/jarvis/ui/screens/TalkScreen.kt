@@ -41,7 +41,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.NoPhotography
 import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.StopScreenShare
 import androidx.compose.material3.CircularProgressIndicator
@@ -67,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import online.cosger.jarvis.camera.CameraPreview
 import online.cosger.jarvis.net.Connection
 import online.cosger.jarvis.screen.ScreenShareService
 import online.cosger.jarvis.ui.Board
@@ -91,6 +95,11 @@ fun TalkScreen(vm: JarvisViewModel) {
     val board by vm.board.collectAsStateWithLifecycle()
     val connection by vm.connection.collectAsStateWithLifecycle()
     val sharing by vm.screenSharing.collectAsStateWithLifecycle()
+    val cameraOn by vm.cameraOn.collectAsStateWithLifecycle()
+    var frontCamera by remember { mutableStateOf(false) }
+    val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) vm.setCamera(true)
+    }
     val context = LocalContext.current
     val askScreen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
@@ -124,6 +133,16 @@ fun TalkScreen(vm: JarvisViewModel) {
             else askScreen.launch(context.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
         },
         onDismissMedia = vm::dismissMedia,
+        cameraOn = cameraOn,
+        onToggleCamera = {
+            when {
+                cameraOn -> vm.setCamera(false)
+                context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED -> vm.setCamera(true)
+                else -> askCamera.launch(Manifest.permission.CAMERA)
+            }
+        },
+        camera = { CameraPreview(frontCamera, vm::setCameraFrameSource, Modifier.fillMaxSize()) },
+        onFlipCamera = { frontCamera = !frontCamera },
     )
 }
 
@@ -154,6 +173,10 @@ fun TalkContent(
     sharing: Boolean = false,
     onToggleShare: () -> Unit = {},
     onDismissMedia: (Long) -> Unit = {},
+    cameraOn: Boolean = false,
+    onToggleCamera: () -> Unit = {},
+    camera: @Composable () -> Unit = {},
+    onFlipCamera: () -> Unit = {},
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
@@ -161,12 +184,30 @@ fun TalkContent(
         Modifier.fillMaxSize().background(JarvisColors.Background).padding(horizontal = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Header(connected, workers.size, sharing, onToggleShare)
+        Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
         if (sharing) ShareBanner(onToggleShare)
 
-        Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
-            ReadinessRing(mic, Modifier.size(206.dp))
-            ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f, Modifier.size(180.dp))
+        if (cameraOn) {
+            // Point the camera at something and talk: JARVIS sees the frame with each utterance.
+            Box(
+                Modifier.fillMaxWidth().height(260.dp).padding(top = 8.dp).clip(RoundedCornerShape(18.dp))
+                    .border(3.dp, micColor(mic), RoundedCornerShape(18.dp)),
+            ) {
+                camera()
+                Row(Modifier.align(Alignment.BottomEnd).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.5f)).clickable(onClick = onFlipCamera),
+                        contentAlignment = Alignment.Center) { Icon(Icons.Filled.Cameraswitch, "Ganti kamera", tint = Color.White) }
+                }
+                Text("JARVIS melihat ini saat kamu bicara", color = Color.White, fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(8.dp))
+                        .background(Color.Black.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 4.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+        } else {
+            Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
+                ReadinessRing(mic, Modifier.size(206.dp))
+                ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f, Modifier.size(180.dp))
+            }
         }
         ReadinessLabel(mic, connected)
 
@@ -199,7 +240,8 @@ fun TalkContent(
 }
 
 @Composable
-private fun Header(connected: Boolean, workers: Int, sharing: Boolean, onToggleShare: () -> Unit) {
+private fun Header(connected: Boolean, workers: Int, sharing: Boolean, onToggleShare: () -> Unit,
+                   cameraOn: Boolean, onToggleCamera: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) JarvisColors.Green else JarvisColors.Amber))
         Spacer(Modifier.width(8.dp))
@@ -208,6 +250,13 @@ private fun Header(connected: Boolean, workers: Int, sharing: Boolean, onToggleS
         Text(
             if (!connected) "Menghubungkan…" else if (workers > 0) "$workers tugas berjalan" else "Terhubung",
             color = JarvisColors.Muted, fontSize = 12.sp,
+        )
+        Spacer(Modifier.width(10.dp))
+        Icon(
+            if (cameraOn) Icons.Filled.NoPhotography else Icons.Filled.PhotoCamera,
+            if (cameraOn) "Matikan kamera" else "Tunjukkan sesuatu lewat kamera",
+            Modifier.size(22.dp).clickable(onClick = onToggleCamera),
+            tint = if (cameraOn) JarvisColors.Red else JarvisColors.Muted,
         )
         Spacer(Modifier.width(10.dp))
         Icon(

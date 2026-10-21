@@ -16,7 +16,7 @@ Emit = Callable[[dict], Awaitable[None]]
 @dataclass
 class Turn:
     reply: str
-    route: str  # core | assistant | blocked | error
+    route: str  # core | assistant | silent | blocked | error
 
 
 def _fmt_approval(a: dict) -> str:
@@ -71,14 +71,16 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
 async def _log(session_id: str, device_id, role: str, content: str, route: str, **kw) -> None:
     await db.pool().execute(
         """INSERT INTO messages (session_id, device_id, role, content, route, model,
-                                 prompt_tokens, completion_tokens, latency_ms)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                                 prompt_tokens, completion_tokens, latency_ms, stt_confidence)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
         session_id, device_id, role, content, route,
-        kw.get("model"), kw.get("prompt_tokens"), kw.get("completion_tokens"), kw.get("latency_ms"))
+        kw.get("model"), kw.get("prompt_tokens"), kw.get("completion_tokens"), kw.get("latency_ms"),
+        kw.get("stt_confidence"))
 
 
 async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
-                 location: Location | None = None, screen: str | None = None) -> Turn:
+                 location: Location | None = None, screen: str | None = None, image_source: str | None = None,
+                 stt: dict | None = None) -> Turn:
     async def send(event: dict) -> None:
         if emit:
             await emit(event)
@@ -95,7 +97,8 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
 
     # Never persist secrets verbatim, even in our own message log.
     logged = text if not found else f"[disensor: {', '.join(found)}]"
-    await _log(session_id, device_id, "user", logged, "core" if intent else ("blocked" if private or found else "assistant"))
+    await _log(session_id, device_id, "user", logged, "core" if intent else ("blocked" if private or found else "assistant"),
+               stt_confidence=(stt or {}).get("confidence"))
 
     if intent:
         await say("executing")
@@ -114,14 +117,23 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
         await say("thinking")
         started = time.monotonic()
         try:
-            a = await assistant.respond(text, session_id, actor, device_id, send, location, screen)
+            a = await assistant.respond(text, session_id, actor, device_id, send, location, screen, image_source, stt)
+            if a.silent:  # not for JARVIS, or the owner is still mid-sentence: no reply at all
+                await _log(session_id, device_id, "assistant", "(diam)", "silent", model="main-agent")
+                await say("completed")
+                return Turn("", "silent")
             await _log(session_id, device_id, "assistant", a.text, "assistant", model="main-agent",
                        prompt_tokens=a.prompt_tokens, completion_tokens=a.completion_tokens,
                        latency_ms=int((time.monotonic() - started) * 1000))
             await say("completed")
             return Turn(a.text, "assistant")
         except llm.LLMError as e:
-            reply, route = f"Maaf, aku sedang tidak bisa berpikir: {e}", "error"
+            from . import billing
+            if billing.is_exhausted(str(e)):
+                await billing.notify_exhausted()
+                reply, route = billing.MESSAGE, "error"
+            else:
+                reply, route = "Maaf, aku sedang tidak bisa berpikir — layanan model AI tidak menjawab. Coba lagi sebentar ya.", "error"
 
     await _log(session_id, device_id, "assistant", reply, route)
     await say("completed" if route != "error" else "failed")

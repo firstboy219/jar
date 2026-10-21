@@ -60,15 +60,18 @@ class JarvisSocket(
     /** Report heard/spoken, task cancel — fire and forget. */
     fun sendControl(json: String): Boolean = _connection.value == Connection.Connected && ws?.send(json) == true
 
-    fun send(text: String, sessionId: String, location: DeviceLocation? = null, screen: String? = null): Boolean =
-        _connection.value == Connection.Connected && ws?.send(Protocol.command(text, sessionId, location, screen)) == true
+    fun send(text: String, sessionId: String, location: DeviceLocation? = null, screen: String? = null,
+             imageSource: String? = null, confidence: Double? = null, speakers: Int? = null): Boolean =
+        _connection.value == Connection.Connected &&
+            ws?.send(Protocol.command(text, sessionId, location, screen, imageSource, confidence, speakers)) == true
 
     private suspend fun runLoop() {
         var attempt = 0
         while (scope.isActive) {
             _connection.value = Connection.Connecting
             val closed = kotlinx.coroutines.CompletableDeferred<Int>()
-            val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
+            val request = Request.Builder().url(url).header("Authorization", "Bearer $token")
+                .header("X-App-Version", online.cosger.jarvis.BuildConfig.VERSION_NAME).build()
             missedPongs = 0
             ws = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {

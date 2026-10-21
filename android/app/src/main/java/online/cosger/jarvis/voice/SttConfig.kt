@@ -10,6 +10,9 @@ data class SttConfig(
     val language: String = "id",
     val keywords: List<String> = emptyList(),
     val expiresAtMs: Long = Long.MAX_VALUE,
+    val diarize: Boolean = true,
+    val endpointingMs: Int = 1000,
+    val utteranceEndMs: Int = 1800,
 ) {
     fun isFresh(nowMs: Long = System.currentTimeMillis()) = nowMs < expiresAtMs - 15_000
 
@@ -21,10 +24,12 @@ data class SttConfig(
         addQueryParameter("channels", "1")
         addQueryParameter("interim_results", "true")
         addQueryParameter("smart_format", "true")
-        // Continuous listening: end of speech after ~0.7 s of silence, UtteranceEnd as a backup in noise.
-        addQueryParameter("endpointing", "700")
-        addQueryParameter("utterance_end_ms", "1500")
+        // End of speech after a pause (tuned on the server; 0.7 s cut sentences mid-thought), UtteranceEnd as backup.
+        addQueryParameter("endpointing", endpointingMs.toString())
+        addQueryParameter("utterance_end_ms", utteranceEndMs.toString())
         addQueryParameter("vad_events", "true")
+        // How many different voices were heard — helps JARVIS ignore people who are not talking to it.
+        if (diarize) addQueryParameter("diarize", "true")
         keywords.forEach {
             // nova-3 uses keyterm prompting; older models use keyword boosting.
             if (model.startsWith("nova-3")) addQueryParameter("keyterm", it)

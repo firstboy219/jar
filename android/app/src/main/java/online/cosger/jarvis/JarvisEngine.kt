@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import online.cosger.jarvis.data.AppSettings
 import online.cosger.jarvis.data.LocationProvider
+import online.cosger.jarvis.data.PhoneSensors
 import online.cosger.jarvis.data.SecureSettings
 import online.cosger.jarvis.net.Connection
 import online.cosger.jarvis.net.CoreApi
@@ -57,6 +58,14 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     private val speaker = Speaker(context)
     val speaking: StateFlow<Boolean> = speaker.speaking
 
+    /** Camera: while the preview is open, its current frame goes along with each thing the owner says. */
+    private val _cameraOn = MutableStateFlow(false)
+    val cameraOn: StateFlow<Boolean> = _cameraOn.asStateFlow()
+    @Volatile var cameraFrame: (() -> String?)? = null
+    fun setCamera(on: Boolean) { _cameraOn.value = on }
+
+    private val sensors = PhoneSensors(context)
+
     /** Screen sharing: the latest frame goes along with each thing the owner says. */
     val screen = ScreenCapture(context)
     val screenSharing: StateFlow<Boolean> = screen.active
@@ -77,7 +86,8 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     init {
         scope.launch { socket.events.collect(::onEvent) }
-        scope.launch { listener.utterances.collect { sendText(it) } }
+        scope.launch { listener.utterances.collect { sendText(it.text, it.confidence, it.speakers) } }
+        scope.launch { reportContextForever() }
         scope.launch { listener.errors.collect { _notice.value = it } }
         // JARVIS must not transcribe its own voice: mute input while speaking, resume a moment after.
         scope.launch {
@@ -113,6 +123,22 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     fun setShareLocation(enabled: Boolean) = settingsStore.update { it.copy(shareLocation = enabled) }
     fun setReadNotifications(enabled: Boolean) = settingsStore.update { it.copy(readNotifications = enabled) }
+    fun setUseCalendar(enabled: Boolean) = settingsStore.update { it.copy(useCalendar = enabled) }
+
+    /** Situational awareness heartbeat: more often while JARVIS is listening, rarer while muted. */
+    private suspend fun reportContextForever() {
+        while (true) {
+            if (connection.value == Connection.Connected) runCatching { sendContext() }
+            delay(if (listener.unmuted) 3 * 60_000L else 10 * 60_000L)
+        }
+    }
+
+    suspend fun sendContext() {
+        val s = settings.value
+        val loc = if (s.shareLocation) runCatching { withTimeoutOrNull(5_000) { locations.current() } }.getOrNull() else null
+        val ctx = sensors.collect(loc, listener.unmuted, s.useCalendar)
+        socket.sendControl(Protocol.context(ctx))
+    }
 
     /** From the notification listener: send now, or keep (bounded) until the link is back. */
     fun forwardNotification(app: String, pkg: String, title: String, text: String, postedAtMs: Long) {
@@ -154,6 +180,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         if (listener.unmuted) return
         ListeningService.start(context)
         listener.unmute(::voiceConfig)
+        scope.launch { delay(1_000); runCatching { sendContext() } } // "I'm here now" — fresh context
     }
 
     fun mute() {
@@ -179,7 +206,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     private fun locationAsync(): Deferred<DeviceLocation?>? =
         if (settings.value.shareLocation) scope.async { locations.current() } else null
 
-    fun sendText(text: String) {
+    fun sendText(text: String, confidence: Double? = null, speakers: Int? = null) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         speaker.stop()
@@ -187,8 +214,11 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         _turn.value = TurnState(phase = Phase.Thinking, userText = clean)
         scope.launch {
             val loc = runCatching { location?.let { withTimeoutOrNull(2_000) { it.await() } } }.getOrNull()
-            val frame = if (screen.active.value) runCatching { screen.latestJpegBase64() }.getOrNull() else null
-            if (!socket.send(clean, settings.value.sessionId, loc, frame)) {
+            // What the owner is showing: the camera if it is open, otherwise the shared screen.
+            val camFrame = if (_cameraOn.value) runCatching { cameraFrame?.invoke() }.getOrNull() else null
+            val frame = camFrame ?: if (screen.active.value) runCatching { screen.latestJpegBase64() }.getOrNull() else null
+            val source = if (camFrame != null) "camera" else "screen"
+            if (!socket.send(clean, settings.value.sessionId, loc, frame, source, confidence, speakers)) {
                 _turn.value = TurnState()
                 _notice.value = "Belum terhubung ke JARVIS — pesan tidak terkirim."
                 return@launch
@@ -224,6 +254,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 _board.update { it.reduce(event) }
                 reportQueue.trySend(event)
             }
+            is ServerEvent.Proactive -> {
+                _history.update { it + ChatMessage(fromUser = false, text = event.text, route = "proactive") }
+                reportQueue.trySend(ServerEvent.Announce(event.text))
+            }
             is ServerEvent.Announce -> {
                 _history.update { it + ChatMessage(fromUser = false, text = event.text, route = "announce") }
                 reportQueue.trySend(event)
@@ -236,7 +270,10 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
                 _turn.update { it.reduce(event) }
                 when (event) {
-                    is ServerEvent.Reply -> {
+                    is ServerEvent.Reply -> if (event.route == "silent") {
+                        // JARVIS judged the speech was not for it (or unfinished): no answer, no voice.
+                        _turn.value = TurnState()
+                    } else {
                         _history.update { it + ChatMessage(fromUser = false, text = event.text, route = event.route) }
                         if (settings.value.speakReplies) speaker.say(event.text)
                     }

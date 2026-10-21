@@ -32,6 +32,9 @@ class Settings:
     # Benchmarked 2026-10-17 on Indonesian commands: nova-2 WER 12-15% vs nova-3 19-22% (docs/decisions.md).
     deepgram_model: str = field(default_factory=lambda: _env("DEEPGRAM_MODEL", "nova-2"))
     deepgram_language: str = field(default_factory=lambda: _env("DEEPGRAM_LANGUAGE", "id"))
+    # End-of-speech tuning sent to the app (v0.5 used 700/1500 and cut sentences mid-thought).
+    endpointing_ms: int = field(default_factory=lambda: int(_env("DEEPGRAM_ENDPOINTING_MS", "1000") or 1000))
+    utterance_end_ms: int = field(default_factory=lambda: int(_env("DEEPGRAM_UTTERANCE_END_MS", "1800") or 1800))
     deepgram_keywords: str = field(default_factory=lambda: _env(
         "DEEPGRAM_KEYWORDS", "JARVIS,Autotoko,n8n,UAT,BRD,FSD,workflow,Shopee,Tokopedia"))
     # web admin -> core (internal network only)

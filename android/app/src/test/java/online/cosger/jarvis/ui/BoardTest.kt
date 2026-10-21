@@ -66,4 +66,25 @@ class BoardTest {
         assertTrue(Protocol.command("ini kenapa?", "s", null, "QUJD").contains("\"screen\":\"QUJD\""))
         assertTrue(!Protocol.command("halo", "s").contains("screen"))
     }
+
+    @Test fun commandCarriesHowItWasHeardAndWhatWasShown() {
+        val c = Protocol.command("ini apa?", "s", null, "QUJD", "camera", 0.62, 2)
+        assertTrue(c.contains("\"image_source\":\"camera\"") && c.contains("\"stt\":{\"confidence\":0.62,\"speakers\":2}"))
+        assertEquals(ServerEvent.Proactive("Pagi! Tol JORR padat."), Protocol.parse("""{"type":"proactive","text":"Pagi! Tol JORR padat.","situation":{}}"""))
+    }
+
+    @Test fun contextHeartbeat() {
+        val ctx = online.cosger.jarvis.data.PhoneContext(
+            location = online.cosger.jarvis.net.DeviceLocation(-6.27, 106.7, 10.0, 3, "Pondok Aren", 12.0),
+            activity = online.cosger.jarvis.data.PhoneContext.activityFromSpeed(43.2), speedKmh = 43.2, battery = 54,
+            charging = false, headset = true, screenOn = true, network = "cellular", unmuted = true,
+            calendar = listOf(online.cosger.jarvis.data.CalendarItem("UAT Autotoko", 1000, 2000, "Ruang 2")), appVersion = "0.6.0",
+        )
+        val json = Protocol.context(ctx)
+        assertTrue(json.startsWith("{\"type\":\"context\""))
+        assertTrue(json.contains("\"activity\":\"driving\"") && json.contains("\"title\":\"UAT Autotoko\"") && json.contains("\"headset\":true"))
+        assertEquals("still", online.cosger.jarvis.data.PhoneContext.activityFromSpeed(0.5))
+        assertEquals("walking", online.cosger.jarvis.data.PhoneContext.activityFromSpeed(5.0))
+        assertEquals("unknown", online.cosger.jarvis.data.PhoneContext.activityFromSpeed(null))
+    }
 }

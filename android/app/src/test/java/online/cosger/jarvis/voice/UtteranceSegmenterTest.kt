@@ -33,4 +33,16 @@ class UtteranceSegmenterTest {
         assertTrue(s.feed(result("", final = true, speechFinal = true)).isEmpty())
         assertTrue(s.feed("garbage").isEmpty())
     }
+
+    @Test fun reportsConfidenceAndNumberOfVoices() {
+        val s = UtteranceSegmenter()
+        s.feed("""{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"bang sopin","confidence":0.6,
+            "words":[{"word":"bang","speaker":0},{"word":"sopin","speaker":1}]}]}}""")
+        val out = s.feed("""{"type":"Results","is_final":true,"speech_final":true,"channel":{"alternatives":[{"transcript":"nanti","confidence":0.8,
+            "words":[{"word":"nanti","speaker":1}]}]}}""")
+        val u = out.filterIsInstance<Output.Utterance>().single()
+        assertEquals("bang sopin nanti", u.text)
+        assertEquals(0.7, u.confidence!!, 1e-9)
+        assertEquals(2, u.speakers)
+    }
 }

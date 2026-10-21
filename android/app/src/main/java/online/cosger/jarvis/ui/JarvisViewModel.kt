@@ -21,6 +21,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val board = engine.board
     val notice = engine.notice
     val screenSharing = engine.screenSharing
+    val cameraOn = engine.cameraOn
 
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) = engine.saveSettings(serverUrl, token, speak)
     fun setShareLocation(enabled: Boolean) = engine.setShareLocation(enabled)
@@ -36,4 +37,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelTask(taskId: Long) = engine.cancelTask(taskId)
     fun stopScreenShare() = engine.stopScreenShare()
     fun dismissMedia(seq: Long) = engine.dismissMedia(seq)
+    fun setCamera(on: Boolean) = engine.setCamera(on)
+    fun setCameraFrameSource(source: (() -> String?)?) { engine.cameraFrame = source }
+    fun setUseCalendar(enabled: Boolean) = engine.setUseCalendar(enabled)
 }

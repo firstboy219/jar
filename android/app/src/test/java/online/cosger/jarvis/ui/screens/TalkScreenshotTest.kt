@@ -12,6 +12,8 @@ import online.cosger.jarvis.ui.TurnState
 import online.cosger.jarvis.ui.Worker
 import online.cosger.jarvis.ui.theme.JarvisTheme
 import online.cosger.jarvis.voice.MicState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
 import org.junit.Rule
 import org.junit.Test
 
@@ -56,4 +58,17 @@ class TalkScreenshotTest {
         ))),
         sharing = true,
     )
+
+    @Test fun cameraMode() = paparazzi.snapshot {
+        JarvisTheme {
+            TalkContent(
+                TurnState(phase = online.cosger.jarvis.ui.Phase.Done, userText = "Ini sparepart apa ya, berapa harganya?",
+                    answer = "Itu kampas rem cakram depan motor matic. Aku cek harganya ya, nanti aku kabari."),
+                MicState.Ready, 0f, "", false, Board(), true, {}, {}, {}, {},
+                cameraOn = true,
+                camera = { androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()
+                    .background(androidx.compose.ui.graphics.Color(0xFF3A4250))) },
+            )
+        }
+    }
 }

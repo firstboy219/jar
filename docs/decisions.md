@@ -135,6 +135,46 @@ default 22:00–06:00 WIB) let only urgent ones through. Stored 7 days (`notific
 agent can answer "tadi notif apa aja?"; purged every 6 h. Note: notification content (minus codes) is
 sent to the cloud model for triage.
 
+## ADR-015 — A "living" main agent: self-knowledge, situational awareness, clarifying, silence (2026-10-17)
+Owner: JARVIS should know where they are, what they are doing and what they usually want, delegate that
+understanding to workers, ask back when unclear, and know itself (it had denied using Deepgram while the
+owner was talking to it through Deepgram; a worker "confirmed" by inspecting the wrong container).
+- `self_model.py` generates the self-description from the running config (STT model/keywords,
+  models, features, limits incl. "cannot identify the owner's voice yet", health, balance) — in every
+  main-agent prompt and via the MCP tool `self_info` for workers.
+- `awareness.py`: the app sends a context heartbeat (place, movement from GPS speed, battery/charging,
+  headset, screen, network, optional calendar). Triggers (moved > 400 m, started walking/driving,
+  agenda within 30 min, 90 min periodic) spawn a *situation worker* (Hermes) that returns
+  where/doing/likely_need/prepared + whether to speak. At most one proactive line per 45 min, not in
+  quiet hours, not within 60 s of the owner talking. A daily *routine worker* turns 14 days of coarse
+  context (`context_log`, ~100 m, 30-day retention) into habit memories.
+- Speech: STT confidence and Deepgram diarization speaker count travel with each utterance; endpointing
+  raised to 1000 ms / UtteranceEnd 1800 ms (700 ms cut sentences mid-thought in real use). The main agent
+  may `stay_silent` (speech not for it — real logs had bystander talk — or unfinished) and must ask back
+  when unsure. The server enforces silence when the model merely *announces* it.
+- Camera: CameraX preview; a frame goes with each utterance (`image_source: camera`). Delegated tasks can
+  carry the image; because the worker model is text-only, the main (vision) model writes a description
+  into the worker's instructions, and Hermes' own vision tool uses `google/gemma-4-26b-a4b-it`.
+
+## ADR-016 — Self-improvement policy (2026-10-17)
+Daily (03:00 WIB) or on request, a self-check worker gets diagnostics (errors, failed tasks, unheard
+reports, low-confidence speech, "didn't understand" replies, owner corrections, applied improvements)
+and proposes: `stt_keyword` and `lesson` → applied automatically (≤5/run, versioned, revertible in the
+admin "Diri JARVIS" tab); `setting` (whitelist: deepgram_model, endpointing_ms, utterance_end_ms,
+quiet_hours) → owner approval, then a runtime override; `code` → recorded proposal for the developer.
+First real run learned: Deepgram/"Deep Drum", UAT, capability questions, and the names Ashar/Opik/Aby
+(misheard as "UAT"/"Shopee" — the configured boost words were pulling them).
+
+## Incident 2026-10-17 → 10-21 — OpenRouter balance at $0
+The account is free tier with $0 credits; after $0.20 of use every call returned HTTP 402 from
+10-17 20:23. The main agent replied with raw error text ("hi" → "OpenRouter HTTP 402: …"), workers'
+402 text was treated as a successful result, and three self-check reports said only "Aku sudah mengecek
+diriku." Fixes (`billing.py`): balance is a health check and part of the self-description; 402s are
+recognised in the main agent and workers; the owner gets one plain report per 12 h; worker 402s count as
+failures; unreadable self-checks say so. A self-check also misread planned restarts (logged as
+`exit_nonzero`) as a "crash loop" — that proposal was rejected and the fact added to the self-description.
+**Action for the owner: add credits (≈$5 lasts months at the observed ~$0.05/day).**
+
 ## Ops note — never run two `docker compose up` at once
 Editing `.env` triggers the watcher, which runs `docker compose up -d`. A concurrent manual `up` once
 left a container renamed `<id>_jarvis-core`. Both now take `data/admin/compose.lock`; deploy with

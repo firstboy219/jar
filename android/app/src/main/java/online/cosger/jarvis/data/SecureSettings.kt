@@ -15,6 +15,7 @@ data class AppSettings(
     val speakReplies: Boolean = true,
     val shareLocation: Boolean = true,
     val readNotifications: Boolean = false,
+    val useCalendar: Boolean = false,
     val sessionId: String = UUID.randomUUID().toString(),
 ) {
     val isConfigured: Boolean get() = deviceToken.startsWith("jdv_")
@@ -44,6 +45,7 @@ class SecureSettings(context: Context) {
             speakReplies = prefs.getBoolean("speak_replies", true),
             shareLocation = prefs.getBoolean("share_location", true),
             readNotifications = prefs.getBoolean("read_notifications", false),
+            useCalendar = prefs.getBoolean("use_calendar", false),
             sessionId = session,
         )
     }
@@ -56,6 +58,7 @@ class SecureSettings(context: Context) {
             .putBoolean("speak_replies", next.speakReplies)
             .putBoolean("share_location", next.shareLocation)
             .putBoolean("read_notifications", next.readNotifications)
+            .putBoolean("use_calendar", next.useCalendar)
             .putString("session_id", next.sessionId)
             .apply()
         _state.value = next.copy(serverUrl = next.serverUrl.trim().trimEnd('/'), deviceToken = next.deviceToken.trim())

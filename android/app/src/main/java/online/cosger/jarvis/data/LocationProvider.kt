@@ -47,6 +47,7 @@ class LocationProvider(context: Context) {
             accuracyM = if (fix.hasAccuracy()) fix.accuracy.toDouble() else null,
             ageSeconds = ((now - fix.elapsedRealtimeNanos / 1_000_000) / 1000).coerceAtLeast(0),
             address = withTimeoutOrNull(2_500) { reverseGeocode(fix.latitude, fix.longitude) },
+            speedMps = if (fix.hasSpeed()) fix.speed.toDouble() else null,
         )
         cached = loc
         cachedAtMs = now

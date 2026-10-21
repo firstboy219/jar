@@ -106,6 +106,20 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
         }
         Spacer(Modifier.height(8.dp))
         NotificationSetting(s.readNotifications, vm::setReadNotifications)
+        Spacer(Modifier.height(8.dp))
+        val askCalendar = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+            vm.setUseCalendar(ok)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Pakai agenda kalender", color = JarvisColors.Text)
+                Text("Judul, jam & tempat agenda 24 jam ke depan, supaya JARVIS bisa mengingatkan dan bersiap.",
+                    color = JarvisColors.Muted, fontSize = 12.sp)
+            }
+            Switch(s.useCalendar, { on ->
+                if (!on) vm.setUseCalendar(false) else askCalendar.launch(android.Manifest.permission.READ_CALENDAR)
+            })
+        }
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = {

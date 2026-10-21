@@ -31,6 +31,11 @@ async def check_all() -> list[dict]:
         results.append({"name": "n8n API key", "ok": False, "detail": "belum diisi"})
     results.append({"name": "OpenRouter key", "ok": bool(settings.openrouter_api_key),
                     "detail": "terisi" if settings.openrouter_api_key else "belum diisi"})
+    from . import billing
+    b = await billing.balance()
+    results.append({"name": "Saldo OpenRouter", "ok": b is not None and b["remaining"] >= billing.LOW_BALANCE_USD,
+                    "detail": "tidak diketahui" if b is None else
+                    (f"${b['remaining']:.2f} tersisa" if b["remaining"] > 0 else f"HABIS (${b['remaining']:.2f}) — isi kredit")})
     results.append({"name": "Deepgram key", "ok": bool(settings.deepgram_api_key),
                     "detail": "terisi" if settings.deepgram_api_key else "belum diisi (voice)"})
     return results

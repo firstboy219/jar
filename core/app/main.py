@@ -17,8 +17,8 @@ import logging
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from . import (approvals, audit, chat, db, deepgram, devices, hub, media, memory, notifications, reports, status,
-               usage, workers)
+from . import (approvals, audit, awareness, chat, db, deepgram, devices, hub, media, memory, notifications,
+               overrides, reports, self_model, selfimprove, status, usage, workers)
 from .config import settings
 from .location import Location
 
@@ -32,6 +32,9 @@ async def lifespan(app: FastAPI):
         await memory.ensure_collection()
     except Exception as e:  # Qdrant down must not keep chat from starting
         log.warning("memory collection not ready: %s", e)
+    applied = await overrides.load_all()
+    if applied:
+        log.info("setting overrides: %s", applied)
     resumed = await workers.resume_after_restart()
     if resumed:
         log.info("resumed %d interrupted worker task(s)", resumed)
@@ -42,10 +45,20 @@ async def lifespan(app: FastAPI):
             await notifications.purge_old()
             await asyncio.sleep(6 * 3600)
 
+    async def selfcheck_daily():
+        last_day = None
+        while True:
+            if await selfimprove.daily_due(last_day):
+                last_day = __import__("datetime").datetime.now(awareness.WIB).date()
+                await selfimprove.start()
+            await asyncio.sleep(600)
+
     purger = asyncio.create_task(purge_daily())
+    aware = asyncio.create_task(awareness.run_forever())
+    selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    ticker.cancel()
-    purger.cancel()
+    for t in (ticker, purger, aware, selfcheck):
+        t.cancel()
     await db.close()
 
 
@@ -87,8 +100,11 @@ class Command(BaseModel):
     user_command: str = Field(min_length=1, max_length=8000)
     session_id: str = Field(min_length=1, max_length=128)
     location: Location | None = None  # only when the owner enabled location sharing in the app
-    # Latest screen frame while the owner is sharing their screen (JPEG, base64), max ~1.5 MB
+    # Latest frame the owner is showing (JPEG, base64), max ~1.5 MB: shared screen or camera
     screen: str | None = Field(default=None, max_length=2_000_000)
+    image_source: str | None = Field(default=None, pattern="^(screen|camera)$")
+    # How speech recognition heard it: {"confidence": 0..1, "speakers": n}
+    stt: dict | None = None
 
 
 @app.get("/healthz")
@@ -137,7 +153,8 @@ async def ws(websocket: WebSocket):
                 return
             await send({"type": "auth_ok"})
 
-        client_id = hub.register(send)
+        client_id = hub.register(send, device=device["name"],
+                                 app_version=(websocket.headers.get("x-app-version") or "")[:20] or None)
         await send({"type": "tasks", "items": jsonable(await workers.active())})
         await reports.on_connect(send)
 
@@ -146,7 +163,8 @@ async def ws(websocket: WebSocket):
                 await send({**event, "session_id": cmd.session_id})
             try:
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
-                                         device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen)
+                                         device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen,
+                                         image_source=cmd.image_source, stt=cmd.stt)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "session_id": cmd.session_id})
             except (WebSocketDisconnect, RuntimeError):
                 pass  # socket gone mid-turn; the task is cancelled below anyway
@@ -164,6 +182,12 @@ async def ws(websocket: WebSocket):
             kind = msg.get("type")
             if kind == "ping":
                 await send({"type": "pong"})
+                continue
+            if kind == "context":
+                try:
+                    await awareness.receive(awareness.DeviceContext(**(msg.get("context") or {})))
+                except ValueError:
+                    pass
                 continue
             if kind == "notification":
                 try:
@@ -185,7 +209,8 @@ async def ws(websocket: WebSocket):
                 continue
             try:
                 cmd = Command(user_command=msg.get("user_command", ""), session_id=msg.get("session_id", ""),
-                              location=msg.get("location"), screen=msg.get("screen"))
+                              location=msg.get("location"), screen=msg.get("screen"),
+                              image_source=msg.get("image_source"), stt=msg.get("stt"))
             except ValueError:
                 await send({"type": "error", "message": "butuh user_command dan session_id (lokasi opsional)"})
                 continue
@@ -207,6 +232,15 @@ async def ws(websocket: WebSocket):
 class MediaIn(BaseModel):
     items: list[dict] = Field(min_length=1, max_length=12)
     caption: str = ""
+
+
+@app.get("/internal/self")
+async def internal_self(request: Request):
+    if "x-forwarded-for" in request.headers or "x-real-ip" in request.headers:
+        raise HTTPException(404)
+    if not settings.mcp_token or not hmac.compare_digest(request.headers.get("x-internal-token", ""), settings.mcp_token):
+        raise HTTPException(404)
+    return {"self": await self_model.describe(full=True)}
 
 
 @app.post("/internal/media")
@@ -310,6 +344,24 @@ async def admin_device_revoke(device_id: str, actor: str = admin):
 @app.get("/admin/usage")
 async def admin_usage(_: str = admin):
     return {"local": await usage.local_summary(), "openrouter": await usage.openrouter_summary()}
+
+
+@app.get("/admin/self")
+async def admin_self(_: str = admin):
+    ctx = awareness.current()
+    return {"self": await self_model.describe(full=True), "improvements": await selfimprove.recent(),
+            "situation": awareness.situation(), "context": ctx.model_dump() if ctx else None}
+
+
+@app.post("/admin/selfcheck")
+async def admin_selfcheck(actor: str = admin):
+    t = await selfimprove.start("", actor)
+    return {"task_id": t["id"]}
+
+
+@app.post("/admin/improvements/{improvement_id}/revert")
+async def admin_improvement_revert(improvement_id: int, actor: str = admin):
+    return {"reverted": await selfimprove.revert(improvement_id, actor)}
 
 
 @app.get("/admin/notifications")

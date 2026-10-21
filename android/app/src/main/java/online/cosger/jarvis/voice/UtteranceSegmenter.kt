@@ -2,6 +2,8 @@ package online.cosger.jarvis.voice
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -17,11 +19,14 @@ class UtteranceSegmenter {
     sealed interface Output {
         data object SpeechStarted : Output
         data class Interim(val text: String) : Output
-        data class Utterance(val text: String) : Output
+        /** A finished utterance with how sure recognition was and how many distinct voices it heard. */
+        data class Utterance(val text: String, val confidence: Double? = null, val speakers: Int = 1) : Output
     }
 
     private val finals = StringBuilder()
     private var pendingInterim = ""
+    private val confidences = mutableListOf<Double>()
+    private val speakerIds = mutableSetOf<Int>()
 
     val partial: String get() = (finals.toString() + pendingInterim).trim()
 
@@ -31,13 +36,19 @@ class UtteranceSegmenter {
             "SpeechStarted" -> listOf(Output.SpeechStarted)
             "UtteranceEnd" -> flush()
             "Results" -> {
-                val transcript = o["channel"]?.jsonObject?.get("alternatives")?.jsonArray?.firstOrNull()
-                    ?.jsonObject?.get("transcript")?.jsonPrimitive?.content.orEmpty().trim()
+                val alt = o["channel"]?.jsonObject?.get("alternatives")?.jsonArray?.firstOrNull()?.jsonObject
+                val transcript = alt?.get("transcript")?.jsonPrimitive?.content.orEmpty().trim()
                 val isFinal = o["is_final"]?.jsonPrimitive?.booleanOrNull == true
                 val speechFinal = o["speech_final"]?.jsonPrimitive?.booleanOrNull == true
                 val out = mutableListOf<Output>()
                 if (isFinal) {
-                    if (transcript.isNotEmpty()) finals.append(transcript).append(' ')
+                    if (transcript.isNotEmpty()) {
+                        finals.append(transcript).append(' ')
+                        alt?.get("confidence")?.jsonPrimitive?.doubleOrNull?.let { confidences += it }
+                        alt?.get("words")?.jsonArray?.forEach { w ->
+                            w.jsonObject["speaker"]?.jsonPrimitive?.intOrNull?.let { speakerIds += it }
+                        }
+                    }
                     pendingInterim = ""
                 } else {
                     pendingInterim = transcript
@@ -53,13 +64,16 @@ class UtteranceSegmenter {
     /** End of an utterance: emit what was heard (nothing if it was only noise) and start fresh. */
     fun flush(): List<Output> {
         val text = finals.toString().trim()
-        finals.clear()
-        pendingInterim = ""
-        return if (text.isEmpty()) emptyList() else listOf(Output.Utterance(text))
+        val confidence = confidences.takeIf { it.isNotEmpty() }?.average()
+        val speakers = speakerIds.size.coerceAtLeast(1)
+        reset()
+        return if (text.isEmpty()) emptyList() else listOf(Output.Utterance(text, confidence, speakers))
     }
 
     fun reset() {
         finals.clear()
         pendingInterim = ""
+        confidences.clear()
+        speakerIds.clear()
     }
 }

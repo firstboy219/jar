@@ -38,6 +38,8 @@ sealed interface ServerEvent {
         override val sessionId: String? = null
     }
     data class ReportAck(val id: Long) : ServerEvent { override val sessionId: String? = null }
+    /** JARVIS speaks first because of the situation it observed (place, time, agenda, habits). */
+    data class Proactive(val text: String) : ServerEvent { override val sessionId: String? = null }
     /** Something JARVIS says on its own once (e.g. about a new notification); no confirmation needed. */
     data class Announce(val text: String) : ServerEvent { override val sessionId: String? = null }
     /** Pictures/videos JARVIS wants the owner to see. */
@@ -58,6 +60,7 @@ data class MediaItem(val kind: String, val url: String, val title: String, val t
 /** Phone position shared with JARVIS when the owner enabled it. */
 data class DeviceLocation(
     val lat: Double, val lon: Double, val accuracyM: Double?, val ageSeconds: Long, val address: String?,
+    val speedMps: Double? = null,
 )
 
 object Protocol {
@@ -109,6 +112,7 @@ object Protocol {
             )
             "report_ack" -> ServerEvent.ReportAck(o.long("id") ?: return null)
             "announce" -> ServerEvent.Announce(o.str("text"))
+            "proactive" -> ServerEvent.Proactive(o.str("text"))
             "media" -> ServerEvent.Media(
                 o.str("caption"),
                 o["items"]?.jsonArray?.mapNotNull {
@@ -126,10 +130,20 @@ object Protocol {
         }
     }
 
-    fun command(text: String, sessionId: String, location: DeviceLocation? = null, screenJpegBase64: String? = null): String = buildJsonObject {
+    fun command(
+        text: String, sessionId: String, location: DeviceLocation? = null, screenJpegBase64: String? = null,
+        imageSource: String? = null, confidence: Double? = null, speakers: Int? = null,
+    ): String = buildJsonObject {
         put("user_command", text)
         put("session_id", sessionId)
-        screenJpegBase64?.let { put("screen", it) }
+        screenJpegBase64?.let {
+            put("screen", it)
+            put("image_source", imageSource ?: "screen")
+        }
+        if (confidence != null || speakers != null) put("stt", buildJsonObject {
+            confidence?.let { put("confidence", it) }
+            speakers?.let { put("speakers", it) }
+        })
         if (location != null) {
             put("location", buildJsonObject {
                 put("lat", location.lat)
@@ -144,6 +158,39 @@ object Protocol {
     fun control(type: String, idKey: String, id: Long): String = buildJsonObject {
         put("type", type)
         put(idKey, id)
+    }.toString()
+
+    /** Context heartbeat for situational awareness (see core/app/awareness.py). */
+    fun context(c: online.cosger.jarvis.data.PhoneContext): String = buildJsonObject {
+        put("type", "context")
+        put("context", buildJsonObject {
+            c.location?.let { l ->
+                put("location", buildJsonObject {
+                    put("lat", l.lat); put("lon", l.lon)
+                    l.accuracyM?.let { put("accuracy_m", it) }
+                    put("age_s", l.ageSeconds)
+                    l.address?.let { put("address", it.take(300)) }
+                })
+            }
+            put("activity", c.activity)
+            c.speedKmh?.let { put("speed_kmh", it) }
+            c.battery?.let { put("battery", it) }
+            c.charging?.let { put("charging", it) }
+            c.headset?.let { put("headset", it) }
+            c.screenOn?.let { put("screen_on", it) }
+            c.network?.let { put("network", it) }
+            put("unmuted", c.unmuted)
+            put("app_version", c.appVersion)
+            put("calendar", kotlinx.serialization.json.buildJsonArray {
+                c.calendar.take(8).forEach { e ->
+                    add(buildJsonObject {
+                        put("title", e.title.take(200)); put("start_ms", e.startMs)
+                        e.endMs?.let { put("end_ms", it) }
+                        e.location?.let { put("location", it.take(200)) }
+                    })
+                }
+            })
+        })
     }.toString()
 
     fun notification(app: String, pkg: String, title: String, text: String, postedAtMs: Long): String = buildJsonObject {

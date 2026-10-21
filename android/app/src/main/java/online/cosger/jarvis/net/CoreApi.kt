@@ -51,6 +51,9 @@ class CoreApi(private val client: OkHttpClient = OkHttpClient()) {
                 language = o["language"]?.jsonPrimitive?.contentOrNull ?: "id",
                 keywords = o["keywords"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
                 expiresAtMs = nowMs + ttl * 1000L,
+                diarize = o["diarize"]?.jsonPrimitive?.contentOrNull != "false",
+                endpointingMs = o["endpointing_ms"]?.jsonPrimitive?.intOrNull ?: 1000,
+                utteranceEndMs = o["utterance_end_ms"]?.jsonPrimitive?.intOrNull ?: 1800,
             )
         }
     }

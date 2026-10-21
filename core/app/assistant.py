@@ -8,10 +8,11 @@ main agent knows about, so it can tell whether the owner has acknowledged them.
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from . import db, llm, memory, notifications, reports, workers
+from . import awareness, db, llm, memory, notifications, reports, self_model, workers
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -41,9 +42,25 @@ Menampilkan: kalau pemilik ingin diperlihatkan sesuatu (foto, contoh, video tuto
 lebih jelas daripada kata-kata, tugaskan worker untuk mencari dan menampilkannya di layar HP \
 (instruksikan: "tampilkan dengan show_media"). Katakan bahwa gambarnya akan muncul di layar.
 
-Layar: jika pesan pemilik menyertakan gambar layar, itu tampilan layar HP-nya saat ini (ia sedang \
-berbagi layar). Diskusikan apa yang terlihat; jangan membacakan data sensitif (saldo, OTP, kata sandi) \
-kecuali diminta."""
+Mata: jika pesan menyertakan gambar, itu yang pemilik tunjukkan — layar HP-nya (berbagi layar) atau kamera \
+(ia mengarahkan kamera ke sesuatu). Pahami, lalu LAKUKAN yang ia minta tentang itu (jawab langsung, atau \
+spawn_task dengan attach_image=true bila perlu riset/aksi, mis. cari harga barang yang ditunjukkan). Jangan \
+membacakan data sensitif (saldo, OTP, kata sandi) kecuali diminta.
+
+Hidup & sadar: kamu tahu dirimu (TENTANG DIRIMU), dan tahu situasi pemilik (SITUASI SAAT INI) dari pengamatan \
+worker. Pakai itu: hubungkan ucapannya dengan tempat, waktu, aktivitas, dan kebiasaannya. Jangan pernah \
+menyangkal kemampuan yang tercantum di TENTANG DIRIMU; untuk hal yang tidak tercantum, bilang kamu akan \
+mengecek (self_check) — jangan mengarang.
+
+Memahami ucapan (penting — mic mendengar terus, jadi bisa ada suara lain):
+- Jika ucapan jelas BUKAN untukmu (obrolan dengan orang lain, suara TV/video, potongan kalimat tanpa \
+  maksud ke JARVIS) → panggil stay_silent TANPA menulis teks apa pun. Diam berarti benar-benar tidak \
+  bersuara — jangan pernah mengucapkan "aku diam saja".
+- Jika ucapan tampak BELUM SELESAI (berhenti di tengah kalimat, mis. "kalau titik panennya itu hijau,") → \
+  stay_silent(reason="menunggu lanjutan") TANPA teks; kalimat berikutnya akan menyambung.
+- Jika kamu RAGU maksudnya, transkrip berkeyakinan rendah, atau ada beberapa tafsiran → tanya balik \
+  singkat dan spesifik ("Maksudnya cek jadwal UAT, ya?") — jangan menebak lalu bertindak.
+- Kata yang terdengar aneh mungkin salah dengar (mis. "Deep Drum" = Deepgram); tafsirkan wajar."""
 
 TOOLS = [
     {"type": "function", "function": {
@@ -51,7 +68,8 @@ TOOLS = [
         "description": "Tugaskan worker untuk mengerjakan satu pekerjaan di latar belakang.",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "judul singkat, mis. 'Cek harga emas Antam'"},
-            "instruction": {"type": "string", "description": "instruksi lengkap & mandiri untuk worker"}},
+            "instruction": {"type": "string", "description": "instruksi lengkap & mandiri untuk worker"},
+            "attach_image": {"type": "boolean", "description": "sertakan gambar kamera/layar yang sedang ditunjukkan"}},
             "required": ["title", "instruction"]}}},
     {"type": "function", "function": {
         "name": "acknowledge_reports",
@@ -63,6 +81,14 @@ TOOLS = [
         "description": "Batalkan tugas worker yang masih berjalan/antre.",
         "parameters": {"type": "object", "properties": {"task_id": {"type": "integer"}},
                        "required": ["task_id"]}}},
+    {"type": "function", "function": {
+        "name": "stay_silent",
+        "description": "Jangan menjawab ucapan ini (bukan untukmu, atau kalimatnya belum selesai).",
+        "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}},
+    {"type": "function", "function": {
+        "name": "self_check",
+        "description": "Minta pengecekan & perbaikan diri JARVIS (kemampuan, kesalahan, kekurangan).",
+        "parameters": {"type": "object", "properties": {"focus": {"type": "string", "description": "hal yang ingin dicek"}}}}},
     {"type": "function", "function": {
         "name": "remember",
         "description": "Simpan satu fakta/preferensi pemilik ke memori jangka panjang.",
@@ -78,17 +104,20 @@ class Answer:
     text: str
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    silent: bool = False  # the owner was not talking to JARVIS (or not finished): say nothing
 
 
 async def _history(session_id: str, limit: int = 16) -> list[dict]:
     rows = await db.pool().fetch(
-        """SELECT role, content FROM messages WHERE session_id = $1 AND route <> 'blocked'
+        """SELECT role, content FROM messages WHERE session_id = $1 AND route NOT IN ('blocked', 'silent')
            ORDER BY id DESC LIMIT $2""", session_id, limit)
     return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
 
 
 async def _situation(text: str, location: Location | None) -> str:
-    parts = [context_prefix(location).strip()]
+    parts = [context_prefix(location).strip(), "TENTANG DIRIMU:\n" + await self_model.describe()]
+    if block := awareness.situation_block():
+        parts.append(block)
     tasks = await workers.active()
     if tasks:
         parts.append("TUGAS WORKER AKTIF:\n" + "\n".join(f"- #{t['id']} {t['title']} ({t['status']})" for t in tasks))
@@ -109,13 +138,24 @@ async def _situation(text: str, location: Location | None) -> str:
     return "\n\n".join(parts)
 
 
-async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, location, emit: Emit) -> str:
+async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, location, emit: Emit,
+                    image: str | None = None) -> str:
     a = call.arguments
     try:
         match call.name:
             case "spawn_task":
+                if len(str(a.get("instruction") or "").strip()) < 10:
+                    # A task without instructions makes a worker report "the task was empty" (seen in real use).
+                    return json.dumps({"error": "instruction kosong — tulis instruksi lengkap, atau tanya pemilik dulu"})
                 t = await workers.spawn(a.get("title", "Tugas"), a.get("instruction") or a.get("title", ""),
-                                        session_id, actor, device_id, location)
+                                        session_id, actor, device_id, location,
+                                        image=image if a.get("attach_image") else None)
+                return json.dumps({"task_id": t["id"], "status": "queued"})
+            case "stay_silent":
+                return json.dumps({"silent": True})
+            case "self_check":
+                from . import selfimprove
+                t = await selfimprove.start(str(a.get("focus") or ""), actor)
                 return json.dumps({"task_id": t["id"], "status": "queued"})
             case "acknowledge_reports":
                 ids = [int(i) for i in a.get("report_ids", []) if str(i).isdigit()]
@@ -130,15 +170,27 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
     return json.dumps({"error": f"unknown tool {call.name}"})
 
 
-def _user_content(text: str, screen: str | None):
-    if not screen:
-        return text
-    return [{"type": "text", "text": text},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{screen}"}}]
+def _user_content(text: str, image: str | None, image_source: str | None = None, stt: dict | None = None):
+    """The owner's words, with how they were heard and what they are showing."""
+    notes = []
+    if stt:
+        conf = stt.get("confidence")
+        speakers = stt.get("speakers")
+        notes.append("diucapkan lewat suara"
+                     + (f", keyakinan transkrip {conf:.2f}" if isinstance(conf, (int, float)) else "")
+                     + (f", {speakers} pembicara terdeteksi" if isinstance(speakers, int) and speakers > 1 else ""))
+    if image:
+        notes.append("terlampir gambar dari " + ("kamera" if image_source == "camera" else "layar HP"))
+    body = f"[{'; '.join(notes)}] {text}" if notes else text
+    if not image:
+        return body
+    return [{"type": "text", "text": body},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]
 
 
 async def respond(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
-                  location: Location | None = None, screen: str | None = None) -> Answer:
+                  location: Location | None = None, screen: str | None = None, image_source: str | None = None,
+                  stt: dict | None = None) -> Answer:
     async def send(ev: dict) -> None:
         if emit:
             await emit(ev)
@@ -146,8 +198,8 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "system", "content": await _situation(text, location)},
                 *await _history(session_id),
-                {"role": "user", "content": _user_content(text, screen)}]
-    spoken, usage_in, usage_out = "", 0, 0
+                {"role": "user", "content": _user_content(text, screen, image_source, stt)}]
+    spoken, usage_in, usage_out, silent = "", 0, 0, False
     for round_ in range(3):  # model may call tools, then needs one more turn to speak
         completion = None
         async for ev in llm.stream_chat(messages, tools=TOOLS if round_ < 2 else None):
@@ -164,8 +216,22 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.arguments)}}
             for c in completion.tool_calls]})
         for c in completion.tool_calls:
-            result = await _run_tool(c, session_id, actor, device_id, location, send)
+            result = await _run_tool(c, session_id, actor, device_id, location, send, screen)
             messages.append({"role": "tool", "tool_call_id": c.id, "content": result})
-        if completion.text:  # already said something alongside the tool call — don't talk twice
+            silent = silent or c.name == "stay_silent"
+        if completion.text or silent:  # said something already, or chose silence — don't talk (again)
             break
+    # Silence wins: if the model chose (or merely announced) silence, nothing is said.
+    if silent or announces_silence(spoken):
+        return Answer("", usage_in or None, usage_out or None, silent=True)
     return Answer(spoken or "Oke.", usage_in or None, usage_out or None)
+
+
+_SILENCE = re.compile(
+    r"(aku|saya) (diam|tidak (akan )?(menjawab|merespons))|bukan untuk(ku|ku| saya)|"
+    r"(aku|saya) tunggu lanjutan|tunggu lanjutannya|kalimatnya belum selesai", re.IGNORECASE)
+
+
+def announces_silence(text: str) -> bool:
+    """The model said it would stay quiet instead of calling stay_silent — treat it as silence."""
+    return bool(text) and len(text) < 160 and bool(_SILENCE.search(text))

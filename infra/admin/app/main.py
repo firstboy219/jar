@@ -55,7 +55,8 @@ SETTINGS = [
      "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma (mis. nama proyek, orang, tempat)."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"),
-        ("devices", "Perangkat"), ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
+        ("self", "Diri JARVIS"), ("devices", "Perangkat"), ("app", "Aplikasi"), ("audit", "Audit"),
+        ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
 
@@ -137,6 +138,8 @@ async def _tab_data(tab: str, request: Request) -> dict:
         return {"events": await core("GET", "/admin/audit")}
     if tab == "app":
         return {"releases": load_releases()}
+    if tab == "self":
+        return await core("GET", "/admin/self")
     if tab == "settings":
         env = ENV.read()
         return {"fields": [{"key": k, "label": label, "secret": secret, "help": help_,
@@ -253,6 +256,28 @@ async def memory_edit(request: Request, mem_id: str, action: str = Form(...), te
     except CoreError as e:
         return await render(request, "memory", errors=[str(e)])
     return await render(request, "memory", notice=msg)
+
+
+@app.post("/selfcheck", response_class=HTMLResponse)
+async def selfcheck(request: Request):
+    if r := guard(request):
+        return r
+    try:
+        t = await core("POST", "/admin/selfcheck")
+    except CoreError as e:
+        return await render(request, "self", errors=[str(e)])
+    return await render(request, "self", notice=f"Cek diri dimulai (tugas #{t['task_id']}). Hasilnya akan disampaikan JARVIS.")
+
+
+@app.post("/improvements/{improvement_id}/revert", response_class=HTMLResponse)
+async def improvement_revert(request: Request, improvement_id: int):
+    if r := guard(request):
+        return r
+    try:
+        await core("POST", f"/admin/improvements/{improvement_id}/revert")
+    except CoreError as e:
+        return await render(request, "self", errors=[str(e)])
+    return await render(request, "self", notice=f"Perbaikan #{improvement_id} dibatalkan.")
 
 
 @app.post("/devices", response_class=HTMLResponse)

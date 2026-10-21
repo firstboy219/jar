@@ -197,6 +197,16 @@ async def n8n_draft_workflow(description: str) -> dict:
             "note": "Workflow dibuat nonaktif; pemilik harus menyetujui aktivasi."}
 
 
+@mcp.tool()
+async def self_info() -> dict:
+    """JARVIS' own architecture, capabilities, limits, health and learned lessons — the source of truth
+    about yourself. Check this before claiming JARVIS has or lacks a capability (e.g. speech recognition
+    runs on the phone via Deepgram, not inside this container)."""
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get("http://jarvis-core:8000/internal/self", headers={"X-Internal-Token": settings.mcp_token})
+    return r.json() if r.status_code == 200 else {"error": f"core HTTP {r.status_code}"}
+
+
 # ---------- showing things on the owner's phone ----------
 
 @mcp.tool()

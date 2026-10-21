@@ -36,6 +36,12 @@ mem["nudge_interval"] = 0
 # Bound one turn's cost/time (default 500 tool-calling iterations).
 cfg.setdefault("agent", {})["max_turns"] = 30
 
+# The worker model is text-only; image analysis (vision_analyze, browser screenshots) uses a cheap
+# vision model on OpenRouter instead of the pricier default.
+aux = cfg.setdefault("auxiliary", {})
+vision = aux.setdefault("vision", {})
+vision.update({"provider": "openrouter", "model": "google/gemma-4-26b-a4b-it", "reasoning_effort": "none"})
+
 servers = cfg.get("mcp_servers") or {}
 if env("MCP_TOKEN"):
     servers["jarvis"] = {"url": "http://jarvis-tools:8100/mcp",

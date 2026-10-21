@@ -55,8 +55,8 @@ class ContinuousListener(
     private val _interim = MutableStateFlow("")
     val interim: StateFlow<String> = _interim
 
-    private val _utterances = MutableSharedFlow<String>(extraBufferCapacity = 16)
-    val utterances: SharedFlow<String> = _utterances
+    private val _utterances = MutableSharedFlow<UtteranceSegmenter.Output.Utterance>(extraBufferCapacity = 16)
+    val utterances: SharedFlow<UtteranceSegmenter.Output.Utterance> = _utterances
 
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val errors: SharedFlow<String> = _errors
@@ -196,7 +196,7 @@ class ContinuousListener(
                 _interim.value = ""
                 _state.value = MicState.Ready
                 lastSpeechAtMs = System.currentTimeMillis()
-                _utterances.tryEmit(out.text)
+                _utterances.tryEmit(out)
             }
         }
     }

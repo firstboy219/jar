@@ -156,8 +156,42 @@ def test_screen_is_sent_as_image_part():
     from app.assistant import _user_content
     assert _user_content("halo", None) == "halo"
     parts = _user_content("ini kenapa?", "QUJD")
-    assert parts[0] == {"type": "text", "text": "ini kenapa?"}
+    assert parts[0] == {"type": "text", "text": "[terlampir gambar dari layar HP] ini kenapa?"}
     assert parts[1]["image_url"]["url"] == "data:image/jpeg;base64,QUJD"
+    cam = _user_content("ini apa?", "QUJD", "camera", {"confidence": 0.62, "speakers": 2})
+    assert cam[0]["text"] == "[diucapkan lewat suara, keyakinan transkrip 0.62, 2 pembicara terdeteksi; terlampir gambar dari kamera] ini apa?"
+    assert _user_content("halo", None, None, {"confidence": 0.97, "speakers": 1}) == "[diucapkan lewat suara, keyakinan transkrip 0.97] halo"
+
+
+def test_situation_due_reasons():
+    from datetime import timedelta
+    from app import awareness
+    from app.location import Location
+    now = datetime(2026, 10, 17, 1, 0, tzinfo=timezone.utc)
+    home = Location(lat=-6.27, lon=106.70)
+    ctx = awareness.DeviceContext(location=home, activity="still")
+    awareness._state.update(checked_at=None, checked_at_place=None, checked_activity=None, announced_events=set())
+    assert awareness.due_reason(ctx, now) == "pertama kali hari ini"
+    awareness._state.update(checked_at=now, checked_at_place=home, checked_activity="still")
+    assert awareness.due_reason(ctx, now + timedelta(minutes=10)) is None
+    moved = awareness.DeviceContext(location=Location(lat=-6.20, lon=106.82), activity="still")
+    assert awareness.due_reason(moved, now + timedelta(minutes=10)) == "pemilik berpindah tempat"
+    driving = awareness.DeviceContext(location=home, activity="driving")
+    assert awareness.due_reason(driving, now + timedelta(minutes=10)) == "pemilik mulai berkendara"
+    soon = int((now + timedelta(minutes=20)).timestamp() * 1000)
+    meeting = awareness.DeviceContext(location=home, activity="still",
+                                      calendar=[awareness.CalendarEvent(title="UAT", start_ms=soon)])
+    assert awareness.due_reason(meeting, now) == "agenda 'UAT' sebentar lagi"
+    assert awareness.due_reason(meeting, now) is None  # announced once
+    assert awareness.due_reason(ctx, now + timedelta(minutes=91)) == "pemeriksaan berkala"
+
+
+def test_distance():
+    from app.awareness import distance_m
+    from app.location import Location
+    d = distance_m(Location(lat=-6.2700, lon=106.7000), Location(lat=-6.2700, lon=106.7100))
+    assert 1000 < d < 1200
+
 
 
 def test_quiet_hours_wrap_midnight(monkeypatch):
@@ -177,3 +211,18 @@ def test_otp_and_secrets_are_withheld():
     assert sens and "482913" not in title + text
     ok = Notification(app="WhatsApp", package="com.whatsapp", title="Budi", text="Rapat jadi jam 3", posted_at=0)
     assert redact(ok) == ("Budi", "Rapat jadi jam 3", False)
+
+
+def test_announced_silence_is_treated_as_silence():
+    from app.assistant import announces_silence
+    assert announces_silence("Ucapan ini tampaknya bukan untukku, jadi aku diam saja.")
+    assert announces_silence("Kalimatnya belum selesai, aku tunggu lanjutannya ya.")
+    assert not announces_silence("Iya, aku pakai Deepgram nova-2.")
+    assert not announces_silence("Saya diam-diam sudah menyiapkan laporannya. " * 5)  # long real answer
+
+
+def test_exhausted_credit_errors_are_recognised():
+    from app.billing import is_exhausted
+    assert is_exhausted("Billing or credits exhausted: HTTP 402: This request requires more credits")
+    assert is_exhausted("OpenRouter HTTP 402: b'{...}'")
+    assert not is_exhausted("Harga emas Antam Rp2,5 juta") and not is_exhausted(None)

@@ -30,9 +30,19 @@ async def _exec_n8n_activate(detail: dict) -> dict:
     return await n8n.activate(str(detail["workflow_id"]))
 
 
+async def _exec_setting_change(detail: dict) -> dict:
+    from . import overrides
+    await overrides.set_override(detail["key"], str(detail["value"]))
+    if detail.get("improvement_id"):
+        await db.pool().execute("UPDATE improvements SET status = 'applied', applied_at = now() WHERE id = $1",
+                                int(detail["improvement_id"]))
+    return {"applied": {detail["key"]: detail["value"]}}
+
+
 EXECUTORS: dict[str, Executor] = {
     "manual": _exec_manual,
     "n8n_activate_workflow": _exec_n8n_activate,
+    "setting_change": _exec_setting_change,
 }
 
 
