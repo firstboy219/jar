@@ -3,7 +3,7 @@
 #   - all secrets come from .env (never committed)
 #   - image tags are pinned; no :latest
 #   - only 80/443 are public; NPM admin and Qdrant bind to 127.0.0.1
-#   - OpenClaw is deferred; Hermes Agent runs alone first
+#   - OpenClaw dropped (never installed); jarvis-core is the gateway (WSS, admin API, LLM gateway)
 #   - jarvis-core fronts the agent (vis1); Hermes is internal-only and acts through jarvis-tools (MCP)
 #
 # Usage:  cd infra && ./scripts/init-env.sh && docker compose up -d --build
@@ -48,36 +48,95 @@ services:
     networks:
       - jarvis-network
 
-  # 2. REASONING ENGINE (Hermes Agent, includes Playwright/Chromium)
+  # 2. REASONING ENGINE (Hermes Agent, includes Playwright/Chromium) — CPU class 2 (yields to voice/chat)
+  # Every model call goes through jarvis-core's LLM gateway (ADR-017); Hermes holds no provider keys.
   hermes-agent:
     image: nousresearch/hermes-agent:v0.22.2
     container_name: jarvis-brain
     restart: always
     command: ["gateway", "run"]
     shm_size: "1gb" # Chromium needs more than the 64MB default; safer than BRD's ipc: host
+    cpu_shares: 256
+    mem_limit: 4g
+    pids_limit: 1024
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [NET_RAW, MKNOD, AUDIT_WRITE, SYS_CHROOT]
     volumes:
       - ./data/hermes:/opt/data
       - ./hermes/03-jarvis-config:/etc/cont-init.d/03-jarvis-config:ro
       - ./hermes/SOUL.md:/opt/data/SOUL.md:ro # JARVIS persona (versioned in git)
-      # Cross-app visibility (FS-104), read-only
+      - ./hermes/plugins/jarvis-memory:/opt/data/plugins/jarvis-memory:ro # shared memory provider (ADR-018)
+      # Cross-app visibility (FS-104 / BR-003), read-only
       - ./data/npm/logs:/opt/external/proxy_logs:ro
+      - /var/log:/opt/external/host_logs:ro
     environment:
       - HERMES_UID=${HOST_UID:-1000}
       - HERMES_GID=${HOST_GID:-1000}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - HERMES_INFERENCE_PROVIDER=openrouter
-      - HERMES_INFERENCE_MODEL=${JARVIS_DEFAULT_MODEL}
-      # Tier 3: model Hermes delegates to (delegate_task) when it decides it needs more capability
-      - JARVIS_EXPERT_MODEL=${JARVIS_EXPERT_MODEL}
+      - LLM_GATEWAY_KEY=${LLM_GATEWAY_KEY}
       # OpenAI-compatible API, reachable only inside jarvis-network (called by jarvis-core)
       - API_SERVER_HOST=0.0.0.0
       - API_SERVER_KEY=${HERMES_API_KEY}
-      # Tools (memory, approvals, n8n) come from jarvis-tools; Hermes holds no n8n/Qdrant keys
+      # JARVIS' own tools (memory, the owner, the phone's screen, documents, approvals, n8n) via jarvis-tools
       - MCP_TOKEN=${MCP_TOKEN}
+      - TZ=${TZ}
     networks:
       - jarvis-network
     depends_on:
       - jarvis-tools
+
+  # 2a. LOCAL MODELS (llama.cpp, Qwen3.5). Default AI when no cloud key/credit (decision 2026-10-21).
+  # Measured on this CPU: 2B ~42 tok/s read, ~7 tok/s write, and with the static prompt prefix cached
+  # a chat reply in ~1.5 s; 4B ~20 / ~4.7 tok/s. Shared memory via mmap; models: scripts/get-models.sh.
+  llama-chat: # CPU class 1: answers the owner (small context, prompt cache)
+    image: ghcr.io/ggml-org/llama.cpp:server-b11749
+    container_name: jarvis-llm-chat
+    restart: always
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    cpu_shares: 1024
+    mem_limit: 3g
+    command: ["-m", "/models/Qwen3.5-2B-Q4_0.gguf", "-c", "16384", "-np", "1", "-t", "4", "-ctk", "q8_0", "-ctv", "q8_0",
+              "--jinja", "--host", "0.0.0.0", "--port", "8080", "--no-webui",
+              "--slot-save-path", "/slots", "--cache-ram", "1024", "--alias", "qwen-lokal"]
+    volumes:
+      - ./data/models:/models:ro
+      - ./data/llm-slots/chat:/slots
+    networks:
+      - jarvis-network
+
+  llama-worker: # CPU class 2: Hermes' local brain (64k context), idle-priority so it never slows the owner
+    image: ghcr.io/ggml-org/llama.cpp:server-b11749
+    container_name: jarvis-llm-worker
+    restart: always
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    cpu_shares: 128
+    mem_limit: 6g
+    entrypoint: ["chrt", "-i", "0", "nice", "-n", "19", "/app/llama-server"]
+    command: ["-m", "/models/Qwen3.5-4B-Q4_K_M.gguf", "-c", "65536", "-np", "1", "-t", "4", "-ctk", "q8_0", "-ctv", "q8_0",
+              "--jinja", "--host", "0.0.0.0", "--port", "8080", "--no-webui",
+              "--slot-save-path", "/slots", "--cache-ram", "2048", "--alias", "qwen-lokal"]
+    volumes:
+      - ./data/models:/models:ro
+      - ./data/llm-slots/worker:/slots
+    networks:
+      - jarvis-network
+
+  # 2a'. LOCAL HEARING (faster-whisper + sherpa-onnx voiceprint/diarization) — CPU class 1
+  jarvis-ears:
+    build: ./ears
+    image: jarvis-ears:local
+    container_name: jarvis-ears
+    restart: always
+    cpu_shares: 1024
+    mem_limit: 3g
+    environment:
+      - WHISPER_LIVE_MODEL=${WHISPER_LIVE_MODEL:-small}
+      - WHISPER_FILE_MODEL=${WHISPER_FILE_MODEL:-small}
+    volumes:
+      - ./data/models:/models
+      - ./data/meetings:/meetings:ro # meeting chunks written by jarvis-core
+    networks:
+      - jarvis-network
 
   # 2b. CORE SERVICE — https://${BACKEND_DOMAIN}: device auth, WSS, tiered routing, approvals,
   #     memory, usage. The only public entry point to the agent.
@@ -86,14 +145,29 @@ services:
     image: jarvis-core:local
     container_name: jarvis-core
     restart: always
+    volumes:
+      - ./data/documents:/data/documents
+      - ./data/meetings:/data/meetings
+      - ./data/media:/data/media
+      - ./data/hermes:/hermes:ro # Hermes Studio (schedules, own skills, kanban) + cron result delivery
     environment: &core-env
       - DATABASE_URL=postgresql://jarvis_core:${JARVIS_DB_PASSWORD}@jarvis-db/jarvis
       - HERMES_API_KEY=${HERMES_API_KEY}
       - N8N_API_KEY=${N8N_API_KEY}
       - QDRANT_API_KEY=${QDRANT_API_KEY}
+      # Cloud AI is optional: no key = that provider is skipped and the local model answers (gateway.py)
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - JARVIS_CODER_MODEL=${JARVIS_CODER_MODEL}
-      - JARVIS_CHAT_MODEL=${JARVIS_CHAT_MODEL:-anthropic/claude-haiku-5.5}
+      - OPENROUTER_KEY_CHAT=${OPENROUTER_KEY_CHAT:-}
+      - OPENROUTER_KEY_HERMES=${OPENROUTER_KEY_HERMES:-}
+      - OPENROUTER_KEY_LATAR=${OPENROUTER_KEY_LATAR:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - JARVIS_BUDGET_USD=${JARVIS_BUDGET_USD:-20}
+      - LLM_GATEWAY_KEY=${LLM_GATEWAY_KEY}
+      - JARVIS_RO_DATABASE_URL=postgresql://jarvis_ro:${JARVIS_RO_PASSWORD}@jarvis-db/jarvis
+      - WHISPER_URL=http://jarvis-ears:8000
+      - ORS_API_KEY=${ORS_API_KEY:-}
+      - TOMTOM_API_KEY=${TOMTOM_API_KEY:-}
+      - DOCUMENTS_DIR=/data/documents
       - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-6}
       - QUIET_HOURS=${QUIET_HOURS-22:00-06:00}
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
@@ -116,6 +190,8 @@ services:
     container_name: jarvis-tools
     restart: always
     command: ["python", "-m", "app.mcp_server"]
+    volumes:
+      - ./data/documents:/data/documents
     environment: *core-env
     networks:
       - jarvis-network
@@ -134,6 +210,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - JARVIS_DB_PASSWORD=${JARVIS_DB_PASSWORD}
+      - JARVIS_RO_PASSWORD=${JARVIS_RO_PASSWORD}
     networks:
       - jarvis-network
     depends_on:

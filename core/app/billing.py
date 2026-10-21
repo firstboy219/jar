@@ -1,4 +1,5 @@
-"""OpenRouter balance: JARVIS cannot think without it, so running out must be loud and plain.
+"""OpenRouter balance: running out must be plain to the owner (since ADR-017 JARVIS keeps working on the
+local model meanwhile, only slower).
 
 From 2026-10-17 20:23 to 10-21 the account sat at $0 credits: every model call failed with HTTP 402 and
 the owner only saw raw error text ("hi" → "OpenRouter HTTP 402: …"). Now: the balance is a health check,
@@ -16,8 +17,8 @@ from .config import settings
 EXHAUSTED = re.compile(r"HTTP 402|requires more credits|credits exhausted|can only afford", re.IGNORECASE)
 NOTIFY_EVERY_S = 12 * 3600
 LOW_BALANCE_USD = 0.5
-MESSAGE = ("Saldo OpenRouter-ku habis, jadi aku tidak bisa berpikir atau mengerjakan tugas. "
-           "Tolong isi kredit di openrouter.ai/settings/credits — lima dolar cukup untuk berbulan-bulan.")
+MESSAGE = ("Saldo OpenRouter-ku habis, jadi sementara aku memakai model lokal di server — tetap jalan, tapi "
+           "lebih lambat. Kalau mau cepat lagi, isi kredit di openrouter.ai/settings/credits.")
 
 _cache: tuple[float, dict | None] = (0.0, None)
 _last_notified = 0.0

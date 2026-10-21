@@ -28,35 +28,46 @@ PUBLIC_ORIGIN = os.getenv("ADMIN_PUBLIC_ORIGIN", "")
 COOKIE = "jarvis_admin"
 CORE = "http://jarvis-core:8000"
 
-MODEL = r"^[a-z0-9._-]+/[A-Za-z0-9._:-]+$"
-# key, label, is_secret, validation pattern, help text
+OR_KEY = r"^sk-or-[A-Za-z0-9_-]{10,}$"
+# key, label, is_secret, validation pattern, help text. Which AI handles what is NOT here: it is the
+# owner's composition, changed only from the APK (Komposisi AI) — decision 2026-10-21.
 SETTINGS = [
-    ("OPENROUTER_API_KEY", "OpenRouter API key", True, r"^sk-or-[A-Za-z0-9_-]{10,}$",
-     "Dari openrouter.ai/keys."),
-    ("JARVIS_CHAT_MODEL", "Model agen utama (ngobrol)", False, MODEL,
-     "Harus cepat, mendukung tool calling (dan gambar untuk share screen). Default: anthropic/claude-haiku-5.5."),
-    ("JARVIS_DEFAULT_MODEL", "Model worker (Hermes)", False, MODEL,
-     "Dipakai worker yang mengerjakan tugas. Harus mendukung tool calling."),
-    ("JARVIS_EXPERT_MODEL", "Model ahli", False, MODEL,
-     "Dipakai worker hanya saat ia memutuskan butuh kemampuan lebih (delegasi)."),
+    ("OPENROUTER_API_KEY", "OpenRouter API key", True, OR_KEY,
+     "Opsional. Dari openrouter.ai/keys. Tanpa kunci, semua AI berjalan lokal di server (lambat tapi jalan)."),
+    ("OPENROUTER_KEY_CHAT", "OpenRouter key — ngobrol", True, OR_KEY,
+     "Opsional: kunci terpisah untuk agen utama, supaya bisa diberi limit bulanan sendiri di openrouter.ai."),
+    ("OPENROUTER_KEY_HERMES", "OpenRouter key — Hermes", True, OR_KEY,
+     "Opsional: kunci terpisah untuk pekerjaan Hermes (limit sendiri)."),
+    ("OPENROUTER_KEY_LATAR", "OpenRouter key — latar belakang", True, OR_KEY,
+     "Opsional: kunci untuk tugas kecil & latar belakang (situasi, cek diri, laporan)."),
+    ("GROQ_API_KEY", "Groq API key", True, r"^gsk_[A-Za-z0-9]{20,}$",
+     "Opsional. Pengenalan suara cepat (Whisper turbo, gratis ±8 jam audio/hari). console.groq.com/keys."),
+    ("TOMTOM_API_KEY", "TomTom API key (peta)", True, r"^[A-Za-z0-9]{20,}$",
+     "Opsional. Waktu tempuh dengan kondisi macet (gratis 2.500 rute/hari). developer.tomtom.com."),
+    ("ORS_API_KEY", "OpenRouteService key (peta)", True, r"^[A-Za-z0-9=]{20,}$",
+     "Opsional. Rute alternatif tanpa data macet (gratis 2.000/hari). openrouteservice.org."),
+    ("JARVIS_BUDGET_USD", "Anggaran AI per bulan (USD)", False, r"^([0-9]|[1-9][0-9]|100)(\.[0-9]{1,2})?$",
+     "Batas lunak: 80% → tugas latar ke model gratis/lokal, 100% → model berbayar berhenti (lokal tetap jalan)."),
     ("QUIET_HOURS", "Jam tenang notifikasi (WIB)", False, r"^(([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9])?$",
      "Format 22:00-06:00. Di jam ini hanya notifikasi penting yang disampaikan. Kosongkan untuk mematikan."),
     ("WORKER_CONCURRENCY", "Worker berjalan bersamaan", False, r"^([1-9]|1[0-9]|20)$",
      "Jumlah tugas tak terbatas (antre); ini berapa yang dikerjakan sekaligus (1–20)."),
-    ("JARVIS_CODER_MODEL", "Model coding / n8n JSON", False, MODEL,
-     "Membuat JSON workflow n8n."),
+    ("WHISPER_LIVE_MODEL", "Whisper lokal — ucapan", False, r"^(base|small|medium|large-v3-turbo)$",
+     "small: ±3,5 dtk/ucapan, salah ±19%. large-v3-turbo: salah ±10% tapi ±15 dtk/ucapan."),
+    ("WHISPER_FILE_MODEL", "Whisper lokal — rekaman rapat", False, r"^(base|small|medium|large-v3-turbo)$",
+     "small: 1 jam rapat ≈ 25 menit. large-v3-turbo: lebih akurat, ±3 jam per jam rapat."),
     ("N8N_API_KEY", "n8n API key", True, r"^[A-Za-z0-9._-]{20,}$",
      "Buat di https://flow1.cosger.online → Settings → n8n API."),
     ("DEEPGRAM_API_KEY", "Deepgram API key", True, r"^[A-Za-z0-9]{20,}$",
-     "Untuk voice di APK. APK hanya menerima token berumur pendek dari server."),
-    ("DEEPGRAM_MODEL", "Model pengenalan suara", False, r"^[a-z0-9-]+$",
+     "Opsional (mesin suara Deepgram). APK hanya menerima token berumur pendek dari server."),
+    ("DEEPGRAM_MODEL", "Model Deepgram", False, r"^[a-z0-9-]+$",
      "nova-2 terbukti paling akurat untuk bahasa Indonesia (WER ±12%)."),
     ("DEEPGRAM_KEYWORDS", "Kosakata khusus suara", False, r"^[A-Za-z0-9 ,._-]{0,500}$",
-     "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma (mis. nama proyek, orang, tempat)."),
+     "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma. Dipakai juga oleh Whisper."),
 ]
-TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"),
-        ("self", "Diri JARVIS"), ("devices", "Perangkat"), ("app", "Aplikasi"), ("audit", "Audit"),
-        ("settings", "Pengaturan")]
+TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"), ("ai", "Model AI"),
+        ("studio", "Hermes Studio"), ("docs", "Dokumen"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
+        ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
 
@@ -140,6 +151,12 @@ async def _tab_data(tab: str, request: Request) -> dict:
         return {"releases": load_releases()}
     if tab == "self":
         return await core("GET", "/admin/self")
+    if tab == "ai":
+        return {"composition": await core("GET", "/admin/composition"), "llm": await core("GET", "/admin/llm-usage")}
+    if tab == "studio":
+        return {"studio": await core("GET", "/admin/hermes-studio")}
+    if tab == "docs":
+        return {"documents": await core("GET", "/admin/documents")}
     if tab == "settings":
         env = ENV.read()
         return {"fields": [{"key": k, "label": label, "secret": secret, "help": help_,
@@ -281,11 +298,11 @@ async def improvement_revert(request: Request, improvement_id: int):
 
 
 @app.post("/devices", response_class=HTMLResponse)
-async def device_create(request: Request, name: str = Form(...)):
+async def device_create(request: Request, name: str = Form(...), scope: str = Form("owner")):
     if r := guard(request):
         return r
     try:
-        d = await core("POST", "/admin/devices", json={"name": name})
+        d = await core("POST", "/admin/devices", json={"name": name, "scope": scope if scope in ("owner", "basic") else "basic"})
     except CoreError as e:
         return await render(request, "devices", errors=[str(e)])
     return await render(request, "devices", new_device=d)
@@ -361,6 +378,78 @@ async def download_release(request: Request, name: str):
     if not authed(request):
         return RedirectResponse("/login", status_code=303)
     if not APK_NAME.match(name) or name not in {r["file"] for r in load_releases()}:
+        return HTMLResponse("Not found", status_code=404)
+    return FileResponse(RELEASES / name, media_type="application/vnd.android.package-archive", filename=name)
+
+
+@app.get("/docs/{doc_id}")
+async def download_document(request: Request, doc_id: str):
+    if not authed(request):
+        return RedirectResponse("/login", status_code=303)
+    token = ENV.read().get("CORE_ADMIN_TOKEN", "")
+    async with httpx.AsyncClient(base_url=CORE, timeout=60, headers={"X-Admin-Token": token}) as c:
+        r = await c.get(f"/admin/documents/{doc_id}")
+    if r.status_code != 200:
+        return HTMLResponse("Not found", status_code=404)
+    from fastapi.responses import Response
+    return Response(r.content, media_type=r.headers.get("content-type"),
+                    headers={"Content-Disposition": r.headers.get("content-disposition", "attachment")})
+
+
+# ---------- internal API for jarvis-core (the owner's phone console goes through core) ----------
+
+def _internal(request: Request) -> bool:
+    """Only jarvis-core, directly on jarvis-network: the public proxy always adds X-Forwarded-For."""
+    import hmac
+    if "x-forwarded-for" in request.headers or "x-real-ip" in request.headers:
+        return False
+    token = ENV.read().get("CORE_ADMIN_TOKEN", "")
+    return bool(token) and hmac.compare_digest(request.headers.get("x-admin-token", ""), token)
+
+
+@app.get("/internal/settings")
+async def internal_settings(request: Request):
+    if not _internal(request):
+        return HTMLResponse("Not found", status_code=404)
+    env = ENV.read()
+    return {"fields": [{"key": k, "label": label, "secret": secret, "help": help_, "is_set": bool(env.get(k)),
+                        "value": "" if secret else env.get(k, "")} for k, label, secret, _, help_ in SETTINGS],
+            "apply_log": apply_log_tail()}
+
+
+@app.post("/internal/settings")
+async def internal_settings_save(request: Request):
+    if not _internal(request):
+        return HTMLResponse("Not found", status_code=404)
+    body = await request.json()
+    changes, errors = {}, []
+    for key, label, secret, pattern, _ in SETTINGS:
+        if key not in body:
+            continue
+        value = str(body[key]).strip()
+        if secret and not value:
+            continue
+        if value and not re.match(pattern, value):
+            errors.append(f"{label}: format tidak valid")
+            continue
+        changes[key] = value
+    if errors:
+        return {"saved": [], "errors": errors}
+    if changes:
+        ENV.update(changes)
+    return {"saved": sorted(changes), "errors": []}
+
+
+@app.get("/internal/releases")
+async def internal_releases(request: Request):
+    if not _internal(request):
+        return HTMLResponse("Not found", status_code=404)
+    return {"releases": load_releases()}
+
+
+@app.get("/internal/releases/{name}")
+async def internal_release_file(request: Request, name: str):
+    if not _internal(request) or not APK_NAME.match(name) or name not in {r["file"] for r in load_releases()}:
         return HTMLResponse("Not found", status_code=404)
     return FileResponse(RELEASES / name, media_type="application/vnd.android.package-archive", filename=name)
 

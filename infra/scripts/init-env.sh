@@ -20,6 +20,8 @@ sed \
   -e "s|^JARVIS_DB_PASSWORD=$|JARVIS_DB_PASSWORD=$(gen)|" \
   -e "s|^CORE_ADMIN_TOKEN=$|CORE_ADMIN_TOKEN=$(gen)|" \
   -e "s|^MCP_TOKEN=$|MCP_TOKEN=$(gen)|" \
+  -e "s|^LLM_GATEWAY_KEY=$|LLM_GATEWAY_KEY=$(gen)|" \
+  -e "s|^JARVIS_RO_PASSWORD=$|JARVIS_RO_PASSWORD=$(gen)|" \
   -e "s|^ANDROID_KEYSTORE_PASSWORD=$|ANDROID_KEYSTORE_PASSWORD=$(gen)|" \
   -e "s|^HOST_UID=.*|HOST_UID=$(id -u)|" \
   -e "s|^HOST_GID=.*|HOST_GID=$(id -g)|" \
@@ -32,7 +34,8 @@ sed -i \
   -e "s|^ADMIN_SESSION_SECRET=$|ADMIN_SESSION_SECRET=$(gen)|" \
   .env
 
-mkdir -p data/{npm/logs,letsencrypt,hermes,n8n,qdrant,postgres,admin}
+mkdir -p data/{npm/logs,letsencrypt,hermes,n8n,qdrant,postgres,admin,documents,models,llm-slots/chat,llm-slots/worker}
 echo "Created .env (mode 600)."
 echo "Web admin password (shown once, change it after first login): $admin_pw"
-echo "Fill the rest from the web admin: OpenRouter, n8n and Deepgram keys."
+echo "Download the local models: ./scripts/get-models.sh"
+echo "Optional (from the web admin or APK): OpenRouter / Groq / Deepgram keys, n8n API key."

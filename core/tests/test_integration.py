@@ -16,7 +16,16 @@ async def pool(monkeypatch):
     from app import config, db
     monkeypatch.setattr(config.settings, "qdrant_url", os.getenv("TEST_QDRANT_URL", ""))
     p = await db.connect(os.environ["TEST_DATABASE_URL"])
-    await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events RESTART IDENTITY CASCADE")
+    await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
+                    "settings_kv, owner_questions, documents RESTART IDENTITY CASCADE")
+    # factory composition: everything local, no category budgets
+    await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
+        WHEN name IN ('ngobrol', 'cepat', 'penglihatan', 'balas-pesan') THEN '[{"provider": "lokal", "model": "qwen-lokal"}]'::jsonb
+        ELSE '[{"provider": "lokal-kerja", "model": "qwen-lokal"}]'::jsonb END""")
+    from app import budget, gateway
+    gateway.invalidate()
+    budget.forget()
+    budget._notified.clear()
     yield p
     await db.close()
 
@@ -87,20 +96,35 @@ async def test_expired_approval_cannot_be_approved(pool):
 
 
 async def test_chat_core_route_and_privacy_gate(pool, monkeypatch):
-    from app import chat, hermes
+    """Quick commands never reach a model; private/sensitive turns only ever reach the LOCAL model and
+    are never replayed into a later (possibly cloud) prompt."""
+    from app import chat, hermes, llm, memory
+    monkeypatch.setattr(memory, "search", _no_memory)
 
     def no_hermes(*a, **k):
-        raise AssertionError("must not reach Hermes / cloud")
+        raise AssertionError("must not reach Hermes")
 
     monkeypatch.setattr(hermes, "stream", no_hermes)
+    calls = []
+
+    async def fake_stream(messages, tools=None, **kw):
+        calls.append((kw.get("private"), messages))
+        yield {"type": "done", "completion": llm.Completion(text="Oke, kucatat di sini saja.")}
+
+    monkeypatch.setattr(llm, "stream_chat", fake_stream)
     t = await chat.handle("bantuan", "s1", actor="test")
-    assert t.route == "core" and "Perintah cepat" in t.reply
+    assert t.route == "core" and "Perintah cepat" in t.reply and not calls
     t = await chat.handle("simpan ini ya, password: hunter2", "s1", actor="test")
-    assert t.route == "blocked"
+    assert t.route == "assistant" and calls[-1][0] is True
     t = await chat.handle("/privat gaji saya 20jt", "s1", actor="test")
-    assert t.route == "blocked"
+    assert calls[-1][0] is True
+    t = await chat.handle("cuaca hari ini gimana?", "s1", actor="test")
+    assert calls[-1][0] is False
+    replayed = " ".join(str(m.get("content")) for m in calls[-1][1])
+    assert "20jt" not in replayed and "hunter2" not in replayed  # private turns stay out of cloud prompts
     logged = [r["content"] for r in await pool.fetch("SELECT content FROM messages WHERE role='user' ORDER BY id")]
     assert "hunter2" not in " ".join(logged)
+    assert await pool.fetchval("SELECT count(*) FROM messages WHERE route = 'private'") == 4
 
 
 def _fake_llm(monkeypatch, script):
@@ -108,7 +132,7 @@ def _fake_llm(monkeypatch, script):
     from app import llm
     rounds = iter(script)
 
-    async def fake_stream(messages, tools=None, model=None, max_tokens=400, temperature=0.6):
+    async def fake_stream(messages, tools=None, **kw):
         text, calls = next(rounds)
         if text:
             yield {"type": "delta", "text": text}
@@ -116,7 +140,7 @@ def _fake_llm(monkeypatch, script):
             text=text, tool_calls=[llm.ToolCall(f"c{i}", n, a) for i, (n, a) in enumerate(calls)],
             prompt_tokens=50, completion_tokens=5)}
 
-    async def fake_complete(messages, model=None, max_tokens=300):
+    async def fake_complete(messages, **kw):
         return "Harga emas Antam hari ini Rp1,9 juta per gram. Sudah kedengaran?"
 
     monkeypatch.setattr(llm, "stream_chat", fake_stream)
@@ -155,7 +179,7 @@ async def test_delegation_runs_worker_and_reports_back(pool, monkeypatch):
     hub.register(phone)
     worker_prompts = []
 
-    async def fake_worker(text, session_id, image=None):
+    async def fake_worker(text, session_id, image=None, **kw):
         worker_prompts.append((text, session_id))
         yield {"type": "thought", "text": "Cari harga emas."}
         yield {"type": "done", "reply": hermes.HermesReply("Antam Rp1.900.000/gram (logammulia.com)", 900, 40, 5)}
@@ -171,7 +195,7 @@ async def test_delegation_runs_worker_and_reports_back(pool, monkeypatch):
         if any(e["type"] == "report" for e in pushed):
             break
         await asyncio.sleep(0.05)
-    assert worker_prompts[0][1] == "task-1" and "WORKER JARVIS" in worker_prompts[0][0]
+    assert worker_prompts[0][1] == "task-1" and "[tugas #1]" in worker_prompts[0][0]
     task = await pool.fetchrow("SELECT status, result FROM tasks WHERE id = 1")
     assert (task["status"], task["result"]) == ("completed", "Antam Rp1.900.000/gram (logammulia.com)")
     kinds = [e["type"] for e in pushed]
@@ -269,16 +293,18 @@ async def test_location_whereami_and_agent_context(pool, monkeypatch):
     from app import llm, memory
     seen = {}
 
-    async def fake(messages, tools=None, model=None, max_tokens=400, temperature=0.6):
-        seen["situation"] = messages[1]["content"]
+    async def fake(messages, tools=None, **kw):
+        seen["system"] = messages[0]["content"]
         seen["user"] = messages[-1]["content"]
         yield {"type": "done", "completion": llm.Completion(text="Cerah.")}
 
     monkeypatch.setattr(llm, "stream_chat", fake)
     monkeypatch.setattr(memory, "search", _no_memory)
     await chat.handle("cuaca di sini gimana?", "s9", actor="test", location=loc)
-    assert seen["situation"].startswith("[Konteks perangkat") and "Kelapa Gading" in seen["situation"]
-    assert seen["user"] == "cuaca di sini gimana?"
+    # per-turn context rides in the owner's message (last), so the static system prompt stays cacheable
+    assert "Kelapa Gading" not in seen["system"] and "TENTANG DIRIMU" in seen["system"]
+    assert seen["user"].startswith("[Konteks perangkat") and "Kelapa Gading" in seen["user"]
+    assert seen["user"].endswith("UCAPAN PEMILIK:\ncuaca di sini gimana?")
     logged = await pool.fetchval("SELECT content FROM messages WHERE role='user' ORDER BY id DESC LIMIT 1")
     assert logged == "cuaca di sini gimana?"  # context is not written into the message log
 
@@ -325,7 +351,7 @@ async def test_notification_triage_levels(pool, monkeypatch):
         '{"decisions": [{"id": 3, "decision": "urgent"}], "say": "Ada transaksi Rp4,5 juta dari BCA yang tidak biasa."}',
     ])
 
-    async def fake_complete(messages, model=None, max_tokens=300):
+    async def fake_complete(messages, **kw):
         assert "482913" not in messages[1]["content"]  # OTP never reaches the model
         return next(answers)
 
@@ -361,7 +387,7 @@ async def test_quiet_hours_suppress_announcements(pool, monkeypatch):
     hub.register(phone)
     monkeypatch.setattr(notifications, "quiet_now", lambda now=None: True)
 
-    async def fake_complete(messages, model=None, max_tokens=300):
+    async def fake_complete(messages, **kw):
         return '{"decisions": [{"id": 1, "decision": "announce"}], "say": "Ada pesan dari Ani."}'
 
     monkeypatch.setattr(llm, "complete", fake_complete)
@@ -394,7 +420,11 @@ async def test_self_description_reflects_real_config(pool, monkeypatch):
     monkeypatch.setattr(status, "check_all", no_health)
     monkeypatch.setattr(config.settings, "deepgram_model", "nova-2")
     text = await self_model.describe(full=True)
-    assert "Deepgram (model nova-2, bahasa id" in text and "BELUM bisa mengenali identitas suara" in text
+    assert "Whisper LOKAL" in text and "BELUM bisa memastikan identitas suara" in text  # default composition
+    assert "Inti permanen: Hermes" in text and "Anggaran AI bulan ini" in text
+    from app import composition
+    await composition.update({"stt": "deepgram"}, "test")
+    assert "Deepgram (model nova-2)" in await self_model.describe()
 
 
 async def test_selfcheck_applies_low_risk_and_queues_settings(pool, monkeypatch):
@@ -454,7 +484,7 @@ async def test_camera_image_reaches_the_worker(pool, monkeypatch):
     monkeypatch.setattr(memory, "search", _no_memory)
     seen = {}
 
-    async def fake_worker(text, session_id, image=None):
+    async def fake_worker(text, session_id, image=None, **kw):
         seen["image"], seen["text"] = image, text
         yield {"type": "done", "reply": hermes.HermesReply("Kampas rem Honda Beat ±Rp45.000", 1, 1, 1)}
 
@@ -472,36 +502,112 @@ async def test_camera_image_reaches_the_worker(pool, monkeypatch):
     hub.reset()
 
 
-async def test_empty_balance_is_told_plainly_once(pool, monkeypatch):
-    import asyncio
-    from app import billing, chat, hermes, hub, llm, memory, workers
-    hub.reset()
-    monkeypatch.setattr(memory, "search", _no_memory)
+def _fake_providers(monkeypatch, handler):
+    """Every provider call of the gateway goes to handler(request) -> httpx.Response."""
+    import httpx
+    from app import gateway
+    monkeypatch.setattr(gateway, "_client", lambda timeout: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    gateway.invalidate()
+
+
+def _sse(text: str, cost: float = 0.0, model: str = "m") -> bytes:
+    import json as _j
+    chunks = [{"choices": [{"index": 0, "delta": {"content": text}}], "model": model},
+              {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+               "usage": {"prompt_tokens": 100, "completion_tokens": 5, "cost": cost,
+                         "prompt_tokens_details": {"cached_tokens": 80}}}]
+    return b"".join(f"data: {_j.dumps(c)}\n\n".encode() for c in chunks) + b"data: [DONE]\n\n"
+
+
+async def _collect(category, **kw):
+    from app import gateway
+    out = []
+    async for c in gateway.stream(category, {"messages": [{"role": "user", "content": "halo"}]}, **kw):
+        out += [ch["delta"].get("content", "") for ch in c.get("choices", [])]
+    return "".join(out)
+
+
+async def test_gateway_fails_over_before_first_byte_and_records_cost(pool, monkeypatch):
+    import httpx
+    from app import billing, gateway
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     monkeypatch.setattr(billing, "_last_notified", 0.0)
+    await pool.execute("""UPDATE llm_categories SET routes = '[{"provider":"openrouter","model":"a/broke"},
+                          {"provider":"openrouter","model":"b/works"}]' WHERE name = 'ngobrol'""")
+    seen = []
 
-    async def broke(*a, **k):
-        raise llm.LLMError("OpenRouter HTTP 402: requires more credits")
-        yield  # pragma: no cover
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+        body = _j.loads(req.content)
+        seen.append((req.url.host, body["model"], req.headers.get("x-session-id")))
+        if body["model"] == "a/broke":
+            return httpx.Response(402, text='{"error":{"message":"requires more credits"}}')
+        return httpx.Response(200, content=_sse("Halo juga!", cost=0.0012), headers={"content-type": "text/event-stream"})
 
-    monkeypatch.setattr(llm, "stream_chat", broke)
-    t = await chat.handle("hi", "s10", actor="test")
-    assert t.route == "error" and t.reply == billing.MESSAGE  # no raw "HTTP 402" text for the owner
-    t = await chat.handle("halo?", "s10", actor="test")
-    assert await pool.fetchval("SELECT count(*) FROM reports WHERE text = $1", billing.MESSAGE) == 1  # once per 12 h
+    _fake_providers(monkeypatch, handler)
+    assert await _collect("ngobrol", caller="chat", session_id="sess-1") == "Halo juga!"
+    assert [m for _, m, _ in seen] == ["a/broke", "b/works"] and seen[1][2] == "sess-1"
+    rows = await pool.fetch("SELECT model, ok, cost_usd::float AS c, cached_tokens FROM llm_usage ORDER BY id")
+    assert [(r["model"], r["ok"]) for r in rows] == [("a/broke", False), ("b/works", True)]
+    assert rows[1]["c"] == 0.0012 and rows[1]["cached_tokens"] == 80
+    import asyncio
+    await asyncio.sleep(0.1)  # the 402 makes JARVIS tell the owner the credit ran out (once per 12 h)
+    assert await pool.fetchval("SELECT count(*) FROM reports WHERE text = $1", billing.MESSAGE) == 1
 
-    async def worker_402(text, session_id, image=None):
-        yield {"type": "done", "reply": hermes.HermesReply("Billing or credits exhausted: HTTP 402: can only afford 81", 1, 1, 1)}
 
-    monkeypatch.setattr(hermes, "stream", worker_402)
-    task = await workers.spawn("Cek diri", "instruksi uji coba", "s10", "test", kind="selfcheck")
-    for _ in range(50):
-        if await pool.fetchval("SELECT status FROM tasks WHERE id = $1", task["id"]) == "failed":
-            break
-        await asyncio.sleep(0.05)
-    assert await pool.fetchval("SELECT status FROM tasks WHERE id = $1", task["id"]) == "failed"
-    # no misleading "Aku sudah mengecek diriku." and no second balance report
-    assert await pool.fetchval("SELECT count(*) FROM reports") == 1
-    hub.reset()
+async def test_gateway_without_keys_or_for_private_content_uses_the_local_model(pool, monkeypatch):
+    import httpx
+    from app import composition
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    await composition.apply_preset("seimbang", "test")
+    hosts = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+        hosts.append(req.url.host)
+        assert _j.loads(req.content)["cache_prompt"] is True  # local: reuse the prompt cache
+        return httpx.Response(200, content=_sse("Dari lokal."), headers={"content-type": "text/event-stream"})
+
+    _fake_providers(monkeypatch, handler)
+    assert await _collect("ngobrol", caller="chat") == "Dari lokal."
+    assert hosts == ["llama-chat"]  # no key: cloud routes skipped
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    hosts.clear()
+    assert await _collect("ngobrol", caller="chat", private=True) == "Dari lokal."
+    assert hosts == ["llama-chat"]  # private content never goes to the cloud, key or not
+    hosts.clear()
+    await _collect("web", caller="hermes", private=True, worker=True)
+    assert hosts == ["llama-worker"]
+
+
+async def test_budget_cap_stops_paid_models_but_keeps_free_and_local(pool, monkeypatch):
+    import httpx
+    from app import budget, gateway
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    await pool.execute("""UPDATE llm_categories SET routes = '[{"provider":"openrouter","model":"x/paid"},
+                          {"provider":"openrouter","model":"y/gratis:free"}]' WHERE name = 'ngobrol'""")
+    await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, ok, cost_usd) VALUES ('web', 'hermes', 'openrouter', 'z', true, 25)")
+    budget.forget()
+    routes = await gateway.plan("ngobrol", caller="chat")
+    assert [r.model for r in routes] == ["y/gratis:free", "qwen-lokal"]
+    st = await budget.state(force=True)
+    assert st["level"] == 100
+    assert await pool.fetchval("SELECT count(*) FROM reports WHERE text LIKE 'Anggaran AI bulan ini%'") == 1
+
+
+async def test_composition_only_changes_models_never_the_core(pool):
+    from app import composition
+    with pytest.raises(composition.CompositionError, match="inti JARVIS"):
+        await composition.update({"hermes": "off"}, "test")
+    with pytest.raises(composition.CompositionError, match="privat"):
+        await composition.update({"categories": {"privat": {"routes": [{"provider": "openrouter", "model": "a/b"}]}}}, "test")
+    with pytest.raises(composition.CompositionError, match="penyedia"):
+        await composition.update({"categories": {"coding": {"routes": [{"provider": "nope", "model": "a/b"}]}}}, "test")
+    c = await composition.update({"categories": {"coding": {"routes": [{"provider": "openrouter", "model": "anthropic/claude-sonnet-5.5"}],
+                                                            "budget_usd": 8}}, "stt": "groq"}, "test")
+    coding = next(x for x in c["categories"] if x["name"] == "coding")
+    assert coding["budget_usd"] == 8 and c["stt"]["engine"] == "groq" and c["preset"] == "kustom"
+    assert c["core"] == ["Hermes Agent", "Qdrant", "n8n"]
 
 
 async def test_spawn_without_instruction_is_refused(pool, monkeypatch):
@@ -517,3 +623,94 @@ async def test_unreadable_selfcheck_is_not_reported_as_success(pool):
     from app import selfimprove
     said = await selfimprove.on_selfcheck(None, "Billing or credits exhausted")
     assert "tidak menghasilkan temuan" in said and "Aku sudah mengecek diriku." != said
+
+
+async def test_meeting_pipeline_with_local_engine(pool, monkeypatch, tmp_path):
+    """Chunks → (fake) jarvis-ears transcription + diarization → minutes (fake model) → docx + report.
+    A confidential meeting never touches a cloud engine or model."""
+    import httpx
+    from app import config, documents, llm, meetings, memory
+    monkeypatch.setattr(meetings, "ROOT", tmp_path / "meetings")
+    monkeypatch.setattr(documents, "ROOT", tmp_path / "documents")
+    monkeypatch.setattr(config.settings, "groq_api_key", "gsk_should_not_be_used")
+    calls = []
+
+    async def fake_ears(path, body, timeout=0):
+        calls.append(path)
+        if path == "/meeting/transcribe":
+            return httpx.Response(200, json={"segments": [
+                {"start": 0, "end": 4, "text": "Rapat UAT kita mulai."}, {"start": 5, "end": 9, "text": "Opik siapkan data hari Kamis."},
+                {"start": 10, "end": 11, "text": "Terima kasih."}]})
+        return httpx.Response(200, json={"segments": [{"start": 0, "end": 4.5, "speaker": 0}, {"start": 4.6, "end": 12, "speaker": 1}],
+                                         "voices": {}})
+
+    private_flags = []
+
+    async def fake_complete(messages, **kw):
+        private_flags.append(kw.get("private"))
+        if "NOTULEN" in messages[0]["content"]:
+            return ('{"ringkasan": "Persiapan UAT.", "keputusan": ["UAT Kamis"], '
+                    '"action_items": [{"siapa": "Opik", "apa": "siapkan data", "tenggat": "Kamis"}], "pertanyaan": [], "topik": ["UAT"]}')
+        return "Catatan: UAT, Opik siapkan data Kamis."
+
+    async def no_index(*a, **k):
+        return None
+
+    monkeypatch.setattr(meetings, "_ears", fake_ears)
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(meetings, "_index", no_index)
+    from app import composition
+    await composition.update({"stt": "groq"}, "test")
+    with pytest.raises(meetings.MeetingError):
+        await meetings.create("Tanpa izin", False, False)
+    m = await meetings.create("UAT Autotoko", True, True)
+    mid = str(m["id"])
+    await meetings.add_chunk(mid, 0, b"OggS" + b"\0" * 100)
+    await meetings.add_chunk(mid, 0, b"OggS" + b"\0" * 120)  # re-upload after a drop: replaced, not duplicated
+    with pytest.raises(meetings.MeetingError, match="baru 1 dari 2"):
+        await meetings.finish(mid, 120, 2, "test")
+    await meetings.add_chunk(mid, 1, b"OggS" + b"\0" * 100)
+    await meetings.finish(mid, 120, 2, "test")
+    await meetings.process(mid)
+    done = await meetings.get(mid)
+    assert done["status"] == "done" and done["engine"] == "whisper"  # confidential: local even though Groq is chosen
+    assert [s["speaker"] for s in done["transcript"]] == ["Pembicara 1", "Pembicara 2"]  # "Terima kasih." dropped
+    assert done["summary"]["action_items"][0]["siapa"] == "Opik"
+    assert set(private_flags) == {True}
+    assert await pool.fetchval("SELECT format FROM documents WHERE id = $1", done["document_id"]) == "docx"
+    assert await pool.fetchval("SELECT count(*) FROM reports WHERE text LIKE 'Notulen rapat UAT Autotoko%'") == 1
+    assert "/meeting/concat" not in calls
+
+
+async def test_draft_reply_asks_before_cloud_and_never_sends(pool, monkeypatch):
+    from app import chat, drafts, hub, llm, memory
+    hub.reset()
+    pushed = []
+
+    async def phone(ev):
+        pushed.append(ev)
+
+    hub.register(phone)
+    monkeypatch.setattr(memory, "search", _no_memory)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    await pool.execute("""UPDATE llm_categories SET routes = '[{"provider":"openrouter","model":"qwen/qwen3.7-flash"}]'
+                          WHERE name = 'balas-pesan'""")
+    assert await drafts.needs_confirmation()
+
+    async def fake_complete(messages, **kw):
+        assert "Bu Rina: Pak, bisa rapat besok jam 9?" in messages[1]["content"]
+        return ('{"to": "Bu Rina", "channel": "whatsapp", "summary": "minta rapat besok jam 9", "variants": ['
+                '{"label": "Singkat", "text": "Bisa, Bu."}, {"label": "Santai", "text": "Siap Bu, jam 9 ya."},'
+                '{"label": "Formal", "text": "Baik Bu Rina, saya bisa hadir pukul 09.00."}]}')
+
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    _fake_llm(monkeypatch, [("", [("draft_reply", {"instruction": "terima"})]), ("Isi chat ini akan diproses cloud, boleh?", [])])
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    t = await chat.handle("bantu balas ini", "s20", actor="test", screen_text="Bu Rina: Pak, bisa rapat besok jam 9?")
+    assert "boleh" in t.reply and not [e for e in pushed if e.get("type") == "stage"]
+    _fake_llm(monkeypatch, [("", [("draft_reply", {"instruction": "terima", "confirmed": True})]), ("Drafnya sudah di layar.", [])])
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    await chat.handle("boleh", "s20", actor="test", screen_text="Bu Rina: Pak, bisa rapat besok jam 9?")
+    stage_ev = [e for e in pushed if e.get("type") == "stage"][-1]
+    assert stage_ev["panel"] == "draft" and len(stage_ev["payload"]["variants"]) == 3
+    hub.reset()

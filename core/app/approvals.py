@@ -39,8 +39,14 @@ async def _exec_setting_change(detail: dict) -> dict:
     return {"applied": {detail["key"]: detail["value"]}}
 
 
+async def _exec_hermes_command(detail: dict) -> dict:
+    # The worker that received Hermes' approval.request watches this row and answers Hermes itself.
+    return {"note": "diteruskan ke Hermes", "run_id": detail.get("run_id")}
+
+
 EXECUTORS: dict[str, Executor] = {
     "manual": _exec_manual,
+    "hermes_command": _exec_hermes_command,
     "n8n_activate_workflow": _exec_n8n_activate,
     "setting_change": _exec_setting_change,
 }

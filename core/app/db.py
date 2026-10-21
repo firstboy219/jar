@@ -49,3 +49,19 @@ async def migrate(p: asyncpg.Pool) -> list[str]:
         finally:
             await conn.execute("SELECT pg_advisory_unlock(4242)")
     return applied
+
+
+READONLY_TABLES = ("messages", "tasks", "reports", "approvals", "memories", "audit_events", "llm_usage",
+                   "notifications", "context_log", "improvements", "documents", "owner_questions",
+                   "llm_categories", "llm_providers", "meetings")
+
+
+async def grant_readonly(p: asyncpg.Pool) -> bool:
+    """Hermes' db_query_ro connects as jarvis_ro (made by infra/postgres/init-core-db.sh): SELECT only,
+    never device tokens or settings. Re-granted at every start, so new tables can join the list."""
+    async with p.acquire() as conn:
+        if not await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = 'jarvis_ro'"):
+            return False
+        await conn.execute("GRANT USAGE ON SCHEMA public TO jarvis_ro")
+        await conn.execute(f"GRANT SELECT ON {', '.join(READONLY_TABLES)} TO jarvis_ro")
+    return True

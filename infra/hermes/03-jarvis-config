@@ -1,9 +1,15 @@
 #!/command/with-contenv sh
 # Mounted into /etc/cont-init.d/ by docker-compose.yml. Runs as root on every container start
-# (after 01-hermes-setup seeds $HERMES_HOME) and makes config.yaml follow infra/.env:
-#   model.*       main model (config.yaml would otherwise override HERMES_INFERENCE_MODEL)
-#   delegation.*  stronger model Hermes may delegate to when it decides it needs it (tiered routing)
-#   mcp_servers   jarvis-tools (memory, approvals, n8n) with its bearer token
+# (after 01-hermes-setup seeds $HERMES_HOME) and makes config.yaml follow JARVIS (ADR-017/018):
+#   providers.jarvis  every model call goes through jarvis-core's LLM gateway (/llm/v1): the owner's
+#                     composition picks the AI per category, fails over, and falls back to the local model
+#   model / routes    default category 'web'; jarvis-<category> aliases for tasks, delegation, cron, vision
+#   memory            Hermes' own memory ON, mirrored into JARVIS' one memory by the jarvis-memory plugin
+#   toolsets          everything the API server can use, plus kanban, tts, video, project, debugging
+#   mcp_servers       jarvis-tools (memory, the owner, the phone's screen, documents, approvals, n8n, BR-003)
+# Hermes decides its own flow (tools, skills, sub-agents, schedules). What stays fixed are the owner's
+# safety rules: approvals for dangerous actions (bridged to the phone), no credentials for n8n/DB/admin,
+# web content is data, budget enforced by the gateway.
 set -e
 cd /opt/hermes
 s6-setuidgid hermes /opt/hermes/.venv/bin/python - <<'PY'
@@ -14,41 +20,87 @@ with open(path) as f:
     cfg = yaml.safe_load(f) or {}
 
 env = os.environ.get
-model = cfg.setdefault("model", {})
-model["provider"] = env("HERMES_INFERENCE_PROVIDER") or model.get("provider", "auto")
-if env("HERMES_INFERENCE_MODEL"):
-    model["default"] = env("HERMES_INFERENCE_MODEL")
+GATEWAY = "http://jarvis-core:8000/llm/v1"
+CATEGORIES = ["web", "coding", "produktivitas", "analisis", "latar-belakang", "privat", "penglihatan", "cepat"]
 
+# --- every model call → JARVIS' LLM gateway ---
+providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}
+providers["jarvis"] = {"name": "jarvis", "base_url": GATEWAY, "key_env": "LLM_GATEWAY_KEY",
+                       "api_mode": "chat_completions", "default_model": "jarvis-web"}
+cfg["providers"] = providers
+cfg["model"] = {"provider": "jarvis", "default": "jarvis-web", "base_url": GATEWAY,
+                # what the gateway advertises; Hermes needs >= 64k, and the window bounds cost too
+                "context_length": 65536, "max_tokens": 8192}
+overrides = cfg.get("model_overrides") if isinstance(cfg.get("model_overrides"), dict) else {}
+overrides["custom:jarvis"] = {"_default": {"context_window": 65536, "supports_tools": True, "supports_vision": True}}
+cfg["model_overrides"] = overrides
+cfg.setdefault("agent", {})["reasoning_effort"] = "low"
+
+# Per-task category: core starts each run with model "jarvis-<category>" (api_server.model_routes).
+platforms = cfg.setdefault("platforms", {}) if isinstance(cfg.get("platforms"), dict) or cfg.get("platforms") is None else {}
+cfg["platforms"] = platforms
+api = platforms.setdefault("api_server", {})
+api["enabled"] = True
+extra = api.setdefault("extra", {})
+extra["model_routes"] = {f"jarvis-{c}": {"model": f"jarvis-{c}", "provider": "jarvis", "base_url": GATEWAY}
+                         for c in CATEGORIES}
+
+# --- freedom: Hermes chooses its own flow ---
+agent = cfg.setdefault("agent", {})
+agent["max_turns"] = 90
+agent.pop("disabled_toolsets", None)
 delegation = cfg.setdefault("delegation", {})
-if env("JARVIS_EXPERT_MODEL"):
-    delegation["model"] = env("JARVIS_EXPERT_MODEL")
-    delegation["provider"] = "openrouter"
-delegation["max_concurrent_children"] = 2
-delegation["subagent_auto_approve"] = False  # dangerous commands in subagents are denied, never auto-run
-
-# Long-term memory lives in jarvis-core (Postgres + Qdrant), reached via the jarvis MCP tools.
-# Hermes' built-in MEMORY.md/USER.md would be a second, unmanaged source of truth.
-mem = cfg.setdefault("memory", {})
-mem["memory_enabled"] = False
-mem["user_profile_enabled"] = False
-mem["nudge_interval"] = 0
-
-# Bound one turn's cost/time (default 500 tool-calling iterations).
-cfg.setdefault("agent", {})["max_turns"] = 30
-
-# The worker model is text-only; image analysis (vision_analyze, browser screenshots) uses a cheap
-# vision model on OpenRouter instead of the pricier default.
+delegation.update({"model": "jarvis-analisis", "provider": "jarvis", "base_url": GATEWAY,
+                   "max_concurrent_children": 4, "child_timeout_seconds": 1800,  # a hung child must not hang the task
+                   "subagent_auto_approve": False})
+cron = cfg.setdefault("cron", {})
+cron.update({"model": "jarvis-latar-belakang", "model_provider": "jarvis",
+             "allow_agent_scheduling": True})  # Hermes may schedule its own jobs (results via notify_owner)
+# Every auxiliary model task (vision, compression, approval guardian, curator, titles, kanban, …) goes
+# through the gateway too: nothing bypasses the owner's composition and budget.
+from hermes_cli.config_defaults import DEFAULT_CONFIG
+AUX_CATEGORY = {"vision": "penglihatan", "compression": "latar-belakang", "curator": "latar-belakang",
+                "background_review": "latar-belakang", "kanban_decomposer": "analisis", "goal_judge": "analisis",
+                "moa_reference": "analisis", "moa_aggregator": "analisis"}
 aux = cfg.setdefault("auxiliary", {})
-vision = aux.setdefault("vision", {})
-vision.update({"provider": "openrouter", "model": "google/gemma-4-26b-a4b-it", "reasoning_effort": "none"})
+for task, default in DEFAULT_CONFIG["auxiliary"].items():
+    if isinstance(default, dict) and "provider" in default:
+        cur = aux.get(task) if isinstance(aux.get(task), dict) else {}
+        aux[task] = {**cur, "provider": "jarvis", "model": f"jarvis-{AUX_CATEGORY.get(task, 'cepat')}", "base_url": GATEWAY}
+
+pt = cfg.get("platform_toolsets") if isinstance(cfg.get("platform_toolsets"), dict) else {}
+pt["api_server"] = ["hermes-api-server", "kanban", "tts", "video", "project", "debugging", "todo"]
+cfg["platform_toolsets"] = pt
+
+# Memory: Hermes' own memory on, mirrored into JARVIS' shared memory (plugin infra/hermes/plugins/jarvis-memory).
+mem = cfg.setdefault("memory", {})
+mem.update({"memory_enabled": True, "user_profile_enabled": True, "nudge_interval": 10, "provider": "jarvis-memory"})
+plugins = cfg.setdefault("plugins", {}) if isinstance(cfg.get("plugins"), dict) else {}
+enabled = plugins.get("enabled") if isinstance(plugins.get("enabled"), list) else []
+if "jarvis-memory" not in enabled:
+    enabled.append("jarvis-memory")
+plugins["enabled"] = enabled
+cfg["plugins"] = plugins
+
+# Skills: Hermes may write and improve its own skills; self-made ones are scanned before use.
+skills = cfg.setdefault("skills", {})
+skills["guard_agent_created"] = True
+
+# --- the owner's safety rules (knowledge base), not flow control ---
+approvals = cfg.setdefault("approvals", {})
+approvals.update({"mode": "smart", "timeout": 1800,  # the owner answers from the phone; give them time
+                  "smart_policy": "ESCALATE anything that sends messages/emails/posts, spends money, deletes data, "
+                                  "or changes production systems, DNS, firewall or the host."})
+cfg.setdefault("tool_loop_guardrails", {})["hard_stop_enabled"] = True
+cfg.setdefault("prompt_caching", {})["cache_ttl"] = "5m"
 
 servers = cfg.get("mcp_servers") or {}
 if env("MCP_TOKEN"):
-    servers["jarvis"] = {"url": "http://jarvis-tools:8100/mcp",
+    servers["jarvis"] = {"url": "http://jarvis-tools:8100/mcp", "timeout": 330,
                          "headers": {"Authorization": "Bearer " + env("MCP_TOKEN")}}
 cfg["mcp_servers"] = servers
 
 with open(path, "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
-print(f"[jarvis] model={model.get('default')} expert={delegation.get('model')} mcp={list(servers)}")
+print(f"[jarvis] gateway={GATEWAY} routes={len(extra['model_routes'])} memory={mem['provider']} mcp={list(servers)}")
 PY

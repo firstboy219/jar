@@ -1,8 +1,8 @@
-"""Client for Hermes Agent's OpenAI-compatible API (internal network only).
+"""Client for Hermes Agent's API server (internal network only).
 
-stream() turns Hermes' SSE into small typed events the APK renders as JARVIS' "thought stream":
-reasoning deltas, tool start/finish, answer deltas, and a final result with usage.
-Closing the stream early (client gone) makes Hermes interrupt the agent run.
+stream() starts a run (/v1/runs) and turns its event stream into small typed events the APK renders
+as JARVIS' "thought stream": reasoning, tool start/finish, answer deltas, approval requests (bridged to
+the owner's Approval Center) and a final result with usage.
 """
 
 import json
@@ -42,7 +42,18 @@ TOOL_NAMES = {
     "get_approval": "Memeriksa persetujuan",
     "n8n_list_workflows": "Melihat workflow n8n",
     "n8n_draft_workflow": "Merancang workflow n8n",
-    "delegate_task": "Bertanya ke model ahli",
+    "delegate_task": "Membagi tugas ke sub-agen",
+    "ask_owner": "Bertanya ke pemilik",
+    "notify_owner": "Memberi kabar pemilik",
+    "create_document": "Membuat dokumen",
+    "stage_show": "Menampilkan di layar HP",
+    "db_query_ro": "Membaca database",
+    "host_metrics": "Memeriksa server",
+    "read_logs": "Membaca log",
+    "skill_manage": "Mengelola skill",
+    "cronjob_manage": "Mengatur jadwal",
+    "execute_code": "Menjalankan kode",
+    "vision_analyze": "Melihat gambar",
     "web_search": "Mencari di web",
     "web_extract": "Membaca halaman web",
     "terminal": "Menjalankan perintah",
@@ -74,58 +85,91 @@ def parse_sse(lines: list[str]) -> tuple[str | None, dict | None]:
     return event, json.loads(raw)
 
 
-async def stream(text: str, session_id: str, image: str | None = None) -> AsyncIterator[dict]:
-    """Yields {"type": "thought"|"tool"|"delta"|"done", ...}; raises HermesError on failure."""
+async def stream(text: str, session_id: str, image: str | None = None, model: str = "jarvis-web",
+                 on_run=None) -> AsyncIterator[dict]:
+    """Run one Hermes turn via the durable runs API (/v1/runs), which — unlike /v1/chat/completions —
+    carries approval requests. Yields {"type": "thought"|"tool"|"delta"|"approval"|"done", ...};
+    raises HermesError on failure. `model` is a gateway alias (jarvis-<category>) mapped by Hermes'
+    api_server.model_routes. The image is not sent: workers receive its description in the text."""
     started = time.monotonic()
     answer: list[str] = []
-    usage: dict = {}
-    error: str | None = None
+    headers = {"Authorization": f"Bearer {settings.hermes_api_key}"}
     try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as c:
+            r = await c.post(f"{settings.hermes_url}/v1/runs", headers=headers,
+                             json={"input": text, "session_id": session_header(session_id), "model": model})
+            if r.status_code not in (200, 201, 202):
+                raise HermesError(f"Hermes HTTP {r.status_code}: {r.text[:300]}")
+            run_id = r.json().get("run_id") or r.json().get("id")
+        if not run_id:
+            raise HermesError("Hermes tidak memberi run_id")
+        if on_run:
+            await on_run(run_id)
         async with httpx.AsyncClient(timeout=httpx.Timeout(settings.hermes_timeout, connect=10)) as c:
-            async with c.stream(
-                "POST", f"{settings.hermes_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {settings.hermes_api_key}",
-                         "X-Hermes-Session-Id": session_header(session_id)},
-                json={"model": "hermes-agent", "stream": True,
-                      "messages": [{"role": "user", "content": text if not image else [
-                          {"type": "text", "text": text},
-                          {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]}]},
-            ) as r:
+            async with c.stream("GET", f"{settings.hermes_url}/v1/runs/{run_id}/events", headers=headers) as r:
                 if r.status_code != 200:
-                    body = (await r.aread()).decode(errors="replace")
-                    raise HermesError(f"Hermes HTTP {r.status_code}: {body[:300]}")
+                    raise HermesError(f"Hermes HTTP {r.status_code}: {(await r.aread())[:300]!r}")
                 frame: list[str] = []
                 async for line in r.aiter_lines():
                     if line:
                         frame.append(line)
                         continue
-                    event, payload = parse_sse(frame)
+                    _, payload = parse_sse(frame)
                     frame = []
-                    if payload is None:
+                    if not payload:
                         continue
-                    if event == "hermes.tool.progress":
-                        yield tool_event(payload)
-                    elif event is None and payload.get("choices"):
-                        choice = payload["choices"][0]
-                        delta = choice.get("delta") or {}
-                        if delta.get("reasoning_content"):
-                            yield {"type": "thought", "text": delta["reasoning_content"]}
-                        if delta.get("content"):
-                            answer.append(delta["content"])
-                            yield {"type": "delta", "text": delta["content"]}
-                        if choice.get("finish_reason"):
-                            usage = payload.get("usage") or {}
-                            if choice["finish_reason"] != "stop":
-                                error = (payload.get("error") or {}).get("message") or choice["finish_reason"]
+                    ev = payload.get("event")
+                    if ev == "message.delta" and payload.get("delta"):
+                        answer.append(payload["delta"])
+                        yield {"type": "delta", "text": payload["delta"]}
+                    elif ev == "reasoning.available" and payload.get("text"):
+                        yield {"type": "thought", "text": payload["text"]}
+                    elif ev in ("tool.started", "tool.completed", "tool.failed"):
+                        yield tool_event({"tool": payload.get("tool"), "label": payload.get("preview"),
+                                          "toolCallId": f"{payload.get('tool')}-{payload.get('seq', '')}",
+                                          "status": {"tool.started": "running", "tool.completed": "error" if payload.get("error") else "completed",
+                                                     "tool.failed": "error"}[ev]})
+                    elif ev == "approval.request":
+                        yield {"type": "approval", "run_id": run_id, "request_id": payload.get("request_id"),
+                               "command": str(payload.get("command") or "")[:2000],
+                               "description": str(payload.get("description") or "")[:500],
+                               "choices": payload.get("choices") or ["once", "deny"]}
+                    elif ev == "run.completed":
+                        usage = payload.get("usage") or {}
+                        text_out = str(payload.get("output") or "").strip() or "".join(answer).strip()
+                        yield {"type": "done", "reply": HermesReply(
+                            text=text_out, prompt_tokens=usage.get("input_tokens") or usage.get("prompt_tokens"),
+                            completion_tokens=usage.get("output_tokens") or usage.get("completion_tokens"),
+                            latency_ms=int((time.monotonic() - started) * 1000))}
+                        return
+                    elif ev in ("run.failed", "run.cancelled", "run.interrupted"):
+                        raise HermesError(f"Hermes gagal: {str(payload.get('error') or ev)[:300]}")
     except httpx.HTTPError as e:
         raise HermesError(f"Hermes tidak dapat dihubungi ({type(e).__name__})") from e
-    if error and not answer:
-        raise HermesError(f"Hermes gagal: {error[:300]}")
-    yield {"type": "done", "reply": HermesReply(
-        text="".join(answer).strip(),
-        prompt_tokens=usage.get("prompt_tokens"),
-        completion_tokens=usage.get("completion_tokens"),
-        latency_ms=int((time.monotonic() - started) * 1000))}
+    raise HermesError("Hermes berhenti tanpa hasil")
+
+
+async def answer_approval(run_id: str, approve: bool, request_id: str | None = None) -> bool:
+    """Owner's decision on a dangerous command Hermes paused for."""
+    body = {"choice": "once" if approve else "deny"}
+    if request_id:
+        body["request_id"] = request_id
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(f"{settings.hermes_url}/v1/runs/{run_id}/approval", json=body,
+                             headers={"Authorization": f"Bearer {settings.hermes_api_key}"})
+        return r.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+async def stop(run_id: str) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(f"{settings.hermes_url}/v1/runs/{run_id}/stop",
+                         headers={"Authorization": f"Bearer {settings.hermes_api_key}"})
+    except httpx.HTTPError:
+        pass
 
 
 async def chat(text: str, session_id: str) -> HermesReply:

@@ -1,0 +1,7 @@
+fastapi==0.142.4
+uvicorn==0.54.0
+faster-whisper==1.2.1
+ctranslate2==4.8.2
+sherpa-onnx==1.13.8
+numpy==2.5.3
+soundfile==0.14.0

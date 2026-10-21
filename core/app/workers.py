@@ -8,7 +8,7 @@ result becomes a spoken report (see reports.py).
 import asyncio
 import logging
 
-from . import audit, db, hermes, hub, memory, reports
+from . import approvals, audit, db, hermes, hub, memory, reports
 from .config import settings
 from .location import Location, context_prefix
 
@@ -17,12 +17,15 @@ log = logging.getLogger("jarvis-core.workers")
 _sem: asyncio.Semaphore | None = None
 _running: dict[int, asyncio.Task] = {}
 
+# Intent and context only — how to do the work (tools, skills, sub-agents, schedules) is Hermes' call.
 WORKER_BRIEF = (
-    "Kamu adalah WORKER JARVIS. Agen utama menugaskanmu satu pekerjaan dari pemilik; pemilik tidak sedang "
-    "menunggu di chat ini. Kerjakan sampai tuntas dengan alat yang ada (web, memori, n8n, dll). "
-    "Tindakan berisiko tetap lewat request_approval. Akhiri dengan HASIL: fakta/angka penting, sumber, dan "
-    "langkah berikutnya bila ada — padat, tanpa basa-basi; hasil ini akan diringkas dan diucapkan ke pemilik.\n\n"
+    "Pemilik (lewat agen utama JARVIS yang sedang mengobrol dengannya) memintamu mengerjakan ini; ia tidak "
+    "menunggu di chat ini. Kalau butuh jawabannya untuk melanjutkan, tanya lewat ask_owner. Hasil akhirmu "
+    "akan diringkas dan diucapkan ke pemilik, jadi akhiri dengan HASIL: fakta/angka penting, sumber, dan "
+    "langkah berikutnya bila ada.\n\n"
 )
+WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
+KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang"}
 
 
 def _sem_() -> asyncio.Semaphore:
@@ -33,13 +36,22 @@ def _sem_() -> asyncio.Semaphore:
 
 
 async def spawn(title: str, instruction: str, session_id: str, actor: str, device_id=None,
-                location: Location | None = None, kind: str = "owner", image: str | None = None) -> dict:
+                location: Location | None = None, kind: str = "owner", image: str | None = None,
+                category: str | None = None, private: bool = False) -> dict:
     """kind: 'owner' (result spoken as a report) or an internal purpose handled by its module:
-    'situation' (awareness), 'routine' (habits), 'selfcheck' (self-improvement)."""
+    'situation' (awareness), 'routine' (habits), 'selfcheck' (self-improvement).
+    category: which AI does the work (gateway category); private tasks only ever use the local model."""
+    from . import composition
+    if category not in WORKER_CATEGORIES:
+        category = KIND_CATEGORY.get(kind) or ("analisis" if await composition.strong_mode() else "web")
+    if private:
+        category = "privat"
     row = await db.pool().fetchrow(
-        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image) VALUES ($1, $2, $3, $4, $5, $6)
-           RETURNING id, title, status, kind, created_at""",
-        session_id, device_id, title.strip()[:120] or "Tugas", instruction.strip()[:12000], kind, image)
+        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           RETURNING id, title, status, kind, category, created_at""",
+        session_id, device_id, title.strip()[:120] or "Tugas", instruction.strip()[:12000], kind, image,
+        category, private)
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
     await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
@@ -57,21 +69,29 @@ async def _run(task_id: int, context: str) -> None:
     async with _sem_():
         row = await db.pool().fetchrow(
             "UPDATE tasks SET status = 'running', started_at = now() WHERE id = $1 AND status = 'queued' "
-            "RETURNING id, title, instruction, session_id, kind, image", task_id)
+            "RETURNING id, title, instruction, session_id, kind, image, category, private", task_id)
         if row is None:  # cancelled while queued
             return
         kind = row["kind"]
         await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "running", "kind": kind})
-        brief = WORKER_BRIEF if kind == "owner" else ""  # internal kinds carry their own instructions
+        # internal kinds carry their own instructions; the task number lets tools (ask_owner, documents) refer to it
+        brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
         if row["image"]:
             brief += ("Gambar terlampir adalah apa yang ditunjukkan pemilik (kamera/layar) saat memberi tugas ini.\n"
                       f"DESKRIPSI GAMBAR (oleh agen utama, karena model worker mungkin tidak bisa melihat): "
                       f"{await describe_image(row['image'])}\n\n")
+        async def remember_run(run_id: str) -> None:
+            await db.pool().execute("UPDATE tasks SET hermes_run = $2 WHERE id = $1", task_id, run_id)
+
         try:
             result = None
-            async for ev in hermes.stream(context + brief + row["instruction"], f"task-{task_id}", row["image"]):
+            async for ev in hermes.stream(context + brief + row["instruction"], f"task-{task_id}", row["image"],
+                                          model=f"jarvis-{row['category']}", on_run=remember_run):
                 if ev["type"] == "done":
                     result = ev["reply"]
+                    continue
+                if ev["type"] == "approval":
+                    await _bridge_approval(task_id, row["title"], ev)
                     continue
                 await hub.broadcast({"type": "task_event", "task_id": task_id, "event": ev})
                 if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
@@ -104,6 +124,30 @@ async def _run(task_id: int, context: str) -> None:
                 await reports.from_failure(task_id, row["title"], str(e), row["session_id"])
 
 
+async def _bridge_approval(task_id: int, title: str, ev: dict) -> None:
+    """Hermes paused before a dangerous command: ask the owner (Approval Center on the phone/admin,
+    spoken by the main agent) and pass the decision back. No answer within the expiry = denied."""
+    a = await approvals.create(
+        "hermes_command", f"{title}: {ev['description'] or 'perintah berisiko'}",
+        {"run_id": ev["run_id"], "request_id": ev.get("request_id"), "command": ev["command"],
+         "description": ev["description"], "task_id": task_id},
+        "hermes", "high", idempotency_key=f"hermes:{ev['run_id']}:{ev.get('request_id') or ev['command'][:80]}")
+    await hub.broadcast({"type": "approval", "id": a["id"], "title": a["title"], "risk": "high",
+                         "detail": {"command": ev["command"], "description": ev["description"]}})
+    await reports._create(task_id, "system", f"Aku butuh izinmu untuk tugas {title}: {ev['description'] or ev['command'][:120]}. "
+                                             f"Setujui atau tolak di Persetujuan nomor {a['id']}.")
+
+    async def wait_and_answer() -> None:
+        for _ in range(60 * 60 // 3):  # Hermes itself gives up after approvals.timeout
+            cur = await approvals.get(a["id"])
+            if cur and cur["status"] != "awaiting_approval":
+                ok = cur["status"] in ("approved", "executing", "completed")
+                await hermes.answer_approval(ev["run_id"], ok, ev.get("request_id"))
+                return
+            await asyncio.sleep(3)
+    asyncio.create_task(wait_and_answer())
+
+
 async def describe_image(image: str) -> str:
     """The worker model is text-only: let the vision-capable main model write down what is in the picture."""
     from . import llm
@@ -113,7 +157,7 @@ async def describe_image(image: str) -> str:
                                           "melihatnya: objek, merek/model, teks yang terbaca, angka, warna, kondisi. Padat, tanpa basa-basi."},
             {"role": "user", "content": [{"type": "text", "text": "Gambar:"},
                                          {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]},
-        ], max_tokens=350) or "(tidak ada deskripsi)"
+        ], category="penglihatan", max_tokens=350, caller="worker") or "(tidak ada deskripsi)"
     except Exception as e:
         return f"(gambar tidak bisa dideskripsikan: {type(e).__name__})"
 
@@ -134,6 +178,9 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
 
 async def cancel(task_id: int, actor: str) -> bool:
     t = _running.get(task_id)
+    run = await db.pool().fetchval("SELECT hermes_run FROM tasks WHERE id = $1 AND status = 'running'", task_id)
+    if run:
+        await hermes.stop(run)
     changed = await db.pool().execute(
         "UPDATE tasks SET status = 'cancelled', finished_at = now() WHERE id = $1 AND status IN ('queued', 'running')",
         task_id)
@@ -147,14 +194,14 @@ async def cancel(task_id: int, actor: str) -> bool:
 
 async def active() -> list[dict]:
     rows = await db.pool().fetch(
-        "SELECT id, title, status, kind, created_at, started_at FROM tasks WHERE status IN ('queued', 'running') ORDER BY id")
+        "SELECT id, title, status, kind, category, created_at, started_at FROM tasks WHERE status IN ('queued', 'running') ORDER BY id")
     return [dict(r) for r in rows]
 
 
 async def recent(limit: int = 50) -> list[dict]:
     rows = await db.pool().fetch(
-        """SELECT id, title, status, kind, instruction, result, error, created_at, started_at, finished_at
-           FROM tasks ORDER BY id DESC LIMIT $1""", limit)
+        """SELECT id, title, status, kind, category, private, instruction, result, error, created_at, started_at,
+                  finished_at, prompt_tokens, completion_tokens FROM tasks ORDER BY id DESC LIMIT $1""", limit)
     return [dict(r) for r in rows]
 
 

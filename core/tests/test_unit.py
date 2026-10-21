@@ -183,7 +183,12 @@ def test_situation_due_reasons():
                                       calendar=[awareness.CalendarEvent(title="UAT", start_ms=soon)])
     assert awareness.due_reason(meeting, now) == "agenda 'UAT' sebentar lagi"
     assert awareness.due_reason(meeting, now) is None  # announced once
-    assert awareness.due_reason(ctx, now + timedelta(minutes=91)) == "pemeriksaan berkala"
+    # No periodic re-check any more (the expensive "heartbeat" pattern): only events count.
+    assert awareness.due_reason(ctx, now + timedelta(hours=5)) is None
+    awareness._state["checked_unmuted"] = False
+    unmuted = awareness.DeviceContext(location=home, activity="still", unmuted=True)
+    assert awareness.due_reason(unmuted, now + timedelta(minutes=30)) == "pemilik menyalakan mic JARVIS"
+    assert awareness.due_reason(ctx, now + timedelta(days=1)) == "pertama kali hari ini"
 
 
 def test_distance():
@@ -226,3 +231,97 @@ def test_exhausted_credit_errors_are_recognised():
     assert is_exhausted("Billing or credits exhausted: HTTP 402: This request requires more credits")
     assert is_exhausted("OpenRouter HTTP 402: b'{...}'")
     assert not is_exhausted("Harga emas Antam Rp2,5 juta") and not is_exhausted(None)
+
+
+def test_stage_payloads_are_https_only():
+    import pytest
+    from app import stage
+    ok = stage.validate("web", {"url": "https://kompas.com/berita/1", "mode": "read"})
+    assert ok["domain"] == "kompas.com"
+    for bad in ({"url": "http://kompas.com", "mode": "read"}, {"url": "javascript:alert(1)", "mode": "read"},
+                {"url": "file:///etc/passwd", "mode": "login"}):
+        with pytest.raises(stage.StageError):
+            stage.validate("web", bad)
+    with pytest.raises(stage.StageError):
+        stage.validate("music", {"title": "x", "cover_url": "intent://evil"})
+    assert stage.validate("music", {"title": "Lagu", "url": "/api/v1/media/abc"})
+    with pytest.raises(stage.StageError):
+        stage.validate("draft", {"variants": []})
+    with pytest.raises(stage.StageError):
+        stage.validate("unknown", {})
+
+
+def test_document_markdown_blocks():
+    from app import documents
+    blocks = documents.parse("# Notulen\nRapat **UAT** dimulai.\n\n- satu\n- dua\n1. a\n2. b\n| Nama | Tugas |\n|---|---|\n| Opik | Tes |")
+    kinds = [b[0] for b in blocks]
+    assert kinds == ["h", "p", "ul", "ol", "table"]
+    assert blocks[4][1] == [["Nama", "Tugas"], ["Opik", "Tes"]]
+
+
+def test_document_files_are_made(tmp_path, monkeypatch):
+    import asyncio
+    from app import documents
+    content = "# Ringkasan\nIsi **penting**.\n\n- poin\n| A | B |\n|---|---|\n| 1.250 | x |"
+    for fmt, maker in (("docx", documents._docx), ("pdf", documents._pdf)):
+        path = tmp_path / f"t.{fmt}"
+        maker("Uji", documents.parse(content), path)
+        assert path.stat().st_size > 500
+    path = tmp_path / "t.xlsx"
+    documents._xlsx("Uji", documents.parse(content), None, path)
+    from openpyxl import load_workbook
+    ws = load_workbook(path).active
+    assert ws["A2"].value == 1250  # Indonesian thousands separator becomes a number
+
+
+def test_brain_layout_is_stable_and_two_hemispheres():
+    import numpy as np
+    from app import brain
+    rng = np.random.default_rng(1)
+    v = rng.normal(size=(40, 384)).astype("float32")
+    a, b = brain.layout(v), brain.layout(v.copy())
+    assert np.allclose(a, b) and a.shape == (40, 3)
+    assert (np.abs(a[:, 0]) >= 0.149).all()  # gap between hemispheres
+    assert (a[:, 0] < 0).any() and (a[:, 0] > 0).any()
+    e = brain.edges(np.vstack([v[:1], v[:1] + 0.01, v[1:3]]))
+    assert [0, 1] in e
+
+
+def test_stt_drops_whisper_hallucinations():
+    from app import stt
+    for t in ("Terima kasih.", "terima kasih sudah menonton", "Thank you for watching!", "..."):
+        assert stt.HALLUCINATIONS.match(t)
+    assert not stt.HALLUCINATIONS.match("terima kasih, tolong cek server")
+
+
+def test_sentences_are_spoken_as_they_stream():
+    from app.assistant import _SENTENCE_END
+    buf = "Oke, aku cek dulu ya. Nanti aku kabari"
+    m = _SENTENCE_END.search(buf)
+    assert buf[:m.end()].strip() == "Oke, aku cek dulu ya."
+
+
+def test_voiceprint_names_the_owner_in_meetings():
+    from app import voice_id
+    owner = [1.0, 0.0, 0.0]
+    names = voice_id.name_speakers({"0": [0.1, 0.99, 0.0], "1": [0.95, 0.31, 0.0]}, owner)
+    assert names == {"0": "Pembicara 2", "1": "Pemilik"}
+    assert voice_id.name_speakers({"0": [0.0, 1.0, 0.0]}, owner, ["0", "1"]) == {"0": "Pembicara 1", "1": "Pembicara 2"}
+
+
+def test_meeting_speakers_and_blocks():
+    from app import meetings
+    segs = [{"start": 0, "end": 4, "text": "Selamat pagi semua."}, {"start": 5, "end": 9, "text": "Kita mulai dari UAT."},
+            {"start": 700, "end": 705, "text": "Jadi kita sepakat Kamis."}]
+    turns = [{"start": 0, "end": 4.5, "speaker": 1}, {"start": 4.6, "end": 10, "speaker": 0}, {"start": 699, "end": 706, "speaker": 1}]
+    out = meetings.assign_speakers(segs, turns, {"0": "Pemilik", "1": "Pembicara 2"})
+    assert [s["speaker"] for s in out] == ["Pembicara 2", "Pemilik", "Pembicara 2"]
+    b = meetings.blocks(out, seconds=600)
+    assert len(b) == 2 and b[0].startswith("00:00 Pembicara 2: Selamat pagi") and b[1].startswith("11:40")
+
+
+def test_route_polyline_is_thinned_keeping_ends():
+    from app import maps
+    pts = [[-6.0 - i * 0.001, 106.0 + i * 0.001] for i in range(1000)]
+    t = maps.thin(pts, 300)
+    assert len(t) == 300 and t[0] == [-6.0, 106.0] and t[-1] == [round(pts[-1][0], 5), round(pts[-1][1], 5)]

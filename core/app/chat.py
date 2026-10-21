@@ -1,4 +1,5 @@
-"""One user turn through the tiered pipeline: core command → privacy gate → Hermes."""
+"""One user turn through the tiered pipeline: quick command (no AI) → main agent (gateway: cloud or local;
+private/sensitive content only ever reaches the local model) → workers."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ Emit = Callable[[dict], Awaitable[None]]
 class Turn:
     reply: str
     route: str  # core | assistant | silent | blocked | error
+    spoken: bool = False  # already spoken sentence by sentence ("say" events)
 
 
 def _fmt_approval(a: dict) -> str:
@@ -71,16 +73,16 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
 async def _log(session_id: str, device_id, role: str, content: str, route: str, **kw) -> None:
     await db.pool().execute(
         """INSERT INTO messages (session_id, device_id, role, content, route, model,
-                                 prompt_tokens, completion_tokens, latency_ms, stt_confidence)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                                 prompt_tokens, completion_tokens, latency_ms, stt_confidence, trace)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)""",
         session_id, device_id, role, content, route,
         kw.get("model"), kw.get("prompt_tokens"), kw.get("completion_tokens"), kw.get("latency_ms"),
-        kw.get("stt_confidence"))
+        kw.get("stt_confidence"), kw.get("trace"))
 
 
 async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
                  location: Location | None = None, screen: str | None = None, image_source: str | None = None,
-                 stt: dict | None = None) -> Turn:
+                 stt: dict | None = None, speak_live: bool = False, screen_text: str = "") -> Turn:
     async def send(event: dict) -> None:
         if emit:
             await emit(event)
@@ -97,7 +99,8 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
 
     # Never persist secrets verbatim, even in our own message log.
     logged = text if not found else f"[disensor: {', '.join(found)}]"
-    await _log(session_id, device_id, "user", logged, "core" if intent else ("blocked" if private or found else "assistant"),
+    local_only = bool(private or found) and not intent
+    await _log(session_id, device_id, "user", logged, "core" if intent else ("private" if local_only else "assistant"),
                stt_confidence=(stt or {}).get("confidence"))
 
     if intent:
@@ -106,34 +109,32 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
             reply, route = await _run_intent(intent, actor, location), "core"
         except (approvals.ApprovalError, memory.MemoryError_, n8n.N8nError) as e:
             reply, route = f"Tidak bisa: {e}", "error"
-    elif private or found:
-        reply, route = (
-            "Pesan ini tidak saya kirim ke model cloud"
-            + (f" karena terdeteksi data sensitif ({', '.join(found)})." if found else " (mode /privat).")
-            + " Perintah cepat tetap bisa dipakai — ketik 'bantuan'."), "blocked"
-        await audit.record(actor, "chat.blocked", f"session:{session_id}", reasons=found or ["private"])
     else:
         # Main agent answers right away; real work is delegated to workers (see assistant.py).
+        # /privat or sensitive content: answered by the local model only — it never leaves the server.
+        if local_only:
+            await audit.record(actor, "chat.local_only", f"session:{session_id}", reasons=found or ["private"])
         await say("thinking")
         started = time.monotonic()
         try:
-            a = await assistant.respond(text, session_id, actor, device_id, send, location, screen, image_source, stt)
+            a = await assistant.respond(text, session_id, actor, device_id, send, location, screen, image_source, stt,
+                                        private=local_only, speak_live=speak_live, screen_text=screen_text)
+            trace = {"first_token_ms": a.first_token_ms, "first_say_ms": a.first_say_ms,
+                     "total_ms": int((time.monotonic() - started) * 1000), "route": a.route,
+                     **({"stt_ms": stt["stt_ms"]} if isinstance((stt or {}).get("stt_ms"), int) else {})}
             if a.silent:  # not for JARVIS, or the owner is still mid-sentence: no reply at all
-                await _log(session_id, device_id, "assistant", "(diam)", "silent", model="main-agent")
+                await _log(session_id, device_id, "assistant", "(diam)", "silent", model="main-agent", trace=trace)
                 await say("completed")
                 return Turn("", "silent")
-            await _log(session_id, device_id, "assistant", a.text, "assistant", model="main-agent",
+            model = f"{a.route['provider']}/{a.route['model']}" if a.route else "main-agent"
+            await _log(session_id, device_id, "assistant", a.text, "private" if local_only else "assistant", model=model,
                        prompt_tokens=a.prompt_tokens, completion_tokens=a.completion_tokens,
-                       latency_ms=int((time.monotonic() - started) * 1000))
+                       latency_ms=trace["total_ms"], trace=trace)
             await say("completed")
-            return Turn(a.text, "assistant")
-        except llm.LLMError as e:
-            from . import billing
-            if billing.is_exhausted(str(e)):
-                await billing.notify_exhausted()
-                reply, route = billing.MESSAGE, "error"
-            else:
-                reply, route = "Maaf, aku sedang tidak bisa berpikir — layanan model AI tidak menjawab. Coba lagi sebentar ya.", "error"
+            return Turn(a.text, "assistant", spoken=a.spoken_live)
+        except llm.LLMError:
+            reply, route = ("Maaf, aku sedang tidak bisa berpikir — model AI di server maupun cloud tidak menjawab. "
+                            "Coba lagi sebentar ya."), "error"
 
     await _log(session_id, device_id, "assistant", reply, route)
     await say("completed" if route != "error" else "failed")

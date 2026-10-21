@@ -1,16 +1,20 @@
-"""jarvis-tools: MCP server that gives Hermes policy-enforced tools (memory, approvals, n8n).
+"""jarvis-tools: MCP server that gives Hermes JARVIS' own abilities (memory, the owner, the phone's screen,
+documents, approvals, n8n, read-only insight into the server).
 
-Hermes never gets the n8n API key or direct DB access; every side effect goes through these tools,
-and anything risky becomes an approval request instead of an action.
+Hermes never gets the n8n API key or write access to the database; side effects on JARVIS' own systems go
+through these tools, and anything risky becomes an approval request instead of an action.
 
 Run: python -m app.mcp_server   (streamable HTTP on :8100/mcp, bearer MCP_TOKEN)
 """
 
+import asyncio
 import contextlib
 import hashlib
 import hmac
 import json
+import os
 import re
+import shutil
 
 import httpx
 import uvicorn
@@ -18,7 +22,7 @@ from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
 
-from . import approvals, db, memory, n8n
+from . import approvals, db, documents, gateway, memory, n8n
 from .config import settings
 
 ACTOR = "hermes"
@@ -148,21 +152,14 @@ def validate_workflow(wf: dict) -> list[str]:
 
 
 async def _generate_workflow(description: str) -> dict:
-    if not settings.openrouter_api_key:
-        raise RuntimeError("OPENROUTER_API_KEY belum diisi")
-    async with httpx.AsyncClient(timeout=120) as c:
-        r = await c.post("https://openrouter.ai/api/v1/chat/completions",
-                         headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
-                         json={"model": settings.coder_model, "temperature": 0.1, "max_tokens": 8000,
-                               "messages": [{"role": "system", "content": _CODER_PROMPT},
-                                            {"role": "user", "content": description}]})
-    if r.status_code != 200:
-        try:
-            msg = r.json()["error"]["message"]
-        except (ValueError, KeyError, TypeError):
-            msg = r.text[:200]
-        raise RuntimeError(f"OpenRouter HTTP {r.status_code}: {msg}")
-    return _extract_json(r.json()["choices"][0]["message"]["content"])
+    """The 'coding' category's model (owner's composition) writes the JSON."""
+    try:
+        data = await gateway.complete("coding", {"temperature": 0.1, "max_tokens": 8000, "messages": [
+            {"role": "system", "content": _CODER_PROMPT}, {"role": "user", "content": description}]},
+            caller="hermes", worker=True)
+    except gateway.GatewayError as e:
+        raise RuntimeError(str(e)) from e
+    return _extract_json(data["choices"][0]["message"]["content"])
 
 
 @mcp.tool()
@@ -255,6 +252,160 @@ async def show_media(items: list[dict], caption: str = "") -> dict:
     if r.status_code != 200:
         return {"shown": 0, "reason": f"core HTTP {r.status_code}"}
     return r.json()
+
+
+# ---------- the owner ----------
+
+async def _core(path: str, body: dict) -> dict:
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"http://jarvis-core:8000{path}", json=body, headers={"X-Internal-Token": settings.mcp_token})
+    if r.status_code != 200:
+        return {"error": f"core HTTP {r.status_code}: {r.text[:200]}"}
+    return r.json()
+
+
+@mcp.tool()
+async def ask_owner(question: str, task_id: int | None = None, wait_seconds: int = 120) -> dict:
+    """Ask the owner something you need to continue (a choice, a missing detail, a confirmation). The
+    question is spoken on the owner's phone; JARVIS' main agent relays the answer. Waits up to
+    wait_seconds (max 300); if no answer yet, returns status 'waiting' — continue with other parts and
+    call check_owner_answer later. task_id: the number in '[tugas #N]' of your brief."""
+    q = await _core("/internal/ask", {"question": question, "task_id": task_id})
+    if "error" in q:
+        return q
+    return await check_owner_answer(q["question_id"], wait_seconds)
+
+
+@mcp.tool()
+async def check_owner_answer(question_id: int, wait_seconds: int = 60) -> dict:
+    """Has the owner answered a question asked with ask_owner? Waits up to wait_seconds (max 300)."""
+    for _ in range(max(1, min(wait_seconds, 300)) // 3):
+        row = await db.pool().fetchrow("SELECT status, answer FROM owner_questions WHERE id = $1", question_id)
+        if not row:
+            return {"error": "pertanyaan tidak ditemukan"}
+        if row["status"] != "open":
+            return {"question_id": question_id, "status": row["status"], "answer": row["answer"]}
+        await asyncio.sleep(3)
+    return {"question_id": question_id, "status": "waiting"}
+
+
+@mcp.tool()
+async def notify_owner(text: str, task_id: int | None = None) -> dict:
+    """Tell the owner something now (spoken on the phone, repeated until they confirm hearing it) —
+    e.g. results of a scheduled job, a reminder, a warning. 1–3 sentences, Indonesian, no markdown."""
+    return await _core("/internal/notify", {"text": text, "task_id": task_id})
+
+
+# ---------- the phone's screen ("Panggung") ----------
+
+@mcp.tool()
+async def stage_show(panel: str, payload: dict, caption: str = "") -> dict:
+    """Show something on the phone's front screen, fitting the conversation. panel and payload:
+    - music: {"title","artist","url" (https audio or /api/v1/media/<id>),"cover_url","license","source_url"}
+    - video: {"title","url" (https video or YouTube watch URL),"thumbnail_url"}
+    - map: {"title","markers":[{"lat","lon","label"}],"routes":[{"label","distance_km","duration_min",
+            "traffic": true|false,"polyline":[[lat,lon],...]}],"selected":0}
+    - web: {"url","mode":"read"|"login","title"} — read: show an article/news source; login: the OWNER types
+           their own username/password on the phone (you never see them), then says 'selesai'
+    - gallery: {"items":[{"url","title"}]}
+    - doc: {"title","url" (/api/v1/documents/<id>),"format"}
+    - draft: {"to","channel":"whatsapp"|"email","variants":[{"label","text"}],"wa_phone","email","subject"}
+    All URLs must be https. Returns the stage id (for stage_update / stage_close)."""
+    return await _core("/internal/stage", {"action": "show", "panel": panel, "payload": payload, "caption": caption})
+
+
+@mcp.tool()
+async def stage_update(stage_id: str, payload: dict) -> dict:
+    """Change the panel that is showing (e.g. select another route, new draft wording)."""
+    return await _core("/internal/stage", {"action": "update", "stage_id": stage_id, "payload": payload})
+
+
+@mcp.tool()
+async def stage_close(stage_id: str | None = None) -> dict:
+    """Close the panel; the phone goes back to JARVIS' brain view."""
+    return await _core("/internal/stage", {"action": "close", "stage_id": stage_id})
+
+
+@mcp.tool()
+async def play_music(query: str) -> dict:
+    """Find openly-licensed music (Openverse/Jamendo) matching the request and play it on the owner's phone
+    with a music player. For copyrighted commercial songs use find_videos + stage_show video (official
+    YouTube player) instead — downloading them is not allowed."""
+    return await _core("/internal/play_music", {"query": query})
+
+
+@mcp.tool()
+async def show_route(destination: str, origin: str = "", mode: str = "driving") -> dict:
+    """Show a map with up to 3 route options (distance, travel time; live traffic when TomTom is configured)
+    on the owner's phone. origin empty = the owner's current location. mode: driving | motor | walking."""
+    return await _core("/internal/route", {"destination": destination, "origin": origin, "mode": mode})
+
+
+# ---------- documents ----------
+
+@mcp.tool()
+async def create_document(title: str, format: str, content: str, rows: list[list] | None = None,
+                          task_id: int | None = None, show: bool = True) -> dict:
+    """Make a file for the owner: format docx | xlsx | pdf | md. content: simple Markdown ('#' headings,
+    '- ' bullets, '1. ' lists, '| a | b |' tables, **bold**). For xlsx, tables become sheets, or pass rows
+    (list of lists, first row = header). The file is stored on JARVIS' server and, with show=true,
+    opened on the owner's phone. Returns its id and url."""
+    try:
+        doc = await documents.create(title, format, content, "hermes", task_id, rows)
+    except documents.DocumentError as e:
+        return {"created": False, "reason": str(e)}
+    if show:
+        await _core("/internal/stage", {"action": "show", "panel": "doc", "caption": f"Dokumen: {doc['title']}",
+                                        "payload": {"title": doc["title"], "url": doc["url"], "format": doc["format"]}})
+    return json.loads(json.dumps(doc, default=str))
+
+
+# ---------- read-only insight into JARVIS' own server (BR-003) ----------
+
+_SELECT = re.compile(r"^\s*(select|with|explain)\b", re.IGNORECASE)
+
+
+@mcp.tool()
+async def db_query_ro(sql: str, limit: int = 100) -> dict:
+    """Run ONE read-only SQL query on JARVIS' database (Postgres 16) as a role that can only SELECT.
+    Tables: messages, tasks, reports, approvals, memories, audit_events, llm_usage (cost per call),
+    notifications, context_log, improvements, documents, owner_questions, llm_categories, llm_providers.
+    Statement timeout 5 s; at most `limit` (≤500) rows are returned."""
+    import asyncpg
+    dsn = os.getenv("JARVIS_RO_DATABASE_URL", "")
+    if not dsn:
+        return {"error": "akses baca database belum dikonfigurasi (JARVIS_RO_PASSWORD)"}
+    if not _SELECT.match(sql) or ";" in sql.strip().rstrip(";"):
+        return {"error": "hanya satu query SELECT/WITH/EXPLAIN"}
+    try:
+        conn = await asyncpg.connect(dsn, timeout=10)
+        try:
+            async with conn.transaction(readonly=True):
+                rows = await conn.fetch(sql.strip().rstrip(";"), timeout=6)
+        finally:
+            await conn.close()
+    except (asyncpg.PostgresError, OSError, asyncio.TimeoutError) as e:
+        return {"error": f"{type(e).__name__}: {str(e)[:300]}"}
+    n = max(1, min(limit, 500))
+    return {"rows": _jsonable([dict(r) for r in rows[:n]]), "total_rows": len(rows), "truncated": len(rows) > n}
+
+
+@mcp.tool()
+async def host_metrics() -> dict:
+    """Health of JARVIS' server right now: load, memory, swap, disk, and each service's status."""
+    from . import status
+    with open("/proc/loadavg") as f:
+        load = f.read().split()[:3]
+    mem = {}
+    with open("/proc/meminfo") as f:
+        for line in f:
+            k, v = line.split(":", 1)
+            if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
+                mem[k] = round(int(v.split()[0]) / 1024 / 1024, 2)
+    du = shutil.disk_usage("/data") if os.path.isdir("/data") else shutil.disk_usage("/")
+    return {"cpu_cores": os.cpu_count(), "load_1_5_15": load, "memory_gb": mem,
+            "disk_gb": {"total": round(du.total / 1e9, 1), "free": round(du.free / 1e9, 1)},
+            "services": await status.check_all()}
 
 
 def build_app():

@@ -1,12 +1,15 @@
 """Situational awareness: what makes the main agent "alive" instead of waiting to be asked.
 
 The phone sends a context heartbeat (place, movement, battery/charging, headset, screen, upcoming
-calendar events). On meaningful change — moved somewhere new, started driving, an event soon, or simply
-a while since the last look — a *situation worker* is asked to work out where the owner is, what they are
-probably doing and what they will likely want, and to prepare it. Understanding the situation is
-delegated; the main agent keeps the result (SITUASI SAAT INI in its prompt) and decides whether to speak
-first — at most once per PROACTIVE_GAP, never in quiet hours, never while the owner is mid-conversation.
-A daily *routine worker* turns the coarse context history into remembered habits.
+calendar events). Only on a meaningful EVENT — first signal of the day, moved somewhere new, started
+driving/walking, an agenda item soon, the owner switched the mic on — a small, cheap model (category
+'cepat', ~1.5k tokens) works out where the owner is, what they are probably doing and what they will
+likely want. Only when something must be prepared (weather, traffic, documents) is a Hermes worker
+started. There is deliberately no periodic re-check: a full agent session every N minutes is the
+"heartbeat" pattern that makes always-on agents expensive (v0.6 ran one every 90 min).
+The main agent keeps the result (SITUASI SAAT INI in its prompt) and speaks first at most once per
+PROACTIVE_GAP, never in quiet hours, never while the owner is mid-conversation.
+A daily *routine worker* (local model, at night) turns the coarse context history into remembered habits.
 """
 
 import asyncio
@@ -25,12 +28,11 @@ from .location import WIB, Location, remember_last
 log = logging.getLogger("jarvis-core.awareness")
 
 PROACTIVE_GAP = timedelta(minutes=45)
-PERIODIC_CHECK = timedelta(minutes=90)
 MOVED_M = 400
 CONTEXT_RETENTION_DAYS = 30
 
 _state = {"context": None, "checked_at": None, "checked_at_place": None, "checked_activity": None,
-          "announced_events": set(), "last_proactive": None, "situation": None}
+          "checked_unmuted": None, "announced_events": set(), "last_proactive": None, "situation": None}
 
 
 class CalendarEvent(BaseModel):
@@ -101,7 +103,7 @@ async def receive(ctx: DeviceContext) -> None:
 
 def due_reason(ctx: DeviceContext, now: datetime) -> str | None:
     """Why a fresh look at the situation is needed now (None = not needed). Pure, unit-tested."""
-    if _state["checked_at"] is None:
+    if _state["checked_at"] is None or _state["checked_at"].astimezone(WIB).date() != now.astimezone(WIB).date():
         return "pertama kali hari ini"
     if ctx.location and _state["checked_at_place"] and distance_m(ctx.location, _state["checked_at_place"]) > MOVED_M:
         return "pemilik berpindah tempat"
@@ -113,33 +115,41 @@ def due_reason(ctx: DeviceContext, now: datetime) -> str | None:
         if timedelta(0) < start - now <= timedelta(minutes=30) and key not in _state["announced_events"]:
             _state["announced_events"].add(key)
             return f"agenda '{e.title}' sebentar lagi"
-    if now - _state["checked_at"] > PERIODIC_CHECK:
-        return "pemeriksaan berkala"
+    if ctx.unmuted and _state["checked_unmuted"] is False and now - _state["checked_at"] > timedelta(minutes=20):
+        return "pemilik menyalakan mic JARVIS"
     return None
 
 
-SITUATION_TASK = """Kamu bertugas MEMAHAMI SITUASI pemilik sekarang untuk JARVIS (agen utama), supaya JARVIS bisa \
+SITUATION_CHECK = """Kamu bagian kesadaran JARVIS (asisten pribadi). Pahami SITUASI pemilik sekarang supaya JARVIS bisa \
 proaktif seperti asisten manusia. Alasan pemeriksaan: {reason}.
 
 Konteks HP sekarang: {context}
 Waktu: {time}
 Notifikasi terbaru: {notifs}
+Kebiasaan/ingatan yang relevan: {memories}
 Situasi terakhir yang dipahami: {last}
 
-Langkah: cari di memori kebiasaan/rutinitas pemilik yang relevan dengan waktu & tempat ini (memory_search), \
-pahami di mana ia berada (jenis tempat) dan kemungkinan sedang apa, lalu SIAPKAN info yang kemungkinan ia \
-butuhkan sekarang (mis. cuaca/macet bila akan berangkat, persiapan agenda berikutnya, pengingat yang relevan). \
-Jangan menebak berlebihan: tandai keyakinanmu. Jangan menghubungi siapa pun.
+Jangan menebak berlebihan; tandai keyakinanmu. Jawab HANYA dengan JSON:
+{{"where": "jenis tempat", "doing": "kemungkinan sedang apa", "likely_need": "yang kemungkinan ia butuhkan",
+  "confidence": 0.0-1.0,
+  "prepare": "instruksi singkat bila ada info yang perlu DICARI/DISIAPKAN dulu (cuaca, macet, dokumen agenda), atau kosong",
+  "speak": true/false, "line": "satu-dua kalimat lisan untuk menyapa pemilik bila speak=true"}}
+speak=true hanya jika ada hal yang benar-benar berguna untuk disampaikan sekarang."""
+
+SITUATION_PREP = """Kamu bertugas MENYIAPKAN info untuk pemilik berdasarkan situasinya (dipahami oleh JARVIS):
+{understanding}
+
+Siapkan: {prepare}
+Kerjakan dengan alat yang ada (web, memori). Jangan menghubungi siapa pun.
 
 Akhiri HANYA dengan JSON:
 {{"where": "…", "doing": "…", "likely_need": "…", "prepared": "info yang sudah kamu siapkan (singkat)",
-  "confidence": 0.0-1.0, "speak": true/false, "line": "satu-dua kalimat lisan untuk menyapa pemilik bila speak=true"}}
-speak=true hanya jika ada hal yang benar-benar berguna untuk disampaikan sekarang."""
+  "confidence": 0.0-1.0, "speak": true/false, "line": "satu-dua kalimat lisan untuk menyapa pemilik bila speak=true"}}"""
 
 
 async def tick(now: datetime | None = None) -> str | None:
-    """One pass of the awareness loop; returns why a situation worker was started (or None)."""
-    from . import workers
+    """One pass of the awareness loop; returns why the situation was (re)assessed (or None)."""
+    from . import llm, workers
     now = now or datetime.now(timezone.utc)
     ctx = _state["context"]
     if ctx is None or not hub.online() or notifications.quiet_now(now):
@@ -148,16 +158,36 @@ async def tick(now: datetime | None = None) -> str | None:
         return None
     reason = due_reason(ctx, now)
     if not reason:
+        _state["checked_unmuted"] = ctx.unmuted
         return None
-    _state.update(checked_at=now, checked_at_place=ctx.location, checked_activity=ctx.activity)
+    _state.update(checked_at=now, checked_at_place=ctx.location, checked_activity=ctx.activity,
+                  checked_unmuted=ctx.unmuted)
     recent = await notifications.recent(5)
     last = _state["situation"]
-    instruction = SITUATION_TASK.format(
-        reason=reason, context=ctx.describe(), time=now.astimezone(WIB).strftime("%A %d %B %Y %H:%M WIB"),
+    local = now.astimezone(WIB)
+    try:
+        hits = await memory.search(f"kebiasaan {local:%A} jam {local:%H} {ctx.describe()[:120]}", limit=5)
+    except Exception:
+        hits = []
+    prompt = SITUATION_CHECK.format(
+        reason=reason, context=ctx.describe(), time=local.strftime("%A %d %B %Y %H:%M WIB"),
         notifs="; ".join(f"{n['app']}: {n['title']}" for n in recent) or "-",
+        memories="; ".join(m["text"] for m in hits if m["score"] >= 0.3) or "-",
         last=json.dumps({k: last[k] for k in ("where", "doing", "likely_need")}, ensure_ascii=False) if last else "-")
-    await workers.spawn("Memahami situasi", instruction, "awareness", "jarvis-core", kind="situation",
-                        location=ctx.location)
+    try:
+        raw = await llm.complete([{"role": "user", "content": prompt}], category="cepat", caller="awareness",
+                                 max_tokens=350, temperature=0.3)
+    except llm.LLMError as e:
+        log.warning("situation check failed: %s", e)
+        return None
+    s = parse_json(raw)
+    prepare = str(s.get("prepare") or "").strip()
+    if prepare and float(s.get("confidence") or 0) >= 0.5:
+        understanding = json.dumps({k: s.get(k) for k in ("where", "doing", "likely_need", "confidence")}, ensure_ascii=False)
+        await workers.spawn("Menyiapkan info situasi", SITUATION_PREP.format(understanding=understanding, prepare=prepare),
+                            "awareness", "jarvis-core", kind="situation", location=ctx.location, category="web")
+    else:
+        await on_situation(None, raw, now)
     return reason
 
 
@@ -175,8 +205,8 @@ async def owner_busy_talking(now: datetime) -> bool:
     return last_user is not None and now - last_user < timedelta(seconds=60)
 
 
-async def on_situation(task_id: int, result: str, now: datetime | None = None) -> dict:
-    """Situation worker finished: remember the understanding; maybe speak first."""
+async def on_situation(task_id: int | None, result: str, now: datetime | None = None) -> dict:
+    """Situation understood (directly, or by a worker that prepared info): remember it; maybe speak first."""
     now = now or datetime.now(timezone.utc)
     s = parse_json(result)
     if not s:
@@ -249,7 +279,7 @@ async def start_routine_learning() -> int | None:
     if places == "-":
         return None
     t = await workers.spawn("Mempelajari kebiasaan", ROUTINE_TASK.format(places=places, topics=topics),
-                            "awareness", "jarvis-core", kind="routine")
+                            "awareness", "jarvis-core", kind="routine", category="latar-belakang")
     return t["id"]
 
 

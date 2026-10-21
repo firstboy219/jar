@@ -74,6 +74,7 @@ async def save(text: str, category: str, source: str, kind: str = "fact") -> dic
         text, category, kind, source)
     await _index(str(row["id"]), text, category, False)
     await audit.record(source, "memory.saved", f"memory:{row['id']}", category=category)
+    _touch([row["id"]], "write")
     return dict(row)
 
 
@@ -128,6 +129,27 @@ async def list_(category: str | None = None, limit: int = 200) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Memories touched recently (read or written) — the 3D brain lights them up.
+_recent: list[tuple[str, str]] = []
+
+
+def _touch(ids: list[str], kind: str) -> None:
+    for i in ids:
+        _recent.append((str(i), kind))
+    del _recent[:-60]
+    try:
+        from . import hub
+        if hub.online() and ids:
+            asyncio.get_running_loop().create_task(
+                hub.broadcast({"type": "brain_pulse", "ids": [str(i) for i in ids][:12], "kind": kind}))
+    except RuntimeError:
+        pass
+
+
+def recently_touched() -> list[str]:
+    return list(dict.fromkeys(i for i, _ in reversed(_recent)))[:20]
+
+
 async def search(query: str, limit: int = 5, include_stale: bool = False) -> list[dict]:
     [vector] = await embed([query])
     body = {"vector": vector, "limit": limit, "with_payload": False}
@@ -141,8 +163,10 @@ async def search(query: str, limit: int = 5, include_stale: bool = False) -> lis
         return []
     scores = {h["id"]: h["score"] for h in hits}
     rows = await db.pool().fetch("SELECT * FROM memories WHERE id = ANY($1::uuid[])", list(scores))
-    found = [dict(r) | {"score": round(scores[str(r["id"])], 3)} for r in rows]
-    return sorted(found, key=lambda m: m["score"], reverse=True)
+    found = sorted([dict(r) | {"score": round(scores[str(r["id"])], 3)} for r in rows],
+                   key=lambda m: m["score"], reverse=True)
+    _touch([m["id"] for m in found if m["score"] >= 0.35], "read")
+    return found
 
 
 async def context_event(query: str) -> dict:

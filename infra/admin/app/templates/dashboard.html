@@ -139,6 +139,7 @@
   <h2>Tambah perangkat</h2>
   <form method="post" action="/devices" class="inline wrap">
     <input type="text" name="name" required maxlength="80" placeholder="mis. HP Android Ilham">
+    <select name="scope"><option value="owner">Pemilik (konsol penuh)</option><option value="basic">Dasar (hanya ngobrol)</option></select>
     <button type="submit">Buat token</button>
   </form>
 </section>
@@ -147,7 +148,7 @@
   {% for d in devices or [] %}
   <div class="item row">
     <div><strong>{{ d.name }}</strong><br>
-      <small>dibuat {{ d.created_at[:16]|replace('T',' ') }} · terakhir aktif {{ d.last_seen_at[:16]|replace('T',' ') if d.last_seen_at else 'belum pernah' }}</small></div>
+      <small>{{ 'pemilik' if d.scope == 'owner' else 'dasar' }} · dibuat {{ d.created_at[:16]|replace('T',' ') }} · terakhir aktif {{ d.last_seen_at[:16]|replace('T',' ') if d.last_seen_at else 'belum pernah' }}</small></div>
     {% if d.revoked_at %}<span class="pill rejected">dicabut</span>{% else %}
     <form method="post" action="/devices/{{ d.id }}/revoke"><button class="danger" type="submit" onclick="return confirm('Cabut token {{ d.name }}?')">Cabut</button></form>
     {% endif %}
@@ -223,6 +224,96 @@
     <tr><td>{{ e.at[:19]|replace('T',' ') }}</td><td>{{ e.actor }}</td><td>{{ e.action }}</td><td>{{ e.target or '' }}</td></tr>
     {% endfor %}
   </table>
+</section>
+
+{% elif tab == 'ai' %}
+{% set c = composition or {} %}
+{% set b = c.budget or {} %}
+<section class="card">
+  <h2>Anggaran AI bulan ini</h2>
+  <div class="stats">
+    <div><span>Terpakai</span><b>${{ '%.4f'|format(b.spent_usd or 0) }}</b></div>
+    <div><span>Anggaran</span><b>${{ '%.0f'|format(b.budget_usd or 0) }}</b></div>
+    <div><span>Persen</span><b>{{ b.pct or 0 }}%</b></div>
+    <div><span>Level</span><b>{{ b.level or 0 }}</b></div>
+  </div>
+  <p class="hint">80% → tugas latar dipindah ke model gratis/lokal · 95% → rute termurah · 100% → model berbayar berhenti, lokal tetap jalan.</p>
+</section>
+<section class="card">
+  <h2>Komposisi AI <small>(preset: {{ c.preset }})</small></h2>
+  <p class="hint">Hanya bisa diubah dari APK (menu Komposisi AI). Inti permanen: {{ (c.core or [])|join(', ') }}.
+    Mesin suara: <b>{{ c.stt.engine if c.stt else '-' }}</b>.{% if c.strong_mode %} Mode Kuat aktif.{% endif %}</p>
+  <table>
+    <tr><th>Kategori</th><th>Urutan model (utama → cadangan)</th><th>Anggaran</th><th>Terpakai</th></tr>
+    {% for k in c.categories or [] %}
+    <tr><td><b>{{ k.title }}</b><br><small>{{ k.description }}</small></td>
+        <td>{% for r in k.routes %}<code>{{ r.provider }}/{{ r.model }}</code>{% if not loop.last %} → {% endif %}{% endfor %} → <code>lokal</code></td>
+        <td>{{ '$%.0f'|format(k.budget_usd) if k.budget_usd is not none else '—' }}</td>
+        <td>${{ '%.4f'|format(k.spent_usd or 0) }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="hint">Penyedia: {% for p in c.providers or [] %}<code>{{ p.name }}</code> {{ '✅' if p.has_key else '— (tanpa kunci)' }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+</section>
+<section class="card">
+  <h2>Pemakaian per model (30 hari)</h2>
+  <table>
+    <tr><th>Tanggal</th><th>Kategori</th><th>Model</th><th>Panggilan</th><th>Gagal</th><th>Token in (cache)/out</th><th>Biaya</th><th>Kata pertama</th></tr>
+    {% for r in (llm.rows if llm else []) %}
+    <tr><td>{{ r.day }}</td><td>{{ r.category }}</td><td><code>{{ r.provider }}/{{ r.model }}</code></td><td>{{ r.calls }}</td><td>{{ r.failed }}</td>
+        <td>{{ r.prompt_tokens }} ({{ r.cached_tokens }})/{{ r.completion_tokens }}</td><td>${{ '%.4f'|format(r.cost_usd) }}</td>
+        <td>{{ (r.first_token_ms / 1000)|round(1) ~ ' s' if r.first_token_ms else '—' }}</td></tr>
+    {% else %}<tr><td colspan="8" class="hint">Belum ada panggilan.</td></tr>{% endfor %}
+  </table>
+</section>
+<section class="card">
+  <h2>Latensi suara (BR-001: &lt; 1,5 dtk)</h2>
+  <table>
+    <tr><th>Waktu</th><th>Model</th><th>Dengar (STT)</th><th>Kata pertama</th><th>Mulai bicara</th><th>Total</th></tr>
+    {% for m in (llm.latency if llm else []) %}{% set t = m.trace %}
+    <tr><td>{{ m.created_at[:16]|replace('T',' ') }}</td><td><code>{{ t.route.model if t.route else '-' }}</code></td>
+        <td>{{ t.stt_ms ~ ' ms' if t.stt_ms else '—' }}</td><td>{{ t.first_token_ms ~ ' ms' if t.first_token_ms else '—' }}</td>
+        <td>{{ t.first_say_ms ~ ' ms' if t.first_say_ms else '—' }}</td><td>{{ t.total_ms }} ms</td></tr>
+    {% else %}<tr><td colspan="6" class="hint">Belum ada data.</td></tr>{% endfor %}
+  </table>
+</section>
+
+{% elif tab == 'studio' %}
+{% set st = studio or {} %}
+<section class="card">
+  <h2>Jadwal (cron) yang dibuat Hermes</h2>
+  {% for j in st.cron or [] %}
+  <div class="item"><div class="row"><strong>{{ j.name or j.id }}</strong><span class="pill {{ 'completed' if j.enabled else 'rejected' }}">{{ 'aktif' if j.enabled else 'nonaktif' }}</span></div>
+    <small>{{ j.schedule }} · berikutnya {{ j.next_run or '—' }} · terakhir {{ j.last_run or '—' }}</small>
+    {% if j.prompt %}<pre>{{ j.prompt[:400] }}</pre>{% endif %}</div>
+  {% else %}<p class="hint">Belum ada jadwal.</p>{% endfor %}
+</section>
+<section class="card">
+  <h2>Skill buatan Hermes</h2>
+  {% for k in st.skills or [] %}
+  <div class="item"><strong>{{ k.name }}</strong> <small>{{ k.path }} · diubah {{ k.modified }}</small>
+    {% if k.description %}<br><small>{{ k.description }}</small>{% endif %}</div>
+  {% else %}<p class="hint">Belum ada skill buatan sendiri.</p>{% endfor %}
+</section>
+<section class="card">
+  <h2>Papan kanban</h2>
+  {% for t in st.kanban or [] %}
+  <div class="item row"><div><strong>{{ t.title }}</strong><br><small>{{ t.board }} · {{ t.status }}</small></div></div>
+  {% else %}<p class="hint">Papan kosong.</p>{% endfor %}
+</section>
+<section class="card">
+  <h2>Memori bawaan Hermes</h2>
+  <p class="hint">Disalin otomatis ke memori JARVIS (tab Memori) oleh plugin jarvis-memory.</p>
+  {% if st.memory %}<pre>{{ st.memory }}</pre>{% endif %}
+  {% if st.user %}<pre>{{ st.user }}</pre>{% endif %}
+</section>
+
+{% elif tab == 'docs' %}
+<section class="card">
+  <h2>Dokumen buatan JARVIS</h2>
+  {% for d in documents or [] %}
+  <div class="item row"><div><strong>{{ d.title }}</strong><br><small>{{ d.format|upper }} · {{ (d.size / 1024)|round(1) }} KB · {{ d.created_at[:16]|replace('T',' ') }} · oleh {{ d.created_by }}</small></div>
+    <a class="button" href="/docs/{{ d.id }}">Unduh</a></div>
+  {% else %}<p class="hint">Belum ada dokumen. Minta JARVIS: "buatkan notulen/laporan/tabel …".</p>{% endfor %}
 </section>
 
 {% elif tab == 'settings' %}

@@ -38,17 +38,17 @@ async def diagnostics(hours: int = 24) -> str:
     unheard = await q.fetchval("SELECT count(*) FROM reports WHERE status = 'unheard' AND created_at > $1", since)
     low_conf = await q.fetch(
         """SELECT left(content, 120) AS c, stt_confidence AS k FROM messages
-           WHERE role = 'user' AND stt_confidence IS NOT NULL AND stt_confidence < 0.8 AND created_at > $1
+           WHERE role = 'user' AND route <> 'private' AND stt_confidence IS NOT NULL AND stt_confidence < 0.8 AND created_at > $1
            ORDER BY id DESC LIMIT 15""", since)
     confused = await q.fetch(
         r"""SELECT left(u.content, 120) AS heard, left(a.content, 120) AS said FROM messages a
             JOIN LATERAL (SELECT content FROM messages u WHERE u.session_id = a.session_id AND u.role = 'user'
-                          AND u.id < a.id ORDER BY u.id DESC LIMIT 1) u ON true
-            WHERE a.role = 'assistant' AND a.created_at > $1
+                          AND u.id < a.id AND u.route <> 'private' ORDER BY u.id DESC LIMIT 1) u ON true
+            WHERE a.role = 'assistant' AND a.route <> 'private' AND a.created_at > $1
               AND a.content ~* '(tidak menangkap|belum menangkap|terpotong|tidak yakin maksud|belum paham|tidak punya informasi)'
             ORDER BY a.id DESC LIMIT 12""", since)
     corrections = await q.fetch(
-        r"""SELECT left(content, 140) AS c FROM messages WHERE role = 'user' AND created_at > $1
+        r"""SELECT left(content, 140) AS c FROM messages WHERE role = 'user' AND route <> 'private' AND created_at > $1
             AND content ~* '^(bukan|salah|maksud saya|maksudku|nggak gitu|ga gitu|masa kamu)' ORDER BY id DESC LIMIT 10""", since)
     silent = await q.fetchval("SELECT count(*) FROM messages WHERE route = 'silent' AND created_at > $1", since)
     total = await q.fetchval("SELECT count(*) FROM messages WHERE role = 'user' AND created_at > $1", since)
