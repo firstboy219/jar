@@ -22,7 +22,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, audit, awareness, brain, budget, chat, errors, hermes_studio, meetings, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, audit, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, notifications, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -88,10 +88,25 @@ async def lifespan(app: FastAPI):
                 return
             await asyncio.sleep(30)
     warm = asyncio.create_task(warm_local_worker())
+
+    async def self_improvement():
+        # Performance self-improvement (ADR-026): runner results, recurring-error repairs, weekly review.
+        last_review = None
+        while True:
+            try:
+                await dev.poll()
+                await perf.watch_recurring_errors()
+                if perf.weekly_due(last_review):
+                    last_review = __import__("datetime").datetime.now(awareness.WIB).date()
+                    await perf.start_review()
+            except Exception:
+                log.exception("self-improvement loop failed")
+            await asyncio.sleep(20)
+    improver = asyncio.create_task(self_improvement())
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver):
         t.cancel()
     await db.close()
 
@@ -920,6 +935,17 @@ async def admin_vault(_: str = admin):
 @app.delete("/admin/vault/{entry_id}")
 async def admin_vault_delete(entry_id: str, actor: str = admin):
     return {"deleted": await vault.delete(entry_id, actor)}
+
+
+@app.get("/admin/dev-changes")
+async def admin_dev_changes(_: str = admin):
+    return jsonable(await dev.list_())
+
+
+@app.post("/admin/efficiency-review")
+async def admin_efficiency_review(actor: str = admin):
+    t = await perf.start_review(actor)
+    return {"task_id": t["id"]}
 
 
 @app.get("/admin/errors")

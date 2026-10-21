@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run jarvis-core tests in a throwaway network with a fresh Postgres + Qdrant (never touches live data).
+# CORE_DIR: test another checkout (the self-improvement runner tests proposed changes in a worktree).
 set -euo pipefail
-cd "$(dirname "$0")/../../core"
+cd "${CORE_DIR:-$(dirname "$0")/../../core}"
 NET=jarvis-test-$$
 cleanup() { docker rm -f "$NET-db" "$NET-qdrant" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
 trap cleanup EXIT

@@ -282,3 +282,22 @@ docx/pdf/pptx/xlsx skills (proprietary licence forbids copying), "use before eve
 ## ADR-025 — In-app updates (2026-10-21)
 From v0.9.0 the app checks `/api/v1/app/latest` on connect and every ~3 h; a newer version opens a dialog
 "Update sekarang" (download, SHA-256 check, Android installer) or "Tunda" (asked again after 24 h).
+
+## ADR-026 — Performance-only self-improvement, owner-approved (2026-10-21)
+Supersedes the "not built" note in ADR-022. The owner allowed JARVIS to change its own code **only to do
+what the owner asks faster, cheaper or with fewer failures** — no new features, nothing touching
+security, permissions, approvals, secrets, the AI composition, budgets or tests.
+- Triggers: a weekly efficiency review (Sunday 02:00 WIB, digest of task duration/failures, model cost,
+  cache hits, voice latency, errors), the same error ≥ 3× in an hour (one repair task per signature per
+  day), the daily self-check's "code" proposals, or `POST /admin/efficiency-review`.
+- Hermes works on `jarvis/<topic>` in its workspace `/opt/data/workspace/jar` (current main comes from a
+  root-owned mirror mounted read-only), then calls `propose_code_change` / `check_code_change`.
+- `infra/scripts/self-dev.sh` (root, `jarvis-dev.path` → `jarvis-dev.service`) fetches the branch into
+  the live repo (git never runs inside the workspace), refuses forbidden paths (security modules,
+  `main.py`, `approvals.py`, `dev.py`, `perf.py`, infra scripts, systemd, compose, .env, Dockerfiles,
+  requirements, gradle/manifest), edits to existing migrations and diffs > 1500 lines, merges onto main
+  in a throwaway worktree and runs the core (and Android) test suites.
+- Passing tests → high-risk approval `code_change` (fingerprint). Only the approved, tested commit is
+  merged; the changed services are rebuilt and health-checked; failure → main is reset and redeployed
+  (`rolled_back`); success → push to GitHub, refresh the mirror, and a new APK if android/ changed.
+- jarvis-core never runs git or docker; it only exchanges JSON files in `data/dev/{requests,results}`.

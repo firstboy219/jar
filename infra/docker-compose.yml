@@ -67,6 +67,7 @@ services:
       - ./hermes/03-jarvis-config:/etc/cont-init.d/03-jarvis-config:ro
       - ./hermes/SOUL.md:/opt/data/SOUL.md:ro # JARVIS persona (versioned in git)
       - ./hermes/plugins/jarvis-memory:/opt/data/plugins/jarvis-memory:ro # shared memory provider (ADR-018)
+      - ./data/dev-mirror/upstream.git:/opt/upstream.git:ro # current JARVIS main, for performance work (ADR-026)
       # Cross-app visibility (FS-104 / BR-003), read-only
       - ./data/npm/logs:/opt/external/proxy_logs:ro
       - /var/log:/opt/external/host_logs:ro
@@ -149,6 +150,7 @@ services:
       - ./data/documents:/data/documents
       - ./data/meetings:/data/meetings
       - ./data/media:/data/media
+      - ./data/dev:/data/dev # self-improvement requests/results exchanged with infra/scripts/self-dev.sh
       - ./data/hermes:/hermes:ro # Hermes Studio (schedules, own skills, kanban) + cron result delivery
     environment: &core-env
       - DATABASE_URL=postgresql://jarvis_core:${JARVIS_DB_PASSWORD}@jarvis-db/jarvis

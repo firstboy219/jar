@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch for JARVIS performance self-improvement requests (test / deploy)
+
+[Path]
+PathExistsGlob=/home/ubuntu/my-project/infra/data/dev/requests/*.json
+
+[Install]
+WantedBy=multi-user.target

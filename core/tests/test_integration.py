@@ -17,7 +17,8 @@ async def pool(monkeypatch):
     monkeypatch.setattr(config.settings, "qdrant_url", os.getenv("TEST_QDRANT_URL", ""))
     p = await db.connect(os.environ["TEST_DATABASE_URL"])
     await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
-                    "settings_kv, owner_questions, documents, vault_entries, error_log RESTART IDENTITY CASCADE")
+                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts "
+                    "RESTART IDENTITY CASCADE")
     # factory composition: everything local, no category budgets
     await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
         WHEN name IN ('ngobrol', 'cepat', 'penglihatan', 'balas-pesan') THEN '[{"provider": "lokal", "model": "qwen-lokal"}]'::jsonb
@@ -732,3 +733,56 @@ async def test_password_manager_never_leaks_and_feeds_the_agent_vault(pool, monk
     assert (await vault.agent_entries())[0]["username"] == "ilham"
     audit = " ".join(str(r["detail"]) for r in await pool.fetch("SELECT detail FROM audit_events"))
     assert "N3w!" not in audit and "S3cret!" not in audit
+
+
+async def test_code_change_is_tested_then_deployed_only_after_owner_approval(pool, monkeypatch, tmp_path):
+    import json
+    from app import approvals, dev
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    with pytest.raises(dev.DevError):
+        await dev.propose("main", "x", "y")  # only jarvis/<topic> branches
+    c = await dev.propose("jarvis/cache-ringkasan", "Cache ringkasan rapat", "notulen 40 dtk → target 10 dtk")
+    req = json.loads((tmp_path / "requests" / f"{c['id']}-test.json").read_text())
+    assert req == {"id": c["id"], "action": "test", "branch": "jarvis/cache-ringkasan"}
+    # a failed test run does not bother the owner
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "1-test.json").write_text(json.dumps(
+        {"id": c["id"], "action": "test", "status": "failed", "commit": "abc", "files": [], "log": "TES SERVER GAGAL"}))
+    assert await dev.poll() == 1
+    assert (await dev.get(c["id"]))["status"] == "test_failed"
+    assert await pool.fetchval("SELECT count(*) FROM approvals") == 0
+    # passing tests → high-risk approval; nothing deploys before the owner decides
+    c2 = await dev.propose("jarvis/cache-ringkasan", "Cache ringkasan rapat", "notulen 40 dtk → target 10 dtk")
+    (tmp_path / "results" / "2-test.json").write_text(json.dumps(
+        {"id": c2["id"], "action": "test", "status": "passed", "commit": "def", "files": ["core/app/meetings.py"],
+         "diffstat": "1 file changed", "log": "SEMUA TES LULUS"}))
+    await dev.poll()
+    change = await dev.get(c2["id"])
+    assert change["status"] == "awaiting_approval" and change["files"] == ["core/app/meetings.py"]
+    a = await pool.fetchrow("SELECT id, kind, risk, status FROM approvals")
+    assert (a["kind"], a["risk"], a["status"]) == ("code_change", "high", "awaiting_approval")
+    assert not (tmp_path / "requests" / f"{c2['id']}-deploy.json").exists()
+    done = await approvals.decide(a["id"], True, "owner")
+    assert done["status"] == "completed"
+    deploy = json.loads((tmp_path / "requests" / f"{c2['id']}-deploy.json").read_text())
+    assert deploy["commit"] == "def" and (await dev.get(c2["id"]))["status"] == "deploying"
+    # a rolled-back deploy is reported honestly
+    (tmp_path / "results" / "2-deploy.json").write_text(json.dumps(
+        {"id": c2["id"], "action": "deploy", "status": "rolled_back", "log": "CEK KESEHATAN GAGAL"}))
+    await dev.poll()
+    assert (await dev.get(c2["id"]))["status"] == "rolled_back"
+    said = await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
+    assert "kukembalikan" in said
+
+
+async def test_recurring_error_starts_one_repair_task_per_day(pool, monkeypatch):
+    from app import perf, workers
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    for _ in range(3):
+        await pool.execute("INSERT INTO error_log (source, message, traceback, signature) VALUES ('core', 'boom', 'tb', 'sig1')")
+    await pool.execute("INSERT INTO error_log (source, message, traceback, signature) VALUES ('core', 'once', 'tb', 'sig2')")
+    assert await perf.watch_recurring_errors() == 1
+    assert await perf.watch_recurring_errors() == 0  # not again today
+    t = await pool.fetchrow("SELECT kind, category, instruction FROM tasks")
+    assert t["kind"] == "selfimprove" and t["category"] == "coding" and "HANYA" in t["instruction"]
+    assert "TUGAS PER KATEGORI" in await perf.digest()

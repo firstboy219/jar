@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(systemctl is-active *)",
+      "Bash(getent *)",
+      "Bash(swapon --show)"
+    ]
+  }
+}

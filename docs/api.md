@@ -97,6 +97,8 @@ JARVIS, `error` = something failed.
 | GET/POST/PATCH/DELETE | `/api/v1/vault[/{id}]` | password manager (owner devices; never returns passwords in lists) |
 | POST | `/api/v1/vault/{id}/reveal`, `/api/v1/vault/match` | one password / logins for a page URL (autofill) |
 | GET | `/api/v1/app/latest`, `/api/v1/app/releases/{file}` | newest APK (every device) + download |
+| GET | `/admin/dev-changes` (+ console) | JARVIS' own performance changes: status, files, test/deploy log (ADR-026) |
+| POST | `/admin/efficiency-review` (+ console) | start the efficiency review now |
 | * | `/api/v1/console/…` | every web-admin endpoint (`/admin/…`) for owner-scope devices, plus `settings`, `releases` |
 
 Errors: `401` bad/revoked token, `403` device without owner scope, `422` validation, `503` dependency not configured.

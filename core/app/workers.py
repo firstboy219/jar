@@ -25,7 +25,7 @@ WORKER_BRIEF = (
     "langkah berikutnya bila ada.\n\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
-KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang"}
+KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding"}
 
 
 def _sem_() -> asyncio.Semaphore:

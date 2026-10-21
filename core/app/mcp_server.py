@@ -344,6 +344,36 @@ async def show_route(destination: str, origin: str = "", mode: str = "driving") 
     return await _core("/internal/route", {"destination": destination, "origin": origin, "mode": mode})
 
 
+# ---------- making JARVIS itself more efficient (owner-approved) ----------
+
+@mcp.tool()
+async def propose_code_change(branch: str, title: str, why: str, task_id: int | None = None) -> dict:
+    """Submit a PERFORMANCE change to JARVIS' own code (faster, cheaper, fewer failed tasks — nothing else).
+    Commit it first on branch `jarvis/<topic>` in /opt/data/workspace/jar (branched from `jarvis-main`).
+    `why` must state the measured problem and the expected gain. The server runs the full test suite in
+    throwaway containers (3–10 min); if it passes the owner is asked to approve on the phone; once approved it
+    is merged, deployed, health-checked and rolled back automatically on failure. Poll with check_code_change.
+    Changes to security, permissions, approvals, secrets, the composition or the runner are refused."""
+    from . import dev
+    try:
+        return json.loads(json.dumps(await dev.propose(branch, title, why, task_id), default=str))
+    except dev.DevError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def check_code_change(change_id: int) -> dict:
+    """Status of a proposed change: testing | test_failed (read test_log, fix, propose again) |
+    awaiting_approval | deploying | deployed | rolled_back | deploy_failed | rejected."""
+    from . import dev
+    c = await dev.get(change_id)
+    if not c:
+        return {"error": "tidak ditemukan"}
+    keep = ("id", "branch", "title", "status", "commit", "files", "diffstat", "apk_version")
+    return json.loads(json.dumps({k: c[k] for k in keep} | {"test_log": (c["test_log"] or "")[-6000:],
+                                                            "deploy_log": (c["deploy_log"] or "")[-3000:]}, default=str))
+
+
 # ---------- documents ----------
 
 @mcp.tool()

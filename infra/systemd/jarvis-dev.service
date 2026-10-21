@@ -1,0 +1,11 @@
+[Unit]
+Description=JARVIS self-improvement runner (tests proposed changes; deploys only owner-approved ones)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+ExecStart=/home/ubuntu/my-project/infra/scripts/self-dev.sh
+StandardOutput=append:/home/ubuntu/my-project/infra/data/dev/runner.log
+StandardError=append:/home/ubuntu/my-project/infra/data/dev/runner.log

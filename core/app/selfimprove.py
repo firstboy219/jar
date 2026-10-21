@@ -126,7 +126,16 @@ async def apply(item: dict, task_id: int | None) -> dict:
         return row | {"approval_id": a["id"]}
     if kind == "code":
         summary = str(item.get("summary") or reason).strip()[:500]
-        return await _store("code", summary, {"reason": reason}, "proposed", task_id) if summary else {"skipped": "kosong"}
+        if not summary:
+            return {"skipped": "kosong"}
+        row = await _store("code", summary, {"reason": reason}, "proposed", task_id)
+        # Owner-enabled performance self-improvement (ADR-026): build & test it, then ask — never deploy unasked.
+        from . import perf, workers
+        await workers.spawn(f"Perbaiki: {summary[:80]}",
+                            f"[usulan dari cek diri] {summary}\nAlasan: {reason}\n\n{perf.SCOPE}\n\nPakai skill "
+                            "jarvis-self-development. Bila usulan ini di luar batas (bukan soal performa), jangan dikerjakan; "
+                            "laporkan saja ke pemilik.", "selfimprove", "jarvis-selfcheck", kind="selfimprove", category="coding")
+        return row
     return {"skipped": f"jenis tidak dikenal: {kind}"}
 
 
