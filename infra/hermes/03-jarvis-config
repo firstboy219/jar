@@ -86,6 +86,9 @@ ts = cfg.setdefault("tools", {}).setdefault("tool_search", {})
 default_defer = set(DEFAULT_CONFIG["tools"]["tool_search"]["defer"])
 skills_root = os.path.join(os.environ.get("HERMES_HOME", "/opt/data"), "skills")
 if PROFILE == "lean":
+    # The local CPU reads a cold prompt for minutes before the first byte; Hermes treats the gateway as a cloud
+    # provider (180 s patience, retried 5× then "consecutive stale attempts" — seen 2026-10-21): wait instead.
+    providers["jarvis"]["stale_timeout_seconds"] = 2700
     ts["enabled"] = True
     ts["defer"] = sorted(default_defer | LEAN_DEFER)  # still usable: tool_search loads a schema when needed
     delegation["max_concurrent_children"] = 1  # one CPU: parallel children only queue up
@@ -101,6 +104,7 @@ if PROFILE == "lean":
                     break
     cfg.setdefault("skills", {})["disabled"] = sorted(set(hidden))  # only JARVIS' own skills in the prompt
 else:
+    providers["jarvis"].pop("stale_timeout_seconds", None)
     ts["defer"] = sorted(default_defer)
     cfg.setdefault("skills", {})["disabled"] = []
 

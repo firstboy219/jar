@@ -372,3 +372,27 @@ usage-collector.sh from data/ops/policy.json), the owner's work gets all 4. Tran
 and the APK screen "Di balik layar" list what runs now and for whom, why background work waits, the schedule,
 the last 24 hours (AI minutes per purpose, background tasks) and a log of everything started or stopped.
 `ops.py` is out of bounds for self-modification.
+
+## ADR-031 — Make the local worker fast: fix its cache, shrink Hermes' prompt (2026-10-21)
+Measured instead of guessed (scratchpad benchmark, both models with 2 CPU threads, Hermes-like pattern):
+| | Qwen3.5-4B (kept) | Qwen3-4B-2507 |
+|---|---|---|
+| cold read ±5k tokens | 692 s (7.2 tok/s) | 1,963 s (2.6 tok/s) |
+| same session + 400 tokens | 89 s | 392 s |
+| back to a session after another one | 74 s (319 tokens re-read) | 425 s |
+| new session, same system prompt | 52 s (241 re-read) | 280 s |
+| memory | 2.5 GB | 4.7 GB |
+So the hybrid model's prompt cache works and it is 3–5× faster here; switching models would hurt. The
+production slowness came from (1) the gateway saving the worker slot after ANY local call — a 279-token
+call overwrote Hermes' 22k-token prefix and every restore (core start, Netralkan) forced a full re-read —
+now only Hermes calls ≥ 4,000 prompt tokens are saved; (2) a 2 GB RAM prompt cache, now 4 GB (worker
+memory limit 6 → 8 GB); (3) Hermes' prompt itself: of 22.6k tokens, 16.4k were tool schemas (kanban 6.1k,
+manage_connections, delegate_task, skill_manage, browser_exec, tts) and 3.4k the index of 149 skills.
+`HERMES_PROFILE=lean` (default while Hermes runs locally; jarvis-core switches it to `full` when the
+composition moves Hermes to a cloud model) defers those tools behind tool_search (still usable), lists
+only JARVIS' own skills, sends Hermes' side tasks to the chat model and runs one sub-agent at a time.
+Result in production (task #72 retried): prompt 11,801 tokens (was 20–26k); after one cold read the next
+step re-read 4 tokens. Also fixed: Hermes saw the gateway as a cloud provider (180 s patience) and re-sent
+the same request while the CPU was still reading it, giving up after 5 "stale attempts" — the lean profile
+sets `providers.jarvis.stale_timeout_seconds: 2700`.
+Ideas not taken: more parallel workers (same 4 threads, every worker re-reads its own ~20k-token prompt).
