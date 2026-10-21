@@ -86,6 +86,9 @@ async def on_approved(detail: dict) -> dict:
 
 async def poll() -> int:
     """Read runner results; returns how many were applied."""
+    await db.pool().execute(  # the owner said no (or let it expire): nothing will be deployed
+        """UPDATE dev_changes c SET status = 'rejected', updated_at = now() FROM approvals a
+           WHERE a.id = c.approval_id AND c.status = 'awaiting_approval' AND a.status IN ('rejected', 'expired')""")
     done_dir = ROOT / "results"
     if not done_dir.is_dir():
         return 0

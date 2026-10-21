@@ -786,3 +786,19 @@ async def test_recurring_error_starts_one_repair_task_per_day(pool, monkeypatch)
     t = await pool.fetchrow("SELECT kind, category, instruction FROM tasks")
     assert t["kind"] == "selfimprove" and t["category"] == "coding" and "HANYA" in t["instruction"]
     assert "TUGAS PER KATEGORI" in await perf.digest()
+
+
+async def test_rejected_code_change_is_never_deployed(pool, monkeypatch, tmp_path):
+    import json
+    from app import approvals, dev
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    c = await dev.propose("jarvis/lebih-cepat", "Lebih cepat", "x")
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "1-test.json").write_text(json.dumps(
+        {"id": c["id"], "action": "test", "status": "passed", "commit": "abc", "files": ["core/app/stt.py"]}))
+    await dev.poll()
+    a = await pool.fetchval("SELECT id FROM approvals")
+    await approvals.decide(a, False, "owner")
+    await dev.poll()
+    assert (await dev.get(c["id"]))["status"] == "rejected"
+    assert not list((tmp_path / "requests").glob("*-deploy.json"))

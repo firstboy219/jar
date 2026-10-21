@@ -20,6 +20,8 @@ DEV=$INFRA/data/dev
 WS=$INFRA/data/hermes/workspace/jar
 MIRROR=$INFRA/data/dev-mirror/upstream.git   # root-owned, mounted read-only into Hermes at /opt/upstream.git
 OWNER=$(stat -c %U "$REPO")
+# root reads the owner's repo (and the mirror fetches from it): trust exactly that repo, nothing else (never the workspace)
+export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$REPO GIT_CONFIG_KEY_1=safe.directory GIT_CONFIG_VALUE_1=$REPO/.git
 MAX_CHANGED_LINES=1500
 # Out of scope for self-improvement (security, permissions, secrets, money guards, build/supply chain, itself)
 FORBIDDEN='^(infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|infra/admin/app/(auth|main)\.py|infra/admin/Dockerfile|infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements|core/app/(main|approvals|devices|vault|sensitive|dev|perf|composition|budget|errors|config|db)\.py|android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|\.github/|\.claude/|BRD\.docx)'
@@ -59,6 +61,9 @@ refresh_mirror() { # current main for Hermes (read-only mount)
 }
 
 ensure_workspace() {
+  # the mirror is root-owned; Hermes' git (HOME=/opt/data) must be told to read it
+  as_owner git config --file "$INFRA/data/hermes/.gitconfig" --get-all safe.directory 2>/dev/null | grep -qx /opt/upstream.git \
+    || as_owner git config --file "$INFRA/data/hermes/.gitconfig" --add safe.directory /opt/upstream.git
   [[ -d $WS/.git ]] && return
   mkdir -p "$(dirname "$WS")"
   refresh_mirror
@@ -137,7 +142,7 @@ deploy_steps() { # uses id want; sets status apk err
 
 Tested by infra/scripts/self-dev.sh and approved by the owner (approval in jarvis-core).
 
-Co-Authored-By: JARVIS (Hermes) <jarvis@vis1.cosger.online>" "refs/jarvis/$id" || { git -C "$REPO" merge --abort; err="merge gagal"; return 1; }
+Co-Authored-By: JARVIS (Hermes) <jarvis@vis1.cosger.online>" "refs/jarvis/$id" || { as_owner git -C "$REPO" merge --abort; err="merge gagal"; return 1; }
     local svc; svc=$(services_for "$files")
     if [[ -n $svc ]]; then
       echo "== deploy:$svc"
