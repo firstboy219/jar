@@ -421,3 +421,16 @@ def test_stage_shows_anything():
                 {"blocks": [{"kind": "image", "url": "http://x.id/a.png"}]}):
         with pytest.raises(stage.StageError):
             stage.validate("board", bad)
+
+
+def test_videos_named_songs_and_misheard_news():
+    from app.media_tools import matches, wants_specific_song
+    from app.router import parse_action
+    assert parse_action("putarkan video berita") == Intent("play_video", {"query": "berita"})
+    assert parse_action("nonton film agak laen") == Intent("play_video", {"query": "agak laen"})
+    assert parse_action("Tolong cek baritah hari ini") == Intent("news", {"topic": ""})
+    assert parse_action("Teruancet Brita Hari Ini") == Intent("news", {"topic": ""})
+    assert wants_specific_song("bunga citra lestari sunny") and wants_specific_song("idgitaf sedia aku sebelum hujan")
+    assert not wants_specific_song("lagu santai buat tidur")
+    assert not matches({"title": "Takan Ada Yang Abadi", "artist": "chatoer"}, "peterpan")  # a stranger's cover
+    assert matches({"title": "Peterpan - Takan Ada Yang Abadi", "artist": "x"}, "peterpan")

@@ -50,15 +50,19 @@ def parse(text: str) -> Intent | None:
 # Clear action requests the main agent executes directly (no model guessing whether to call a tool —
 # the small local model often only SAID it would). Pure; executed by assistant.respond.
 _POLITE = r"^(?:(?:jarvis|tolong|coba|dong|bisa|bisakah|boleh|kamu|ayo)[, ]+)*"
+_NEWS_WORD = r"(?:berita|brita|beritah|baritah?|berta|kabar terkini)"  # how STT often hears "berita"
 _ACTIONS: list[tuple[re.Pattern, str]] = [
+    (re.compile(_POLITE + r"(?:putar(?:kan|in)?|puterin|mainkan|tampilkan|tunjukkan|lihat|nonton|cari(?:kan)?)\s+"
+                r"(?:video|film|youtube)\s+(?P<query>.{2,80}?)[.!?]*$"), "play_video"),
     (re.compile(_POLITE + r"(?:putar(?:kan|in)?|puterin|mainkan|setel(?:kan)?|play)\s+(?:lagu(?:nya)?\s+|musik\s+)?"
                 r"(?P<query>.{2,80}?)(?:\s+(?:dong|ya|ke hp|di hp))?[.!?]*$"), "play_music"),
     (re.compile(_POLITE + r"(?:tunjukkan |tampilkan |cari(?:kan)? |lihat )?(?:rute|jalan|arah|navigasi)\s+(?:ke|menuju)\s+"
                 r"(?P<destination>.{2,80}?)[.!?]*$"), "show_route"),
-    (re.compile(_POLITE + r"(?:cek |cari(?:kan)? |lihat |bacakan |apa |ada )?(?:berita|kabar terkini)"
+    (re.compile(_POLITE + r"(?:cek |cari(?:kan)? |lihat |bacakan |apa |ada )?" + _NEWS_WORD +
                 r"(?:\s+(?:tentang|soal|mengenai|terkait))?\s*(?P<topic>.{0,80}?)[.!?]*$"), "news"),
 ]
-_NOT_A_SONG = {"lagi", "ulang", "terus", "balik", "kembali", "sebelumnya", "berikutnya", "selanjutnya"}
+_NOT_A_SONG = {"lagi", "ulang", "terus", "balik", "kembali", "sebelumnya", "berikutnya", "selanjutnya", "video", "film"}
+_SHORT_NEWS = re.compile(r"^(?:\w+\s+)?" + _NEWS_WORD + r"\s*(?P<topic>(?:\w+\s*){0,4}?)[.!?]*$")
 _NO_TOPIC = re.compile(r"^(hari ini|terkini|terbaru|sekarang|apa|apa saja|apa aja|hari ini apa|pagi ini|malam ini)?$")
 
 
@@ -74,6 +78,10 @@ def parse_action(text: str) -> Intent | None:
         if name == "news" and _NO_TOPIC.match(args["topic"]):
             args["topic"] = ""
         return Intent(name, args)
+    # "Terupdate brita hari ini" (a mis-heard first word): a short utterance about the news is still news
+    if (m := _SHORT_NEWS.match(lowered)) and len(lowered.split()) <= 6:
+        topic = m["topic"].strip()
+        return Intent("news", {"topic": "" if _NO_TOPIC.match(topic) else topic})
     return None
 
 

@@ -224,21 +224,14 @@ async def find_images(query: str, limit: int = 6) -> list[dict]:
         return [{"error": f"pencarian gambar gagal: {type(e).__name__}"}]
 
 
-def _yt_search(query: str, limit: int) -> list[dict]:
-    import yt_dlp
-    with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "skip_download": True, "noplaylist": True}) as y:
-        info = y.extract_info(f"ytsearch{limit}:{query}", download=False)
-    return [{"url": e["url"], "title": e.get("title") or "", "channel": e.get("channel") or e.get("uploader") or "",
-             "duration_s": e.get("duration")} for e in info.get("entries", []) if e.get("url")]
-
-
 @mcp.tool()
 async def find_videos(query: str, limit: int = 5) -> list[dict]:
     """Search YouTube videos (title, channel, duration, url). Use for tutorials/demos, then show_media
     with kind 'video'."""
     import asyncio
     try:
-        return await asyncio.to_thread(_yt_search, query, max(1, min(limit, 10)))
+        from . import media_tools
+        return await asyncio.to_thread(media_tools.youtube_search, query, max(1, min(limit, 10)))
     except Exception as e:
         return [{"error": f"pencarian video gagal: {type(e).__name__}"}]
 

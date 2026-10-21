@@ -412,11 +412,20 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
     match action.name:
         case "play_music":
             r = await media_tools.play(a["query"])
+            if r.get("playing") and r.get("source") == "YouTube":
+                return f"Oke, kuputar {r['playing']} di layar, lewat YouTube."
             if r.get("playing"):
                 return f"Oke, kuputar {r['playing']} dari {r['artist']}."
             gap = await perf.capability_gap("musik", f"putar lagu {a['query']}", str(r.get("error") or ""))
             return (f"Maaf, {a['query']} belum bisa kuputar: {r.get('error')}."
                     + (" Aku akan mencari cara sendiri supaya lain kali bisa, nanti kulaporkan." if gap else ""))
+        case "play_video":
+            r = await media_tools.video(a["query"])
+            if r.get("playing"):
+                return f"Ini videonya di layar: {r['playing']}."
+            gap = await perf.capability_gap("video", f"putar video {a['query']}", str(r.get("error") or ""))
+            return (f"Maaf, video {a['query']} belum bisa kutampilkan: {r.get('error')}."
+                    + (" Aku akan mencari cara sendiri supaya lain kali bisa." if gap else ""))
         case "show_route":
             r = await media_tools.route(a["destination"], "", "driving", location)
             if r.get("error"):
