@@ -2,7 +2,10 @@ package online.cosger.jarvis.ui.stage
 
 import android.annotation.SuppressLint
 import android.net.Uri
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.annotation.OptIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,7 +27,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -104,36 +109,79 @@ fun MusicPanel(panel: Panel, actions: StageActions) {
     }
 }
 
-private val YOUTUBE = Regex("^https://(www\\.|m\\.)?(youtube\\.com/watch\\?v=|youtu\\.be/)([A-Za-z0-9_-]{11})")
+private val YOUTUBE = Regex("^https://(?:www\\.|m\\.)?(?:youtube\\.com/(?:watch\\?(?:.*&)?v=|shorts/|embed/)|youtu\\.be/)([A-Za-z0-9_-]{11})")
+
+/** The 11-character video id of a YouTube watch/short/embed/youtu.be URL, or null. Pure; unit-tested. */
+fun youtubeId(url: String): String? = YOUTUBE.find(url)?.groupValues?.get(1)
+
+/**
+ * The official embedded YouTube player page. Loaded with JARVIS' own https origin (YouTube refuses embeds
+ * without a valid origin/referrer — "error 153"), with its normal controls so the owner can always tap play.
+ */
+fun youtubeEmbedHtml(id: String, origin: String, autoplay: Boolean): String =
+    "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>" +
+        "<style>html,body{margin:0;height:100%;background:#000}iframe{border:0;width:100%;height:100%}</style></head><body>" +
+        "<iframe src='https://www.youtube.com/embed/$id?autoplay=${if (autoplay) 1 else 0}&playsinline=1&controls=1&rel=0" +
+        "&modestbranding=1&enablejsapi=1&origin=${Uri.encode(origin)}' " +
+        "referrerpolicy='strict-origin-when-cross-origin' " +
+        "allow='autoplay; encrypted-media; picture-in-picture; fullscreen' allowfullscreen></iframe></body></html>"
 
 /** YouTube only in its official, visible embedded player (its terms forbid background/extracted playback). */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun VideoPanel(panel: Panel, actions: StageActions) {
+    val context = LocalContext.current
     val url = panel.str("url")
-    val yt = YOUTUBE.find(url)?.groupValues?.get(3)
+    val yt = youtubeId(url)
+    var reload by remember(url) { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
         if (yt != null) {
-            AndroidView({ ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.allowFileAccess = false
-                    loadDataWithBaseURL("https://www.youtube.com",
-                        "<html><body style='margin:0;background:#000'><iframe width='100%' height='100%' " +
-                            "src='https://www.youtube.com/embed/$yt?autoplay=${if (panel.autoplay) 1 else 0}&playsinline=1' frameborder='0' " +
-                            "allow='autoplay; encrypted-media; picture-in-picture' allowfullscreen></iframe></body></html>",
-                        "text/html", "utf-8", null)
-                }
-            }, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
-                onRelease = { it.destroy() })
+            val origin = actions.console.absolute("/").trimEnd('/')
+            key(reload) {
+                AndroidView({ ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true // the YouTube player keeps its state there; without it: blank
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        webChromeClient = WebChromeClient() // required for HTML5 video in a WebView
+                        webViewClient = object : WebViewClient() {
+                            // a tap on the YouTube logo/title leaves the player: open the YouTube app instead
+                            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                                if (!request.isForMainFrame) return false
+                                openYoutube(view.context, request.url.toString())
+                                return true
+                            }
+                        }
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                        loadDataWithBaseURL("$origin/", youtubeEmbedHtml(yt, origin, panel.autoplay), "text/html", "utf-8", null)
+                    }
+                }, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
+                    onRelease = { it.stopLoading(); it.destroy() })
+            }
         } else {
             val player = rememberPlayer(url, actions, panel.autoplay)
             AndroidView({ ctx -> PlayerView(ctx).apply { this.player = player } },
                 Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)))
         }
         Spacer(Modifier.height(8.dp))
-        Text(panel.str("title"), color = JarvisColors.Text, fontSize = 14.sp)
+        Text(panel.str("title"), color = JarvisColors.Text, fontSize = 14.sp, maxLines = 2)
+        if (yt != null) {
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PanelButton("Putar di YouTube", primary = true) { openYoutube(context, "https://www.youtube.com/watch?v=$yt") }
+                PanelButton("Muat ulang") { reload++ }
+            }
+        }
+    }
+}
+
+/** Opens the YouTube app (or the browser) — always works, even when the embedded player does not. */
+fun openYoutube(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
 

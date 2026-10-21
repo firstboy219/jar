@@ -57,9 +57,20 @@ async def video(query: str, music: bool = False) -> dict:
     return {"playing": v["title"], "artist": v["channel"], "source": "YouTube", "stage_id": shown["id"]}
 
 
+_FILLER = re.compile(r"\b(tapi|tetapi|pakai|pake|aja|saja|yang|versi|nya|dong|ya|tolong|lewat|di hp)\b", re.IGNORECASE)
+
+
+def song_query(query: str) -> tuple[str, bool]:
+    """'bunga citra lestari tapi pakai cover aja' → ('bunga citra lestari cover', True). Pure."""
+    cover = bool(re.search(r"\bcover\b", query, re.IGNORECASE))
+    words = " ".join(_FILLER.sub(" ", re.sub(r"\bcover(nya)?\b", " ", query, flags=re.IGNORECASE)).split())
+    return (f"{words} cover" if cover else words) or query, cover
+
+
 async def play(query: str) -> dict:
     if not query.strip():
         return {"error": "lagu apa?"}
+    query, cover = song_query(query)
     specific = wants_specific_song(query)
     try:
         tracks = await musiclib.search(query, limit=5)
@@ -70,7 +81,7 @@ async def play(query: str) -> dict:
     if specific:  # a named song: only the real one, else the official video
         tracks = [t for t in tracks if matches(t, query)]
         if not tracks:
-            yt = await video(query, music=True)
+            yt = await video(query, music=not cover)  # a cover is by definition not the "official" one
             return yt if "error" not in yt else {"error": f"{failure}; {yt['error']}"}
     for t in tracks:
         try:

@@ -22,9 +22,14 @@ from . import db, llm, reports
 log = logging.getLogger("jarvis-core.auditor")
 
 SLOW_REPLY_MS = 45_000
+# A promise of FUTURE work ("aku cek dulu", "akan kucari") — not a finished direct action ("Oke, kuputar X")
+# and not a failure ("belum bisa kuputar").
+_FUTURE = re.compile(r"\b(akan|mau|segera|nanti)\s+(ku|aku |saya )?(cek|cari|carikan|putar|putarkan|tampilkan|siapkan|"
+                     r"buatkan|kerjakan|urus|periksa|kabari)|\b(cek|cari|carikan|periksa)\s+dulu\b", re.IGNORECASE)
+_FAILED = re.compile(r"\b(maaf|belum bisa|tidak bisa|gagal)\b", re.IGNORECASE)
 _ACK = re.compile(r"^(oke|ok|okay|sip|siap|makasih|terima ?kasih|thanks|ya|iya|baik|mantap|good)\b.{0,25}$", re.IGNORECASE)
 SLOW_TASK_S = 15 * 60
-_state = {"last_run": None, "last_told": None}
+_state = {"last_run": None}
 
 JUDGE = """Kamu PENGAWAS ALUR JARVIS. Untuk setiap giliran, nilai apakah jawaban JARVIS (agen utama, bicara lewat \
 suara) SESUAI dengan ucapan pemilik dan konteks obrolannya. Masalah yang dicari: tidak nyambung / menjawab hal lain, \
@@ -59,11 +64,12 @@ def turn_checks(turns: list[dict], spawned_at: list[tuple[str, datetime]]) -> li
     """Deterministic issues in a list of messages (oldest first). Pure, unit-tested.
     turns: {"id","session_id","role","content","route","created_at","trace"}; spawned_at: (session, time)
     of every owner task created."""
-    from .assistant import _PROMISE
-    issues, last_user, previous = [], {}, {}
+    issues, last_user, previous, prev_said = [], {}, {}, {}
     for m in turns:
         sid = m["session_id"]
         if m["role"] == "user":
+            if sid in last_user:
+                prev_said[sid] = _norm(last_user[sid]["content"])
             last_user[sid] = m
             continue
         if m["route"] not in ("assistant", "error"):
@@ -77,7 +83,9 @@ def turn_checks(turns: list[dict], spawned_at: list[tuple[str, datetime]]) -> li
         if isinstance(trace, dict) and (trace.get("total_ms") or 0) > SLOW_REPLY_MS:
             issues.append({**base, "kind": "slow_reply", "severity": "low",
                            "detail": f"{trace['total_ms'] // 1000} detik sampai menjawab ({(trace.get('route') or {}).get('model', '-')})"})
-        if _PROMISE.search(m["content"]) and said and not _ACK.match(said.strip()):
+        direct = (trace.get("route") or {}).get("model") == "aksi-langsung" if isinstance(trace, dict) else False
+        if (_FUTURE.search(m["content"]) and not _FAILED.search(m["content"]) and not direct
+                and said and not _ACK.match(said.strip())):
             t0 = last_user.get(sid, m)["created_at"] - timedelta(seconds=5)
             t1 = m["created_at"] + timedelta(seconds=30)
             if not any(s == sid and t0 <= at <= t1 for s, at in spawned_at):
@@ -85,7 +93,8 @@ def turn_checks(turns: list[dict], spawned_at: list[tuple[str, datetime]]) -> li
                                "detail": "JARVIS bilang akan mengerjakan, tapi tidak ada tugas yang dimulai"})
         key = _norm(m["content"])[:200]
         recent = previous.setdefault(sid, [])
-        if key and key in recent[-3:] and _norm(said) not in ("", "ulangi", "apa", "hah"):
+        same_ask = _norm(said) == prev_said.get(sid)  # the owner asked the same thing again: same answer is fine
+        if key and key in recent[-3:] and not same_ask and _norm(said) not in ("", "ulangi", "apa", "hah"):
             issues.append({**base, "kind": "repeated", "severity": "medium",
                            "detail": "jawaban sama persis dengan jawaban sebelumnya untuk ucapan yang berbeda"})
         recent.append(key)
@@ -195,11 +204,14 @@ async def run(actor: str = "jarvis-core") -> dict:
     await q.execute(
         """INSERT INTO settings_kv (key, value) VALUES ('flowwatch:since', $1)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", now.isoformat())
+    if await q.fetchval("SELECT status FROM tasks WHERE id = $1", task_id) != "running":
+        return {"task_id": task_id, "new": new, "fix_task_id": None}  # the owner cancelled this run: no fix, no report
     serious = [i for i in new if i["severity"] in ("medium", "high")]
     fix = await _start_fix() if serious else None
     summary = (f"{len(new)} masalah baru ({len(serious)} perlu diperbaiki) dari {len(new_turns)} pesan."
                if new else f"Tidak ada masalah dari {len(new_turns)} pesan.")
-    await q.execute("UPDATE tasks SET status = 'completed', result = $2, finished_at = now() WHERE id = $1", task_id, summary)
+    await q.execute("UPDATE tasks SET status = 'completed', result = $2, finished_at = now() WHERE id = $1 AND status = 'running'",
+                    task_id, summary)
     if serious:
         await _tell_owner(serious, fix)
     return {"task_id": task_id, "new": new, "fix_task_id": fix["id"] if fix else None}
@@ -231,10 +243,14 @@ async def _start_fix() -> dict | None:
 
 
 async def _tell_owner(serious: list[dict], fix: dict | None) -> None:
+    """At most every 3 hours — remembered in the database, so a restart does not reset it."""
     now = datetime.now(timezone.utc)
-    if _state["last_told"] and now - _state["last_told"] < timedelta(hours=3):
+    q = db.pool()
+    told = await q.fetchval("SELECT value FROM settings_kv WHERE key = 'flowwatch:told'")
+    if isinstance(told, str) and now - datetime.fromisoformat(told) < timedelta(hours=3):
         return
-    _state["last_told"] = now
+    await q.execute("""INSERT INTO settings_kv (key, value) VALUES ('flowwatch:told', $1)
+                       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", now.isoformat())
     kinds = sorted({KIND_TEXT.get(i["kind"], i["kind"]) for i in serious})
     order = ["off_context", "promise_unkept", "repeated", "task_failed", "error_reply"]  # most telling example first
     example = min(serious, key=lambda i: (not i.get("owner_said"), order.index(i["kind"]) if i["kind"] in order else 9))

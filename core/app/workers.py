@@ -92,20 +92,31 @@ async def _run(task_id: int, context: str) -> None:
                                      "event": {"type": "thought", "text": "mencari cepat di web"}})
                 if text := await quick.answer(row["instruction"]):
                     result = hermes.HermesReply(text, None, None, 0)
-            events = _nothing() if result else hermes.stream(
-                context + brief + row["instruction"], f"task-{task_id}", row["image"],
-                model=f"jarvis-{row['category']}", on_run=remember_run)
-            async for ev in events:
-                if ev["type"] == "done":
-                    result = ev["reply"]
-                    continue
-                if ev["type"] == "approval":
-                    await _bridge_approval(task_id, row["title"], ev)
-                    continue
-                await hub.broadcast({"type": "task_event", "task_id": task_id, "event": ev})
-                if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
-                    await hub.broadcast({"type": "task_event", "task_id": task_id,
-                                         "event": await memory.context_event(ev["label"])})
+            for attempt in range(HERMES_RETRIES + 1):
+                events = _nothing() if result else hermes.stream(
+                    context + brief + row["instruction"], f"task-{task_id}", row["image"],
+                    model=f"jarvis-{row['category']}", on_run=remember_run)
+                started = False
+                try:
+                    async for ev in events:
+                        started = True
+                        if ev["type"] == "done":
+                            result = ev["reply"]
+                            continue
+                        if ev["type"] == "approval":
+                            await _bridge_approval(task_id, row["title"], ev)
+                            continue
+                        await hub.broadcast({"type": "task_event", "task_id": task_id, "event": ev})
+                        if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
+                            await hub.broadcast({"type": "task_event", "task_id": task_id,
+                                                 "event": await memory.context_event(ev["label"])})
+                    break
+                except hermes.HermesError as e:
+                    # Hermes restarting (deploy, crash): wait for it instead of failing the owner's task
+                    if started or "tidak dapat dihubungi" not in str(e) or attempt == HERMES_RETRIES:
+                        raise
+                    log.warning("worker %s: Hermes unreachable, retry %s", task_id, attempt + 1)
+                    await asyncio.sleep(HERMES_RETRY_S)
             from . import billing
             if billing.is_exhausted(result.text):  # Hermes reports a 402 as its "answer": it is a failure
                 await billing.notify_exhausted()
@@ -137,6 +148,7 @@ async def _run(task_id: int, context: str) -> None:
 
 
 BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine")
+HERMES_RETRIES, HERMES_RETRY_S = 6, 20  # up to 2 minutes for Hermes to come back
 
 
 async def _yield_to_owner(task_id: int, kind: str, row) -> None:

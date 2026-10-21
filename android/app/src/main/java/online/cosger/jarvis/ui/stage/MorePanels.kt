@@ -122,7 +122,8 @@ fun blockHeight(kind: String): Dp? = when (kind) {
     "text" -> null
     "doc" -> 140.dp
     "music", "audio" -> 230.dp
-    "image", "video", "gallery" -> 240.dp
+    "image", "gallery" -> 240.dp
+    "video" -> 320.dp // player + "Putar di YouTube"
     "map" -> 280.dp
     else -> 380.dp // web
 }

@@ -443,3 +443,23 @@ def test_server_usage_parsing():
     assert hostinfo.busy_pct(a, b) == 44.4  # 80 busy of 180 ticks
     m = hostinfo.meminfo("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\nSwapTotal: 4194304 kB\nSwapFree: 4194304 kB\n")
     assert m == {"total": 15.62, "used": 7.81, "swap_total": 4.0, "swap_used": 0.0}
+
+
+def test_bugs_found_in_the_live_session():
+    from datetime import datetime, timezone
+    from app import auditor
+    from app.assistant import without_tool_talk
+    from app.media_tools import song_query
+    t = datetime(2026, 10, 21, 9, tzinfo=timezone.utc)
+
+    def m(i, role, text, model=None):
+        return {"id": i, "session_id": "s", "role": role, "content": text, "route": "assistant", "created_at": t,
+                "trace": {"route": {"model": model}} if model else None}
+    turns = [m(1, "user", "tolong putarkan lagu Peterpan"), m(2, "assistant", "Oke, kuputar Peterpan - Mungkin Nanti.", "aksi-langsung"),
+             m(3, "user", "tolong putarkan lagu peterpan"), m(4, "assistant", "Oke, kuputar Peterpan - Mungkin Nanti.", "aksi-langsung"),
+             m(5, "user", "putar lagu idgitaf"), m(6, "assistant", "Maaf, idgitaf belum bisa kuputar: gagal.")]
+    assert auditor.turn_checks(turns, []) == []  # done actions, failures and same answers to the same ask are fine
+    assert without_tool_talk("Oke, saya akan cek kenapa video tidak bisa diputar. Saya akan panggil spawn_task untuk mengecek.") == \
+        "Oke, saya akan cek kenapa video tidak bisa diputar."
+    assert song_query("bunga cintail estari tapi pakai cover aja") == ("bunga cintail estari cover", True)
+    assert song_query("peterpan") == ("peterpan", False)

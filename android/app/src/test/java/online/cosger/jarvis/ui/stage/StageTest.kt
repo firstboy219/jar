@@ -91,4 +91,15 @@ class StageTest {
             assertEquals(k, StageState().reduce(stage("""{"type":"stage","id":"$k","panel":"$k","payload":{}}""")).panel?.kind)
         }
     }
+
+    @Test fun youtubeLinksAndTheEmbeddedPlayer() {
+        assertEquals("dQw4w9WgXcQ", youtubeId("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", youtubeId("https://www.youtube.com/watch?list=x&v=dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", youtubeId("https://youtu.be/dQw4w9WgXcQ"))
+        assertEquals("dQw4w9WgXcQ", youtubeId("https://m.youtube.com/shorts/dQw4w9WgXcQ"))
+        assertNull(youtubeId("https://example.com/watch?v=dQw4w9WgXcQ"))
+        val html = youtubeEmbedHtml("dQw4w9WgXcQ", "https://vis1.cosger.online", autoplay = false)
+        assertTrue("controls=1" in html && "autoplay=0" in html && "origin=https%3A%2F%2Fvis1.cosger.online" in html)
+        assertTrue("referrerpolicy='strict-origin-when-cross-origin'" in html)
+    }
 }

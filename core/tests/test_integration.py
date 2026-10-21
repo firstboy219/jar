@@ -868,7 +868,7 @@ async def test_fast_worker_answers_lookups_without_a_hermes_session(pool, monkey
 async def test_flow_watcher_tells_the_owner_and_starts_one_fix(pool, monkeypatch):
     from app import auditor, llm, workers
     monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
-    auditor._state.update(last_run=None, last_told=None)
+    auditor._state.update(last_run=None)
 
     async def judge(messages, **kw):
         if kw.get("caller") != "flowwatch":
@@ -920,3 +920,24 @@ async def test_server_usage_for_the_home_screen(pool):
     u = await main.admin_server_usage("test")
     assert 0 <= u["cpu_pct"] <= 100 and u["memory_gb"]["total"] > 0 and u["disk_gb"]["total"] > 0
     assert u["tasks"] == {"owner": 0, "background": 0} and "spent_usd" in u["ai"]
+
+
+async def test_worker_waits_for_hermes_to_come_back(pool, monkeypatch):
+    import asyncio
+    from app import hermes, workers
+    monkeypatch.setattr(workers, "HERMES_RETRY_S", 0)
+    calls = []
+
+    async def flaky(text, session_id, image=None, **kw):
+        calls.append(1)
+        if len(calls) < 3:
+            raise hermes.HermesError("Hermes tidak dapat dihubungi (ConnectError)")
+        yield {"type": "done", "reply": hermes.HermesReply("Selesai.", 10, 2, 5)}
+    monkeypatch.setattr(hermes, "stream", flaky)
+    _fake_llm(monkeypatch, [])
+    t = await workers.spawn("Ringkas dokumen", "Buatkan ringkasan dokumen rapat kemarin", "s60", "test", category="produktivitas")
+    for _ in range(50):
+        if await pool.fetchval("SELECT status FROM tasks WHERE id = $1", t["id"]) == "completed":
+            break
+        await asyncio.sleep(0.05)
+    assert len(calls) == 3 and await pool.fetchval("SELECT result FROM tasks WHERE id = $1", t["id"]) == "Selesai."

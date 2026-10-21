@@ -338,7 +338,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
 
     async def say(sentence: str) -> None:
         nonlocal said_any, first_say_ms
-        sentence = sentence.strip()
+        sentence = without_tool_talk(sentence) if _TOOL_NAMES.search(sentence) else sentence.strip()
         if not sentence or announces_silence(sentence):
             return
         said_any = True
@@ -364,7 +364,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
         route = completion.route or route
         usage_in += completion.prompt_tokens or 0
         usage_out += completion.completion_tokens or 0
-        spoken = (spoken + " " + completion.text).strip()
+        spoken = (spoken + " " + without_tool_talk(completion.text)).strip()
         if not completion.tool_calls:
             break
         messages.append({"role": "assistant", "content": completion.text or None, "tool_calls": [
@@ -394,6 +394,15 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await say(spoken or "Oke.")
     return Answer(spoken or "Oke.", usage_in or None, usage_out or None, spoken_live=speak_live and said_any,
                   route=route, first_token_ms=first_token_ms, first_say_ms=first_say_ms)
+
+
+_TOOL_NAMES = re.compile(r"\b(" + "|".join(t["function"]["name"] for t in TOOLS) + r")\b|\bworker\b|\bdelegasi\w*", re.IGNORECASE)
+
+
+def without_tool_talk(text: str) -> str:
+    """The small model sometimes says "saya akan panggil spawn_task…": drop such sentences. Pure."""
+    kept = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p and not _TOOL_NAMES.search(p)]
+    return " ".join(kept) or ("Oke, sedang kuurus." if text.strip() else "")
 
 
 def _direct_action(text: str, stt: dict | None, screen: str | None, screen_text: str):
