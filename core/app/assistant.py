@@ -425,7 +425,7 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
         case "news":
             topic = a["topic"]
             await workers.spawn("Berita terbaru" + (f": {topic}" if topic else ""),
-                                f"Cari berita terbaru{' tentang ' + topic if topic else ' hari ini di Indonesia'} "
+                                f"Cari berita terbaru{' tentang ' + topic if topic else ' hari ini'} "
                                 "dan sampaikan judul-judul terpentingnya beserta sumbernya.",
                                 session_id, actor, device_id, location, category="web", private=private)
             return f"Oke, kucek berita terbaru{' soal ' + topic if topic else ''}, sebentar ya."
