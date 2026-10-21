@@ -66,7 +66,7 @@ SETTINGS = [
      "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma. Dipakai juga oleh Whisper."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"), ("ai", "Model AI"),
-        ("studio", "Hermes Studio"), ("docs", "Dokumen"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
+        ("studio", "Hermes Studio"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
         ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
@@ -150,7 +150,9 @@ async def _tab_data(tab: str, request: Request) -> dict:
     if tab == "app":
         return {"releases": load_releases()}
     if tab == "self":
-        return await core("GET", "/admin/self")
+        return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors")}
+    if tab == "password":
+        return {"vault": await core("GET", "/admin/vault")}
     if tab == "ai":
         return {"composition": await core("GET", "/admin/composition"), "llm": await core("GET", "/admin/llm-usage")}
     if tab == "studio":
@@ -295,6 +297,17 @@ async def improvement_revert(request: Request, improvement_id: int):
     except CoreError as e:
         return await render(request, "self", errors=[str(e)])
     return await render(request, "self", notice=f"Perbaikan #{improvement_id} dibatalkan.")
+
+
+@app.post("/vault/{entry_id}/delete", response_class=HTMLResponse)
+async def vault_delete(request: Request, entry_id: str):
+    if r := guard(request):
+        return r
+    try:
+        await core("DELETE", f"/admin/vault/{entry_id}")
+    except CoreError as e:
+        return await render(request, "password", errors=[str(e)])
+    return await render(request, "password", notice="Login dihapus dari brankas.")
 
 
 @app.post("/devices", response_class=HTMLResponse)

@@ -21,6 +21,7 @@ sed \
   -e "s|^CORE_ADMIN_TOKEN=$|CORE_ADMIN_TOKEN=$(gen)|" \
   -e "s|^MCP_TOKEN=$|MCP_TOKEN=$(gen)|" \
   -e "s|^LLM_GATEWAY_KEY=$|LLM_GATEWAY_KEY=$(gen)|" \
+  -e "s|^VAULT_KEY=$|VAULT_KEY=$(gen)|" \
   -e "s|^JARVIS_RO_PASSWORD=$|JARVIS_RO_PASSWORD=$(gen)|" \
   -e "s|^ANDROID_KEYSTORE_PASSWORD=$|ANDROID_KEYSTORE_PASSWORD=$(gen)|" \
   -e "s|^HOST_UID=.*|HOST_UID=$(id -u)|" \

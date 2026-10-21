@@ -52,6 +52,35 @@ import java.io.File
 
 // ---------- web ----------
 
+/** Fill the login form of the current page (no JavaScript bridge: values are injected, nothing comes back). */
+fun fillScript(username: String, password: String): String {
+    fun q(v: String) = kotlinx.serialization.json.JsonPrimitive(v).toString()
+    return """(function(u,p){
+      function set(el,v){var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');d.set.call(el,v);
+        el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}
+      var pw=[].slice.call(document.querySelectorAll('input[type=password]')).filter(function(e){return e.offsetParent!==null;})[0];
+      var all=[].slice.call(document.querySelectorAll('input')).filter(function(e){return e.offsetParent!==null&&/^(text|email|tel|)$/.test(e.type);});
+      var user=null;for(var i=0;i<all.length;i++){if(pw&&(all[i].compareDocumentPosition(pw)&4))user=all[i];}
+      if(!user&&!pw)return 'none';
+      if(user&&u)set(user,u); if(pw)set(pw,p); return pw?'filled':'user-only';
+    })(${q(username)},${q(password)});"""
+}
+
+/** Remember what the owner typed into a login form until the next page (window.name survives the redirect). */
+const val CAPTURE_SCRIPT = """(function(){
+  if(window.__jarvisCapture)return; window.__jarvisCapture=true;
+  function grab(){var pw=document.querySelector('input[type=password]'); if(!pw||!pw.value)return;
+    var all=[].slice.call(document.querySelectorAll('input')).filter(function(e){return /^(text|email|tel|)$/.test(e.type)&&e.value;});
+    var u='';for(var i=0;i<all.length;i++){if(all[i].compareDocumentPosition(pw)&4)u=all[i].value;}
+    window.name='__jarvis__'+JSON.stringify({u:u,p:pw.value,o:location.origin});}
+  document.addEventListener('submit',grab,true);
+  document.addEventListener('click',function(e){var t=e.target&&e.target.closest&&e.target.closest('button,input[type=submit]');if(t)grab();},true);
+  document.addEventListener('keydown',function(e){if(e.key==='Enter')grab();},true);
+})();"""
+
+/** Read & clear a login captured on the previous page. */
+const val TAKE_SCRIPT = """(function(){var n=window.name||'';if(n.indexOf('__jarvis__')!==0)return '';window.name='';return n.substring(10);})();"""
+
 private val SECOND_LEVEL = setOf("co.id", "go.id", "ac.id", "or.id", "web.id", "my.id", "sch.id", "co.uk", "com.au", "com.sg", "com.my")
 
 /** "news.detik.com" → "detik.com", "klikbca.co.id" stays. Navigation is locked to this. Pure; unit-tested. */
@@ -109,11 +138,46 @@ fun WebPanel(panel: Panel, actions: StageActions) {
         }
     }
     var current by remember(panel.id) { mutableStateOf(url) }
+    val scope = rememberCoroutineScope()
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    var saved by remember(panel.id) { mutableStateOf<List<kotlinx.serialization.json.JsonObject>>(emptyList()) }
+    var offerSave by remember(panel.id) { mutableStateOf<kotlinx.serialization.json.JsonObject?>(null) }
+    var autofillAsked by remember(panel.id) { mutableStateOf(false) }
+    // Login mode: offer the saved login for this site (fingerprint first), fill it in.
+    fun autofill(view: WebView) {
+        if (!login || autofillAsked) return
+        autofillAsked = true
+        online.cosger.jarvis.ui.console.requireOwner(context, "Isi login tersimpan untuk $domain") {
+            scope.launch {
+                runCatching {
+                    actions.console.post("/api/v1/vault/match", kotlinx.serialization.json.buildJsonObject {
+                        put("url", kotlinx.serialization.json.JsonPrimitive(current)) }).arr().map { it.obj() }
+                }.onSuccess { list ->
+                    saved = list
+                    list.firstOrNull()?.let { view.evaluateJavascript(fillScript(it.s("username"), it.s("password")), null) }
+                    if (list.isNotEmpty()) actions.notice("Login ${list.first().s("username")} diisi dari password manager.")
+                }
+            }
+        }
+    }
+    fun checkCaptured(view: WebView) {
+        view.evaluateJavascript(TAKE_SCRIPT) { raw ->
+            val text = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw).let { (it as kotlinx.serialization.json.JsonPrimitive).content } }.getOrDefault("")
+            if (text.isBlank()) return@evaluateJavascript
+            val cred = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(text).obj() }.getOrNull() ?: return@evaluateJavascript
+            val known = saved.any { it.s("username") == cred.s("u") && it.s("password") == cred.s("p") }
+            if (!known && cred.s("p").isNotBlank()) offerSave = cred
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(JarvisColors.SurfaceHigh).padding(8.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Text("🔒 ${Uri.parse(current).host}", color = JarvisColors.Green, fontSize = 12.sp, modifier = Modifier.weight(1f))
-            if (login) PanelButton("Selesai login", primary = true) { actions.event("login_done", emptyMap()) }
+            if (login) PanelButton("Selesai login", primary = true) {
+                android.webkit.CookieManager.getInstance().flush() // stay signed in next time
+                webView?.let(::checkCaptured)
+                actions.event("login_done", emptyMap())
+            }
             else PanelButton("Buka di browser") {
                 runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(current))) }
             }
@@ -127,6 +191,9 @@ fun WebPanel(panel: Panel, actions: StageActions) {
                 settings.allowContentAccess = false
                 settings.safeBrowsingEnabled = true
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                // Sessions persist across visits: next time the site usually still knows the owner.
+                android.webkit.CookieManager.getInstance().setAcceptCookie(true)
+                android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                         val next = request.url.toString()
@@ -134,10 +201,52 @@ fun WebPanel(panel: Panel, actions: StageActions) {
                         actions.notice("Halaman mencoba pindah ke ${request.url.host} — diblokir demi keamanan.")
                         return true
                     }
+
+                    override fun onPageFinished(view: WebView, pageUrl: String) {
+                        if (!login) return
+                        checkCaptured(view)
+                        view.evaluateJavascript(CAPTURE_SCRIPT, null)
+                        autofill(view)
+                    }
                 }
                 loadUrl(url)
+                webView = this
             }
         }, Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(10.dp)), onRelease = { it.destroy() })
+    }
+    offerSave?.let { cred ->
+        var allowAgent by remember { mutableStateOf(false) }
+        AlertDialog(
+            onDismissRequest = { offerSave = null },
+            title = { Text("Simpan login untuk ${Uri.parse(cred.s("o")).host}?") },
+            text = {
+                Column {
+                    Text("Username: ${cred.s("u").ifBlank { "(tidak terbaca)" }}\nTersimpan terenkripsi di server JARVIS; lain kali terisi otomatis.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Boleh dipakai JARVIS", modifier = Modifier.weight(1f))
+                        androidx.compose.material3.Switch(allowAgent, { allowAgent = it })
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton({
+                    val c = cred
+                    offerSave = null
+                    scope.launch {
+                        runCatching {
+                            actions.console.post("/api/v1/vault", kotlinx.serialization.json.buildJsonObject {
+                                put("url", kotlinx.serialization.json.JsonPrimitive(c.s("o")))
+                                put("username", kotlinx.serialization.json.JsonPrimitive(c.s("u").ifBlank { "(akun)" }))
+                                put("password", kotlinx.serialization.json.JsonPrimitive(c.s("p")))
+                                put("allow_agent", kotlinx.serialization.json.JsonPrimitive(allowAgent))
+                            })
+                        }.onSuccess { actions.notice("Login disimpan di password manager.") }
+                            .onFailure { actions.notice("Gagal menyimpan: ${it.message}") }
+                    }
+                }) { Text("Simpan") }
+            },
+            dismissButton = { TextButton({ offerSave = null }) { Text("Jangan") } },
+        )
     }
 }
 

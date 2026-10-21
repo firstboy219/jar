@@ -53,7 +53,7 @@ async def migrate(p: asyncpg.Pool) -> list[str]:
 
 READONLY_TABLES = ("messages", "tasks", "reports", "approvals", "memories", "audit_events", "llm_usage",
                    "notifications", "context_log", "improvements", "documents", "owner_questions",
-                   "llm_categories", "llm_providers", "meetings")
+                   "llm_categories", "llm_providers", "meetings", "error_log")
 
 
 async def grant_readonly(p: asyncpg.Pool) -> bool:

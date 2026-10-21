@@ -27,6 +27,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val sttEngine = engine.sttEngine
     val console = engine.console
     val meetings = engine.meetings
+    val updater = engine.updater
 
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) = engine.saveSettings(serverUrl, token, speak)
     fun setShareLocation(enabled: Boolean) = engine.setShareLocation(enabled)

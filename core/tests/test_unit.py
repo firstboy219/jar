@@ -325,3 +325,28 @@ def test_route_polyline_is_thinned_keeping_ends():
     pts = [[-6.0 - i * 0.001, 106.0 + i * 0.001] for i in range(1000)]
     t = maps.thin(pts, 300)
     assert len(t) == 300 and t[0] == [-6.0, 106.0] and t[-1] == [round(pts[-1][0], 5), round(pts[-1][1], 5)]
+
+
+def test_vault_origin_and_encryption(monkeypatch):
+    import pytest
+    from app import vault
+    monkeypatch.setenv("VAULT_KEY", "11" * 32)
+    assert vault.normalize_origin("Login.KlikBCA.com/x?y") == "https://login.klikbca.com"
+    assert vault.normalize_origin("https://a.b.co.id:8443/") == "https://a.b.co.id:8443"
+    with pytest.raises(vault.VaultError):
+        vault.normalize_origin("http://example.com")
+    blob = vault.encrypt("rahasia-123")
+    assert b"rahasia" not in blob and vault.decrypt(blob) == "rahasia-123"
+    assert vault.base_domain("ibank.klikbca.co.id") == "klikbca.co.id"
+    monkeypatch.setenv("VAULT_KEY", "short")
+    with pytest.raises(vault.VaultError):
+        vault.encrypt("x")
+
+
+def test_error_signature_ignores_values():
+    from app import errors
+    tb1 = 'Traceback\n  File "/srv/app/x.py", line 10, in f\nValueError: bad id 12'
+    tb2 = 'Traceback\n  File "/srv/app/x.py", line 10, in f\nValueError: bad id 99'
+    assert errors.signature("jarvis-core.x", "m", tb1) == errors.signature("jarvis-core.x", "m", tb2)
+    cleaned = errors._clean("key sk-or-abcdefghijklmnopqrstu leaked")
+    assert "abcdefghijklmnopqrstu" not in cleaned and "…" in cleaned

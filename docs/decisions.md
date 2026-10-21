@@ -250,3 +250,35 @@ synthetic speech: English-pronounced "Hey Jarvis" 0.999, ordinary Indonesian sen
 Indonesian-accented voice 0.25 — hence a "lebih peka" (0.25) setting. Barge-in: speaking while JARVIS
 talks stops it, only with a headset (phone-speaker echo would trigger it), mic in VOICE_COMMUNICATION
 mode for the phone's echo canceller. Both cost battery on the Infinix; off by default.
+
+## ADR-022 — Self-improvement scope: skills yes, self-deploying code no (2026-10-21)
+The owner asked JARVIS to fix its own bugs and build missing features itself. Delivered: Hermes can create
+and refine its own skills (already on since ADR-018), draft n8n workflows (activation by approval) and
+schedules; service errors are captured in `error_log` (redacted) and read by the daily self-check; the
+skills `jarvis-self-repair` / `jarvis-self-development` make Hermes diagnose problems and, when code must
+change, write a concrete proposal (document + notification) for the developer. A pipeline in which Hermes
+edits JARVIS' own code and the host merges and deploys it (even with tests + owner approval) was designed
+but NOT built: the development session's safety policy blocked creating an agent that modifies and
+redeploys itself. It needs an explicit decision by the owner before it is reconsidered.
+
+## ADR-023 — Password manager, model-blind agent logins, remembered web sessions (2026-10-21)
+Logins live in `vault_entries`, encrypted with AES-256-GCM under `VAULT_KEY` (.env, part of the encrypted
+backups). Only owner-scope devices reach them, and the app asks for the fingerprint/PIN before opening the
+list, revealing a password or autofilling. The web panel fills a saved login (values injected; still no
+JavaScript bridge), offers to save one the owner typed, and keeps cookies so sessions survive. Entries the
+owner marks "boleh dipakai JARVIS" are synced by the jarvis plugin into Hermes' browser vault, which fills
+the password server-side — the model only ever sees an opaque handle. Passwords never enter prompts,
+memory, logs or the audit trail.
+
+## ADR-024 — Skills from the Claude ecosystem (2026-10-21)
+`infra/scripts/install-skills.sh` (pinned commits) installs 89 skills next to Hermes' 59 bundled ones:
+18 JARVIS skills (Indonesian context: replies, minutes, price comparison, finance math, routes, documents,
+diagnostics, safe web login…), 13 Apache-2.0 skills from anthropics/skills (skill-creator, mcp-builder,
+frontend-design, webapp-testing, doc-coauthoring, …), 13 MIT skills from obra/superpowers (systematic
+debugging, TDD, planning, code review, …) and 45 curated optional Hermes skills. Not installed: Anthropic's
+docx/pdf/pptx/xlsx skills (proprietary licence forbids copying), "use before every reply" meta-skills
+(token cost), jailbreak, GPU-training and paid-account skills.
+
+## ADR-025 — In-app updates (2026-10-21)
+From v0.9.0 the app checks `/api/v1/app/latest` on connect and every ~3 h; a newer version opens a dialog
+"Update sekarang" (download, SHA-256 check, Android installer) or "Tunda" (asked again after 24 h).

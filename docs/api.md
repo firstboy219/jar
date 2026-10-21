@@ -94,6 +94,9 @@ JARVIS, `error` = something failed.
 | POST | `/api/v1/meetings/{id}/marks`, `/finish`, `/ask` | mark, finish `{"duration_s","chunks"}`, question → answer |
 | GET/DELETE | `/api/v1/meetings[/{id}]`, `/api/v1/meetings/{id}/chunks/{n}` | list / detail (transcript, summary) / audio |
 | GET | `/api/v1/documents/{id}`, `/api/v1/media/{id}` | file JARVIS made / music it fetched (Range) |
+| GET/POST/PATCH/DELETE | `/api/v1/vault[/{id}]` | password manager (owner devices; never returns passwords in lists) |
+| POST | `/api/v1/vault/{id}/reveal`, `/api/v1/vault/match` | one password / logins for a page URL (autofill) |
+| GET | `/api/v1/app/latest`, `/api/v1/app/releases/{file}` | newest APK (every device) + download |
 | * | `/api/v1/console/…` | every web-admin endpoint (`/admin/…`) for owner-scope devices, plus `settings`, `releases` |
 
 Errors: `401` bad/revoked token, `403` device without owner scope, `422` validation, `503` dependency not configured.

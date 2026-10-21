@@ -39,6 +39,8 @@ infra/                  Docker Compose stack for the Lightsail server
   hermes/               Hermes persona (SOUL.md), config sync on start, jarvis-memory plugin
   ears/                 jarvis-ears: faster-whisper + sherpa-onnx (voiceprint, diarization)
   scripts/get-models.sh downloads the local Qwen models
+  scripts/install-skills.sh  teaches Hermes 89 extra skills (JARVIS, anthropics/skills, superpowers, Hermes optional)
+  hermes/skills/        JARVIS' own skills (Indonesian context)
   admin/                web admin (jar1)
   data/                 container volumes (git-ignored)
 ```
@@ -66,6 +68,7 @@ Domains: `vis1.cosger.online` = backend (jarvis-core), `jar1.cosger.online` = we
 cd infra
 ./scripts/init-env.sh          # generates .env, prints the web admin password once
 ./scripts/get-models.sh        # local Qwen models (~4 GB)
+./scripts/install-skills.sh    # Hermes skills (after the stack is up)
 docker compose up -d --build
 ./scripts/npm-proxy-hosts.sh   # proxy hosts + Let's Encrypt
 sudo cp systemd/jarvis-apply.* /etc/systemd/system/ && sudo systemctl enable --now jarvis-apply.path

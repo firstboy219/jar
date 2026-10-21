@@ -157,6 +157,15 @@
 </section>
 
 {% elif tab == 'self' %}
+{% if errors_log %}
+<section class="card">
+  <h2>Error layanan (7 hari)</h2>
+  {% for e in errors_log %}
+  <div class="item"><strong>{{ e.n }}× [{{ e.source }}] {{ e.message[:160] }}</strong><br><small>{{ e.logger }} · terakhir {{ e.last_at[:16]|replace('T',' ') }}</small>
+    {% if e.traceback %}<details><summary>traceback</summary><pre>{{ e.traceback }}</pre></details>{% endif %}</div>
+  {% endfor %}
+</section>
+{% endif %}
 <section class="card">
   <div class="row"><h2>Apa yang JARVIS tahu tentang dirinya</h2>
     <form method="post" action="/selfcheck"><button type="submit">Cek &amp; perbaiki diri sekarang</button></form></div>
@@ -305,6 +314,18 @@
   <p class="hint">Disalin otomatis ke memori JARVIS (tab Memori) oleh plugin jarvis-memory.</p>
   {% if st.memory %}<pre>{{ st.memory }}</pre>{% endif %}
   {% if st.user %}<pre>{{ st.user }}</pre>{% endif %}
+</section>
+
+{% elif tab == 'password' %}
+<section class="card">
+  <h2>Brankas password</h2>
+  <p class="hint">Disimpan terenkripsi di server. Password hanya bisa dilihat/ditambah dari APK (Lainnya → Password, dengan sidik jari).
+    Login bertanda "JARVIS" boleh dipakai Hermes untuk masuk ke situs — password diisi otomatis tanpa pernah terlihat oleh AI.</p>
+  {% for v in vault or [] %}
+  <div class="item row"><div><strong>{{ v.label }}</strong> <small>{{ v.origin }}</small><br>
+    <small>{{ v.username }} · {{ 'boleh dipakai JARVIS' if v.allow_agent else 'hanya untuk HP' }} · terakhir dipakai {{ v.last_used[:16]|replace('T',' ') if v.last_used else 'belum' }}</small></div>
+    <form method="post" action="/vault/{{ v.id }}/delete"><button class="danger" type="submit" onclick="return confirm('Hapus login {{ v.label }}?')">Hapus</button></form></div>
+  {% else %}<p class="hint">Belum ada login tersimpan.</p>{% endfor %}
 </section>
 
 {% elif tab == 'docs' %}

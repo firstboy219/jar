@@ -69,6 +69,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     private val api = CoreApi()
     val console = ConsoleApi({ settings.value.serverUrl }, { settings.value.deviceToken })
     val meetings = online.cosger.jarvis.meeting.MeetingRecorder(context, console)
+    val updater = online.cosger.jarvis.update.AppUpdater(context, console, settingsStore)
 
     // Two ways to listen (Komposisi AI → mesin suara): Deepgram live stream, or on-phone VAD + server STT.
     private val deepgram = ContinuousListener(scope)
@@ -154,11 +155,18 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                     }
                     refreshComposition()
                     refreshBrain()
+                    updater.check()
                 }
             }
         }
         scope.launch {
-            while (true) { delay(5 * 60_000L); if (connection.value == Connection.Connected) refreshBrain() }
+            var ticks = 0
+            while (true) {
+                delay(5 * 60_000L)
+                if (connection.value != Connection.Connected) continue
+                refreshBrain()
+                if (++ticks % 36 == 0) updater.check() // every ~3 h
+            }
         }
         scope.launch { autoMuteWatchdog() }
         connect()

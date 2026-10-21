@@ -17,7 +17,7 @@ async def pool(monkeypatch):
     monkeypatch.setattr(config.settings, "qdrant_url", os.getenv("TEST_QDRANT_URL", ""))
     p = await db.connect(os.environ["TEST_DATABASE_URL"])
     await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
-                    "settings_kv, owner_questions, documents RESTART IDENTITY CASCADE")
+                    "settings_kv, owner_questions, documents, vault_entries, error_log RESTART IDENTITY CASCADE")
     # factory composition: everything local, no category budgets
     await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
         WHEN name IN ('ngobrol', 'cepat', 'penglihatan', 'balas-pesan') THEN '[{"provider": "lokal", "model": "qwen-lokal"}]'::jsonb
@@ -714,3 +714,21 @@ async def test_draft_reply_asks_before_cloud_and_never_sends(pool, monkeypatch):
     stage_ev = [e for e in pushed if e.get("type") == "stage"][-1]
     assert stage_ev["panel"] == "draft" and len(stage_ev["payload"]["variants"]) == 3
     hub.reset()
+
+
+async def test_password_manager_never_leaks_and_feeds_the_agent_vault(pool, monkeypatch):
+    from app import vault
+    monkeypatch.setenv("VAULT_KEY", "22" * 32)
+    e = await vault.save("https://ibank.klikbca.co.id/login", "ilham", "S3cret!", "test", allow_agent=False)
+    again = await vault.save("ibank.klikbca.co.id", "ilham", "N3w!", "test")  # same account: update, not duplicate
+    assert again["id"] == e["id"] and "password" not in again
+    assert await pool.fetchval("SELECT count(*) FROM vault_entries") == 1
+    raw = await pool.fetchval("SELECT secret FROM vault_entries")
+    assert b"N3w!" not in bytes(raw)
+    hits = await vault.match("https://www.klikbca.co.id/x", "test")  # same site, other host
+    assert hits[0]["password"] == "N3w!"
+    assert await vault.agent_entries() == []  # not allowed for the agent yet
+    await vault.update(e["id"], "test", allow_agent=True)
+    assert (await vault.agent_entries())[0]["username"] == "ilham"
+    audit = " ".join(str(r["detail"]) for r in await pool.fetch("SELECT detail FROM audit_events"))
+    assert "N3w!" not in audit and "S3cret!" not in audit

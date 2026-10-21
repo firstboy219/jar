@@ -22,7 +22,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, audit, awareness, brain, budget, chat, hermes_studio, meetings, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, audit, awareness, brain, budget, chat, errors, hermes_studio, meetings, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, notifications, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -34,6 +34,7 @@ log = logging.getLogger("jarvis-core")
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect(settings.database_url)
+    error_writer = errors.install("core")
     try:
         await db.grant_readonly(db.pool())
     except Exception as e:
@@ -90,7 +91,7 @@ async def lifespan(app: FastAPI):
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer):
         t.cancel()
     await db.close()
 
@@ -198,6 +199,101 @@ async def brain_card(mem_id: str, device: dict = Depends(device_auth)):
     if not card:
         raise HTTPException(404, "memori tidak ditemukan")
     return card
+
+
+# ---------- password manager (owner's phone) ----------
+
+class VaultIn(BaseModel):
+    url: str = Field(min_length=3, max_length=500)
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=500)
+    label: str = Field(default="", max_length=100)
+    note: str = Field(default="", max_length=500)
+    allow_agent: bool = False
+
+
+class VaultPatch(BaseModel):
+    label: str | None = Field(default=None, max_length=100)
+    username: str | None = Field(default=None, max_length=200)
+    password: str | None = Field(default=None, max_length=500)
+    note: str | None = Field(default=None, max_length=500)
+    allow_agent: bool | None = None
+
+
+class VaultMatch(BaseModel):
+    url: str = Field(min_length=3, max_length=2000)
+
+
+@app.get("/api/v1/vault")
+async def vault_list(device: dict = Depends(owner_device_auth)):
+    return jsonable(await vault.list_())
+
+
+@app.post("/api/v1/vault")
+async def vault_save(v: VaultIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await vault.save(v.url, v.username, v.password, f"device:{device['name']}", v.label, v.note, v.allow_agent))
+    except vault.VaultError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.patch("/api/v1/vault/{entry_id}")
+async def vault_update(entry_id: str, v: VaultPatch, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await vault.update(entry_id, f"device:{device['name']}", **v.model_dump()))
+    except (vault.VaultError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/api/v1/vault/{entry_id}")
+async def vault_delete(entry_id: str, device: dict = Depends(owner_device_auth)):
+    try:
+        return {"deleted": await vault.delete(entry_id, f"device:{device['name']}")}
+    except ValueError:
+        raise HTTPException(404)
+
+
+@app.post("/api/v1/vault/{entry_id}/reveal")
+async def vault_reveal(entry_id: str, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await vault.reveal(entry_id, f"device:{device['name']}"))
+    except (vault.VaultError, ValueError) as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/v1/vault/match")
+async def vault_match(m: VaultMatch, device: dict = Depends(owner_device_auth)):
+    """Login page open in the phone's web panel: the saved logins for it (autofill)."""
+    try:
+        return jsonable(await vault.match(m.url, f"device:{device['name']}"))
+    except vault.VaultError as e:
+        raise HTTPException(422, str(e))
+
+
+# ---------- app updates (every device) ----------
+
+@app.get("/api/v1/app/latest")
+async def app_latest(device: dict = Depends(device_auth)):
+    """Newest published APK, so the app can offer "Update sekarang / Tunda"."""
+    r = await _admin_internal("GET", "/internal/releases")
+    releases = r.json().get("releases", []) if r.status_code == 200 else []
+    if not releases:
+        return {"latest": None}
+    top = max(releases, key=lambda x: x.get("code", 0))
+    return {"latest": {k: top.get(k) for k in ("version", "code", "file", "size", "sha256", "date", "notes")}}
+
+
+@app.get("/api/v1/app/releases/{name}")
+async def app_release_file(name: str, device: dict = Depends(device_auth)):
+    import re as _re
+    if not _re.fullmatch(r"jarvis-\d+\.\d+\.\d+\.apk", name):
+        raise HTTPException(404)
+    r = await _admin_internal("GET", f"/internal/releases/{name}")
+    if r.status_code != 200:
+        raise HTTPException(404, "rilis tidak ditemukan")
+    from fastapi.responses import Response
+    return Response(r.content, media_type="application/vnd.android.package-archive",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/v1/voiceprint")
@@ -558,6 +654,16 @@ async def internal_route(r: RouteIn, request: Request):
     return await media_tools.route(r.destination, r.origin, r.mode)
 
 
+@app.get("/internal/vault/agent")
+async def internal_vault_agent(request: Request):
+    """Hermes' jarvis plugin syncs owner-allowed logins into its model-blind browser vault."""
+    _tools_auth(request)
+    try:
+        return {"entries": await vault.agent_entries()}
+    except vault.VaultError:
+        return {"entries": []}
+
+
 class MemorySearchIn(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     limit: int = Field(default=6, ge=1, le=20)
@@ -804,6 +910,21 @@ async def admin_document_get(doc_id: str, _: str = admin):
         raise HTTPException(404, "dokumen tidak ditemukan")
     row, path = found
     return FileResponse(path, media_type=documents.FORMATS[row["format"]], filename=f"{row['title'][:60]}.{row['format']}")
+
+
+@app.get("/admin/vault")
+async def admin_vault(_: str = admin):
+    return jsonable(await vault.list_())
+
+
+@app.delete("/admin/vault/{entry_id}")
+async def admin_vault_delete(entry_id: str, actor: str = admin):
+    return {"deleted": await vault.delete(entry_id, actor)}
+
+
+@app.get("/admin/errors")
+async def admin_errors(_: str = admin):
+    return jsonable(await errors.recent())
 
 
 @app.get("/admin/meetings")

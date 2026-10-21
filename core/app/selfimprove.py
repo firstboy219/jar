@@ -53,6 +53,9 @@ async def diagnostics(hours: int = 24) -> str:
     silent = await q.fetchval("SELECT count(*) FROM messages WHERE route = 'silent' AND created_at > $1", since)
     total = await q.fetchval("SELECT count(*) FROM messages WHERE role = 'user' AND created_at > $1", since)
     applied = await q.fetch("SELECT kind, summary FROM improvements WHERE status = 'applied' ORDER BY id DESC LIMIT 20")
+    system_errors = await q.fetch(
+        """SELECT signature, count(*) AS n, max(source) AS source, (array_agg(left(message, 160) ORDER BY id DESC))[1] AS m
+           FROM error_log WHERE at > $1 GROUP BY signature ORDER BY count(*) DESC LIMIT 10""", since)
 
     def block(title, rows, fmt):
         return f"{title}:\n" + ("\n".join(f"- {fmt(r)}" for r in rows) if rows else "- (tidak ada)")
@@ -61,6 +64,7 @@ async def diagnostics(hours: int = 24) -> str:
         "DESKRIPSI DIRI SAAT INI:\n" + await self_model.describe(full=True),
         f"STATISTIK {hours} JAM: {total} ucapan pemilik, {silent} sengaja tidak dijawab, {unheard} laporan tidak terdengar.",
         block("JAWABAN ERROR", errors, lambda r: r["c"]),
+        block("ERROR SISTEM (log layanan JARVIS)", system_errors, lambda r: f"{r['n']}x [{r['source']}] {r['m']}"),
         block("TUGAS GAGAL", failed, lambda r: f"{r['title']}: {r['e']}"),
         block("UCAPAN DENGAN KEYAKINAN TRANSKRIP RENDAH", low_conf, lambda r: f"({r['k']:.2f}) {r['c']}"),
         block("SAAT KAMU TIDAK PAHAM / TIDAK TAHU", confused, lambda r: f"dengar: «{r['heard']}» → jawab: «{r['said']}»"),

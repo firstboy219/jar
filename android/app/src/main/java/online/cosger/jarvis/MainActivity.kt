@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -46,6 +47,7 @@ import online.cosger.jarvis.ui.console.MeetingsScreen
 import online.cosger.jarvis.ui.console.MemoryScreen
 import online.cosger.jarvis.ui.console.MoreScreen
 import online.cosger.jarvis.ui.console.NotificationsScreen
+import online.cosger.jarvis.ui.console.PasswordsScreen
 import online.cosger.jarvis.ui.console.PhoneSetupScreen
 import online.cosger.jarvis.ui.console.SelfScreen
 import online.cosger.jarvis.ui.console.ServerSettingsScreen
@@ -83,6 +85,39 @@ class MainActivity : FragmentActivity() {
                     notice?.let { snackbar.showSnackbar(it); vm.dismissNotice() }
                 }
                 val current by nav.currentBackStackEntryAsState()
+                val update by vm.updater.offer.collectAsStateWithLifecycle()
+                val downloading by vm.updater.downloading.collectAsStateWithLifecycle()
+                val updateScope = androidx.compose.runtime.rememberCoroutineScope()
+                update?.let { offer ->
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("JARVIS ${offer.version} tersedia") },
+                        text = {
+                            Text((offer.notes.ifBlank { "Versi baru JARVIS." }) +
+                                "\n\nUkuran ${"%.1f".format(offer.sizeMb)} MB. Versi terpasang: ${BuildConfig.VERSION_NAME}.")
+                        },
+                        confirmButton = {
+                            androidx.compose.material3.TextButton(enabled = !downloading, onClick = {
+                                updateScope.launch {
+                                    when (val err = vm.updater.install()) {
+                                        null -> Unit
+                                        "PERMISSION" -> {
+                                            startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                                android.net.Uri.parse("package:$packageName")))
+                                            vm.notify("Izinkan JARVIS memasang aplikasi, lalu tekan Update sekarang lagi.")
+                                        }
+                                        else -> vm.notify(err)
+                                    }
+                                }
+                            }) { Text(if (downloading) "Mengunduh…" else "Update sekarang") }
+                        },
+                        dismissButton = {
+                            androidx.compose.material3.TextButton(enabled = !downloading, onClick = { vm.updater.postpone(24) }) {
+                                Text("Tunda")
+                            }
+                        },
+                    )
+                }
                 // Location sharing is on by default: ask once at start; denying turns the setting off.
                 val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { g ->
                     if (g.values.none { it }) vm.setShareLocation(false)
@@ -144,6 +179,7 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Server -> ServerSettingsScreen(vm, back)
                                     ConsoleRoute.Voice -> VoiceprintScreen(vm, back)
                                     ConsoleRoute.Phone -> PhoneSetupScreen(back)
+                                    ConsoleRoute.Passwords -> PasswordsScreen(vm, back)
                                     ConsoleRoute.App -> SettingsScreen(vm, onSaved = { nav.navigate(Tab.Talk.route) { launchSingleTop = true } })
                                 }
                             }

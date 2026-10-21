@@ -30,10 +30,13 @@ ACTOR = "hermes"
 
 @contextlib.asynccontextmanager
 async def lifespan(server):
+    from . import errors
     await db.connect(settings.database_url)
+    writer = errors.install("tools")
     try:
         yield {}
     finally:
+        writer.cancel()
         await db.close()
 
 

@@ -22,6 +22,9 @@ data class AppSettings(
     val wakeSensitive: Boolean = false,
     /** Talking over JARVIS stops it (best with a headset; phone speakers can echo). */
     val bargeIn: Boolean = false,
+    /** "Tunda" on an app update: don't ask again for this version code until this time. */
+    val updateSnoozeCode: Int = 0,
+    val updateSnoozeUntil: Long = 0,
     val sessionId: String = UUID.randomUUID().toString(),
 ) {
     val isConfigured: Boolean get() = deviceToken.startsWith("jdv_")
@@ -55,6 +58,8 @@ class SecureSettings(context: Context) {
             wakeWord = prefs.getBoolean("wake_word", false),
             wakeSensitive = prefs.getBoolean("wake_sensitive", false),
             bargeIn = prefs.getBoolean("barge_in", false),
+            updateSnoozeCode = prefs.getInt("update_snooze_code", 0),
+            updateSnoozeUntil = prefs.getLong("update_snooze_until", 0),
             sessionId = session,
         )
     }
@@ -71,6 +76,8 @@ class SecureSettings(context: Context) {
             .putBoolean("wake_word", next.wakeWord)
             .putBoolean("wake_sensitive", next.wakeSensitive)
             .putBoolean("barge_in", next.bargeIn)
+            .putInt("update_snooze_code", next.updateSnoozeCode)
+            .putLong("update_snooze_until", next.updateSnoozeUntil)
             .putString("session_id", next.sessionId)
             .apply()
         _state.value = next.copy(serverUrl = next.serverUrl.trim().trimEnd('/'), deviceToken = next.deviceToken.trim())

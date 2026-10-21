@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.RecordVoiceOver
@@ -73,6 +74,7 @@ enum class ConsoleRoute(val path: String, val title: String, val hint: String, v
     Update("update", "Pembaruan aplikasi", "daftar versi & pasang", Icons.Filled.SystemUpdate),
     Audit("audit", "Audit", "jejak semua tindakan", Icons.AutoMirrored.Filled.ReceiptLong),
     Server("server", "Pengaturan server", "kunci API, anggaran, jam tenang", Icons.Filled.AccountTree),
+    Passwords("passwords", "Password", "login tersimpan untuk web & JARVIS", Icons.Filled.Key),
     Voice("voice", "Suaraku", "voiceprint supaya JARVIS mengenali suaramu", Icons.Filled.RecordVoiceOver),
     Phone("phone", "Setelan HP", "supaya JARVIS tidak dimatikan sistem", Icons.Filled.BatteryChargingFull),
     App("app", "Pengaturan aplikasi", "server, token, suara, lokasi", Icons.Filled.Settings),

@@ -10,14 +10,21 @@ This provider:
     into JARVIS' memory, so nothing Hermes learns stays in a second, unmanaged store;
   * no automatic per-turn extraction (that costs an LLM call per turn and pollutes memory); Hermes saves
     deliberately with its memory tool or the jarvis memory_save tool.
+It also keeps Hermes' browser vault in sync with JARVIS' password manager: logins the owner marked
+"boleh dipakai JARVIS" are added (and removed again) so `browser_vault fill` can sign in on the owner's
+behalf — the password is resolved server-side at fill time and never reaches the model.
 Talks to jarvis-core on the internal network with the MCP token (same trust as the jarvis MCP tools).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
+import threading
+import time
 import urllib.request
 from typing import Any, Optional
 
@@ -26,6 +33,70 @@ from agent.memory_provider import MemoryProvider, RecallStatus, is_trivial_promp
 logger = logging.getLogger(__name__)
 CORE = os.getenv("JARVIS_CORE_URL", "http://jarvis-core:8000")
 TIMEOUT = 4
+
+
+def _get(path: str) -> Optional[dict]:
+    req = urllib.request.Request(CORE + path, headers={"X-Internal-Token": os.getenv("MCP_TOKEN", "")})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return json.loads(r.read())
+    except Exception as e:
+        logger.debug("jarvis-memory GET %s failed: %s", path, e)
+        return None
+
+
+_TAG = re.compile(r"^JARVIS .* \[([0-9a-f]{8})\]$")
+_synced: dict[str, str] = {}   # entry id prefix -> fingerprint of (origin, username, password)
+_sync_started = False
+
+
+def sync_vault_once() -> None:
+    """Make Hermes' vault hold exactly the owner-allowed JARVIS logins (others are left alone)."""
+    data = _get("/internal/vault/agent")
+    if data is None:
+        return
+    from agent.vault_store import get_vault_store
+    store = get_vault_store()
+    wanted = {e["id"][:8]: e for e in data.get("entries", [])}
+    have: dict[str, list] = {}
+    for meta in store.list_items():
+        m = _TAG.match(meta.label or "")
+        if m:
+            have.setdefault(m.group(1), []).append(meta.id)
+    for key, ids in have.items():
+        e = wanted.get(key)
+        fp = hashlib.sha256(json.dumps([e["origin"], e["username"], e["password"]]).encode()).hexdigest() if e else None
+        if e is None or _synced.get(key) != fp:
+            for item_id in ids:
+                store.remove_item(item_id)
+            _synced.pop(key, None)
+    current = {m.group(1) for meta in store.list_items() if (m := _TAG.match(meta.label or ""))}
+    for key, e in wanted.items():
+        if key in current:
+            continue
+        try:
+            store.add_item("login", f"JARVIS {e['label'][:60]} [{key}]", {
+                "identifier_type": "email" if "@" in e["username"] else "username",
+                "identifier": e["username"], "password": e["password"]}, origin=e["origin"])
+            _synced[key] = hashlib.sha256(json.dumps([e["origin"], e["username"], e["password"]]).encode()).hexdigest()
+        except Exception as ex:  # never log the secret
+            logger.warning("vault sync skipped %s: %s", e.get("origin"), type(ex).__name__)
+
+
+def _start_vault_sync() -> None:
+    global _sync_started
+    if _sync_started:
+        return
+    _sync_started = True
+
+    def loop():
+        while True:
+            try:
+                sync_vault_once()
+            except Exception as e:
+                logger.debug("vault sync failed: %s", type(e).__name__)
+            time.sleep(60)
+    threading.Thread(target=loop, name="jarvis-vault-sync", daemon=True).start()
 
 
 def _post(path: str, body: dict) -> Optional[dict]:
@@ -56,6 +127,7 @@ class JarvisMemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         self._context = kwargs.get("agent_context") or "primary"
+        _start_vault_sync()
 
     def system_prompt_block(self) -> str:
         return ("Long-term memory is JARVIS' shared memory (also used by the main agent and shown to the owner, "
