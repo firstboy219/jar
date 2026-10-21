@@ -86,6 +86,7 @@ async def _run(task_id: int, context: str) -> None:
 
         try:
             result = None
+            await _yield_to_owner(task_id, kind, row)
             if await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
                 await hub.broadcast({"type": "task_event", "task_id": task_id,
                                      "event": {"type": "thought", "text": "mencari cepat di web"}})
@@ -133,6 +134,25 @@ async def _run(task_id: int, context: str) -> None:
             if kind == "owner" and "saldo OpenRouter habis" not in str(e):  # JARVIS looks for its own way next time
                 from . import perf
                 await perf.capability_gap("tugas", row["title"] + ": " + row["instruction"][:300], str(e))
+
+
+BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine")
+
+
+async def _yield_to_owner(task_id: int, kind: str, row) -> None:
+    """On the local CPU one Hermes session at a time is already slow: JARVIS' own background work
+    (self-improvement, self-check, habits) waits while the owner has work running or is talking."""
+    if kind not in BACKGROUND_KINDS:
+        return
+    while not (await gateway.plan(row["category"], caller="worker", worker=True))[0].cloud:
+        busy = await db.pool().fetchval(
+            """SELECT EXISTS (SELECT 1 FROM tasks WHERE kind = 'owner' AND status IN ('queued', 'running'))
+                   OR EXISTS (SELECT 1 FROM messages WHERE role = 'user' AND created_at > now() - interval '5 minutes')""")
+        if not busy:
+            return
+        await hub.broadcast({"type": "task_event", "task_id": task_id,
+                             "event": {"type": "thought", "text": "menunggu: mendahulukan pekerjaan pemilik"}})
+        await asyncio.sleep(60)
 
 
 async def _nothing():

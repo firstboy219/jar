@@ -895,3 +895,21 @@ async def test_flow_watcher_tells_the_owner_and_starts_one_fix(pool, monkeypatch
     assert again["new"] == [] and again["fix_task_id"] is None
     await workers._deliver(r["fix_task_id"], "selfimprove", "x", "selesai", "selfimprove")
     assert await pool.fetchval("SELECT count(*) FROM flow_issues WHERE status = 'fixed'") == 4
+
+
+async def test_background_work_waits_for_the_owner_on_the_local_cpu(pool, monkeypatch):
+    from app import workers
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    owner = await workers.spawn("Cek harga emas", "Cari harga emas hari ini", "s50", "test")
+    me = await workers.spawn("Perbaiki alur", "x" * 20, "selfimprove", "jarvis-core", kind="selfimprove", category="coding")
+    row = await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", me["id"])
+    waited = []
+
+    async def fake_sleep(s):
+        waited.append(s)
+        await pool.execute("UPDATE tasks SET status = 'completed' WHERE id = $1", owner["id"])
+    monkeypatch.setattr(workers.asyncio, "sleep", fake_sleep)
+    await workers._yield_to_owner(me["id"], "selfimprove", row)
+    assert waited == [60]  # waited once, until the owner's task was done
+    await workers._yield_to_owner(owner["id"], "owner", row)  # the owner's own work never waits
+    assert waited == [60]
