@@ -451,9 +451,14 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
 
 
 async def _promised_without_doing(spoken: str, text: str, session_id: str) -> bool:
-    if not spoken or len(text.split()) < 3 or not _PROMISE.search(spoken):
+    from .auditor import _ACK
+    if not spoken or not _PROMISE.search(spoken) or _ACK.match(text.strip()):
         return False  # "oke makasih" → "nanti aku kabari" is not a new request
-    return not any(t["kind"] == "owner" for t in await workers.active())
+    if len(text.split()) <= 3:  # "mana?", "sudah?" right after delegating = asking about that work, not new work
+        return not await db.pool().fetchval(
+            """SELECT 1 FROM tasks WHERE session_id = $1 AND kind = 'owner' AND status IN ('queued', 'running')
+               AND created_at > now() - interval '10 minutes'""", session_id)
+    return True
 
 
 _SILENCE = re.compile(

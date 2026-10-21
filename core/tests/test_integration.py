@@ -941,3 +941,17 @@ async def test_worker_waits_for_hermes_to_come_back(pool, monkeypatch):
             break
         await asyncio.sleep(0.05)
     assert len(calls) == 3 and await pool.fetchval("SELECT result FROM tasks WHERE id = $1", t["id"]) == "Selesai."
+
+
+
+async def test_a_new_request_is_started_even_while_other_work_runs(pool, monkeypatch):
+    from app import chat, memory, workers
+    monkeypatch.setattr(memory, "search", _no_memory)
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    await workers.spawn("Lagu idgitaf cover", "Cari cover lagu idgitaf", "s70", "test")
+    _fake_llm(monkeypatch, [("Oke, aku akan cek skill untuk memproses data yang kamu berikan.", [])])
+    await chat.handle("tolong buat diri kamu mudah memproses data yang saya kasih", "s70", actor="test")
+    assert await pool.fetchval("SELECT count(*) FROM tasks") == 2
+    _fake_llm(monkeypatch, [("Masih aku cek ya.", [])])
+    await chat.handle("mana?", "s70", actor="test")
+    assert await pool.fetchval("SELECT count(*) FROM tasks") == 2  # a follow-up about running work, not a new task
