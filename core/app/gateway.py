@@ -310,8 +310,29 @@ def _note_exhausted(route: Route, status: int, text: str) -> None:
 
 # ---------- calls ----------
 
+# AI calls in progress, by who asked — the phone's home screen shows what the CPU is spent on (ops.who)
+_inflight: dict[int, dict] = {}
+_seq = iter(range(1, 1 << 62))
+
+
+def inflight() -> list[dict]:
+    return list(_inflight.values())
+
+
 async def stream(category: str, body: dict, *, caller: str, session_id: str | None = None, private: bool = False,
                  worker: bool = False, on_route: Callable[[Route], None] | None = None) -> AsyncIterator[dict]:
+    key = next(_seq)
+    _inflight[key] = {"caller": caller, "category": category, "since": time.time()}
+    try:
+        async for chunk in _stream(category, body, caller=caller, session_id=session_id, private=private,
+                                   worker=worker, on_route=on_route):
+            yield chunk
+    finally:
+        _inflight.pop(key, None)
+
+
+async def _stream(category: str, body: dict, *, caller: str, session_id: str | None = None, private: bool = False,
+                  worker: bool = False, on_route: Callable[[Route], None] | None = None) -> AsyncIterator[dict]:
     """Yield OpenAI `chat.completion.chunk` dicts from the first route that starts answering."""
     body = {**body, "stream": True}
     errors: list[str] = []
@@ -376,6 +397,16 @@ async def stream(category: str, body: dict, *, caller: str, session_id: str | No
 
 async def complete(category: str, body: dict, *, caller: str, session_id: str | None = None,
                    private: bool = False, worker: bool = False) -> dict:
+    key = next(_seq)
+    _inflight[key] = {"caller": caller, "category": category, "since": time.time()}
+    try:
+        return await _complete(category, body, caller=caller, session_id=session_id, private=private, worker=worker)
+    finally:
+        _inflight.pop(key, None)
+
+
+async def _complete(category: str, body: dict, *, caller: str, session_id: str | None = None,
+                    private: bool = False, worker: bool = False) -> dict:
     """Non-streaming call with the same routing and failover; returns the OpenAI response JSON."""
     body = {**body, "stream": False}
     errors: list[str] = []

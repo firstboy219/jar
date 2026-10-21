@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch for the owner's "Netralkan" request (free CPU & memory)
+
+[Path]
+PathExists=/home/ubuntu/my-project/infra/data/ops/relieve.request
+
+[Install]
+WantedBy=multi-user.target

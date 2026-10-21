@@ -10,6 +10,7 @@ import asyncio
 import re
 
 from . import maps, musiclib, stage
+from .config import settings
 from .location import Location, last
 
 
@@ -67,6 +68,36 @@ def song_query(query: str) -> tuple[str, bool]:
     return (f"{words} cover" if cover else words) or query, cover
 
 
+async def _show_song(m: dict, source: str) -> dict:
+    shown = await stage.show("music", {"title": m["title"], "artist": m["artist"], "url": m["url"],
+                                       "cover_url": m.get("cover_url"), "license": "", "source_url": m["source_url"],
+                                       "duration_s": m.get("duration_s")},
+                             f"Memutar {m['title']} — {m['artist']}"[:200], "jarvis")
+    return {"playing": m["title"], "artist": m["artist"], "source": source, "format": "MP3", "stage_id": shown["id"]}
+
+
+async def fetch_song(query: str, cover: bool = False) -> dict:
+    """A named song as MP3 (owner's decision, ADR-029): YouTube share link → converter service if one is set
+    up; otherwise SoundCloud → MP3. JARVIS never downloads from YouTube itself."""
+    errors = []
+    if settings.mp3_converter_url:
+        try:
+            found = await asyncio.wait_for(asyncio.to_thread(youtube_search, query + ("" if cover else " official audio"), 3), 25)
+            v = next((x for x in found if (x.get("duration_s") or 0) <= musiclib.MAX_SONG_S), None)
+            if v:
+                m = await musiclib.convert_link(v["url"], v["title"], v["channel"])
+                return await _show_song(m, "converter")
+            errors.append("link YouTube tidak ketemu")
+        except Exception as e:
+            errors.append(f"converter: {e}")
+    try:
+        m = await musiclib.soundcloud_mp3(query, lambda t: matches(t, query.replace(" cover", "")))
+        return await _show_song(m, "SoundCloud")
+    except ValueError as e:
+        errors.append(str(e))
+    return {"error": "; ".join(errors)}
+
+
 async def play(query: str) -> dict:
     if not query.strip():
         return {"error": "lagu apa?"}
@@ -78,11 +109,14 @@ async def play(query: str) -> dict:
         tracks, failure = [], f"pencarian musik gagal ({type(e).__name__})"
     else:
         failure = "tidak ada lagu berlisensi bebas yang cocok"
-    if specific:  # a named song: only the real one, else the official video
+    if specific:  # a named song: only the real one — as MP3 in the music player, else the official video
         tracks = [t for t in tracks if matches(t, query)]
         if not tracks:
+            mp3 = await fetch_song(query, cover)
+            if "error" not in mp3:
+                return mp3
             yt = await video(query, music=not cover)  # a cover is by definition not the "official" one
-            return yt if "error" not in yt else {"error": f"{failure}; {yt['error']}"}
+            return yt if "error" not in yt else {"error": f"{failure}; {mp3['error']}; {yt['error']}"}
     for t in tracks:
         try:
             m = await musiclib.download(t)

@@ -129,6 +129,7 @@ fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}) {
     LaunchedEffect(Unit) { vm.prefetchVoice() } // token ready before the first unmute
     // Server usage on the home screen: refreshed while this screen is shown (owner devices only)
     var server by remember { mutableStateOf<ServerUsage?>(null) }
+    var askRelieve by remember { mutableStateOf(false) }
     LaunchedEffect(connection) {
         while (connection == Connection.Connected) {
             server = runCatching { ServerUsage.parse(vm.console.get("/api/v1/console/server-usage").obj()) }.getOrNull()
@@ -181,10 +182,14 @@ fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}) {
         involved = stage.involved.map { it.label },
         server = server,
         onServerTap = onOpenServer,
+        onRelieve = { askRelieve = true },
+        onRetryTask = vm::retryTask,
+        onCloseTask = vm::closeTask,
         onReply = { vm.askReplyDraft() },
         wakeListening = wakeListening,
     )
     card?.let { id -> MemoryCardDialog(vm, id) { card = null } }
+    if (askRelieve) RelieveDialog({ askRelieve = false }) { askRelieve = false; vm.relieve() }
 }
 
 /** The home brain sits behind the readiness ring and reaches well past it (fractions of the screen). */
@@ -230,6 +235,9 @@ fun TalkContent(
     involved: List<String> = emptyList(),
     server: ServerUsage? = null,
     onServerTap: () -> Unit = {},
+    onRelieve: () -> Unit = {},
+    onRetryTask: (Long) -> Unit = {},
+    onCloseTask: (Long) -> Unit = {},
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
@@ -246,7 +254,7 @@ fun TalkContent(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
-            server?.let { ServerStrip(it, onServerTap) }
+            server?.let { ServerStrip(it, onServerTap, onRelieve) }
             if (sharing) ShareBanner(onToggleShare, onReply)
 
             if (cameraOn) {
@@ -301,6 +309,11 @@ fun TalkContent(
 
                 board.media.take(2).forEach { MediaCard(it, onDismissMedia) }
                 board.openReports.forEach { ReportCard(it, onAck, onRepeat) }
+                if (board.stoppedWorkers.isNotEmpty()) {
+                    Text("DIHENTIKAN · ${board.stoppedWorkers.size} — lanjutkan atau tutup", color = JarvisColors.Violet,
+                        fontSize = 10.sp, letterSpacing = 2.sp)
+                    board.stoppedWorkers.forEach { StoppedCard(it, onRetryTask, onCloseTask) }
+                }
                 if (workers.isNotEmpty()) {
                     Text("SEDANG DIKERJAKAN · ${workers.size}", color = JarvisColors.Amber, fontSize = 10.sp, letterSpacing = 2.sp)
                     workers.forEach { WorkerCard(it, onCancelTask) }
@@ -314,15 +327,38 @@ fun TalkContent(
     }
 }
 
-/** CPU, memory, disk and AI spend of the JARVIS server, always visible; tap for the dashboard. */
+/**
+ * CPU, memory, disk and AI spend of the JARVIS server, always visible — and WHO uses them (which service,
+ * for whose work, who waits for a turn). Tap for the dashboard; "Netralkan" frees the server.
+ */
 @Composable
-private fun ServerStrip(u: ServerUsage, onTap: () -> Unit) {
-    Row(
+private fun ServerStrip(u: ServerUsage, onTap: () -> Unit, onRelieve: () -> Unit) {
+    Column(
         Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp))
             .background(JarvisColors.Surface.copy(alpha = 0.78f)).border(1.dp, JarvisColors.Border, RoundedCornerShape(12.dp))
             .clickable(onClick = onTap).padding(horizontal = 10.dp, vertical = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        MeterRow(u)
+        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                if (u.busiest().isNotBlank()) {
+                    Text("Dipakai: ${u.busiest()}", color = JarvisColors.Text, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Text("untuk ${u.purpose()}", color = JarvisColors.Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.width(8.dp))
+            Text("Netralkan", color = if (u.cpuPct >= 85 || u.ramPct >= 85) JarvisColors.Red else JarvisColors.Cyan, fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(14.dp))
+                    .border(1.dp, (if (u.cpuPct >= 85 || u.ramPct >= 85) JarvisColors.Red else JarvisColors.Cyan).copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+                    .clickable(onClick = onRelieve).padding(horizontal = 10.dp, vertical = 4.dp))
+        }
+    }
+}
+
+@Composable
+private fun MeterRow(u: ServerUsage) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Meter("CPU", "${u.cpuPct.roundToInt()}%", u.cpuPct, Modifier.weight(1f))
         Meter("RAM", "${"%.1f".format(u.ramUsedGb)}/${u.ramTotalGb.roundToInt()} GB", u.ramPct, Modifier.weight(1.3f))
         Meter("DISK", "${u.diskPct.roundToInt()}%", u.diskPct, Modifier.weight(1f))
@@ -346,6 +382,37 @@ private fun Meter(label: String, value: String, pct: Double, modifier: Modifier)
         }
         Box(Modifier.padding(top = 3.dp).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(JarvisColors.SurfaceHigh)) {
             Box(Modifier.fillMaxWidth((pct / 100).coerceIn(0.02, 1.0).toFloat()).height(3.dp).background(color))
+        }
+    }
+}
+
+/** Netralkan asks first: what happens, and what is NOT touched. */
+@Composable
+fun RelieveDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Netralkan server?") },
+        text = {
+            Text("Semua tugas yang sedang berjalan dihentikan dan DISIMPAN beserta kemajuannya — nanti bisa kamu ulangi " +
+                "(melanjutkan dari situ) atau tutup. Hermes dimulai ulang untuk membebaskan memori, dan pekerjaan latar " +
+                "belakang JARVIS istirahat 15 menit.\n\nMemori, obrolan, dokumen, password, dan pengaturan tidak disentuh.")
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onConfirm) { Text("Netralkan") } },
+        dismissButton = { androidx.compose.material3.TextButton(onDismiss) { Text("Batal") } },
+    )
+}
+
+@Composable
+private fun StoppedCard(w: Worker, onRetry: (Long) -> Unit, onClose: (Long) -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(JarvisColors.Surface)
+            .border(1.dp, JarvisColors.Violet.copy(alpha = 0.5f), RoundedCornerShape(14.dp)).padding(12.dp),
+    ) {
+        Text(w.title, color = JarvisColors.Text, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text("Dihentikan — kemajuannya tersimpan", color = JarvisColors.Muted, fontSize = 11.sp)
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Pill("Ulangi", JarvisColors.Green) { onRetry(w.id) }
+            Pill("Tutup", JarvisColors.Muted) { onClose(w.id) }
         }
     }
 }

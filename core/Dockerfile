@@ -1,6 +1,8 @@
 FROM python:3.12-slim
 WORKDIR /srv
 ENV PYTHONUNBUFFERED=1 HF_HOME=/srv/models FASTEMBED_CACHE_PATH=/srv/models
+# ffmpeg: songs fetched for the owner are converted to MP3 (musiclib.py)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt requirements-dev.txt ./
 ARG DEV=0
 RUN pip install --no-cache-dir -r requirements.txt \

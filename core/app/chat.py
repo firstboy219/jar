@@ -73,6 +73,13 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
                     else f"{r.get('model')} lewat {r.get('provider')}"
             return (f"Komposisi '{c['preset']}': ngobrol pakai {first('ngobrol')}, tugas web pakai {first('web')}, "
                     f"coding pakai {first('coding')}. Bisa diganti di menu Komposisi AI.")
+        case "relieve":
+            from . import ops
+            r = await ops.relieve(actor)
+            n = len(r["stopped"])
+            return (f"Oke, server kunetralkan: {n} tugas kuhentikan dan kusimpan (bisa diulang atau ditutup), "
+                    if n else "Oke, server kunetralkan; tidak ada tugas yang sedang berjalan. ") + \
+                "pekerjaan latar belakang istirahat 15 menit. Hasilnya kulaporkan sebentar lagi."
         case "workflows":
             flows = await n8n.list_workflows()
             if not flows:

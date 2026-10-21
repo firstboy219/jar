@@ -33,6 +33,8 @@ data class Board(
     val media: List<MediaShow> = emptyList(),
 ) {
     val activeWorkers: List<Worker> get() = workers.filter { it.active }
+    /** Stopped by "Netralkan": kept, waiting for the owner to retry or close them. */
+    val stoppedWorkers: List<Worker> get() = workers.filter { it.status == "stopped" }
     val openReports: List<SpokenReport> get() = reports.filter { it.state == SpokenReport.State.Waiting || it.state == SpokenReport.State.Spoken || it.state == SpokenReport.State.Unheard }
 
     fun reduce(e: ServerEvent): Board = when (e) {

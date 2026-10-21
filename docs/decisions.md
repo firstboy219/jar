@@ -342,3 +342,20 @@ The real fix for quality is a cloud model for the main agent (Groq free key or O
 - **Console parity**: the APK gained Pengawas alur, Pengembangan diri (code changes), Error layanan,
   Tinjauan efisiensi and admin-password change (`/api/v1/console/admin-password` → jarvis-admin); the
   "Lainnya" menu is grouped like the web admin's tabs and shows the installed version.
+
+## ADR-029 — Songs as MP3, "Netralkan", who uses the server (2026-10-21)
+- **MP3 (owner's decision, aware of the YouTube-terms/copyright risk, personal use):** a named song that is
+  not in the openly-licensed library is fetched as MP3 and played in JARVIS' own music player. JARVIS never
+  downloads from YouTube itself (the owner asked: share link → an online converter). Public converters
+  (cobalt) now require a browser challenge, so the converter is configurable (`MP3_CONVERTER_URL`/`KEY`,
+  cobalt API); without one, the song comes from SoundCloud (yt-dlp + ffmpeg → MP3, ≤ 15 min, verified).
+  The official YouTube player stays the last fallback. Downloaded songs are removed after 30 days.
+- **Netralkan** (`POST /admin/relieve`, voice "netralkan server", button on the home strip/dashboard):
+  every running/queued task becomes `stopped` with its progress (tools used, last thinking) — the owner
+  retries it (it continues from there) or closes it; background work rests 15 min; the host part
+  (`infra/scripts/ops.sh`, `jarvis-ops.path`, root) restarts Hermes, restarts the local worker model only
+  if it is still busy (then the warm prompt cache is restored), and moves swap back into RAM when there is
+  room. No data is touched.
+- **Who uses the server:** `infra/scripts/usage-collector.sh` (`jarvis-usage.service`, docker stats every
+  10 s → `data/ops/containers.json`) + the gateway's in-flight AI calls by caller + running/waiting tasks →
+  the home strip says which service uses the CPU/RAM and for whose work (owner first, background waits).

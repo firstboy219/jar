@@ -101,7 +101,9 @@ JARVIS, `error` = something failed.
 | POST | `/admin/efficiency-review` (+ console) | start the efficiency review now |
 | GET / POST | `/admin/flow-issues`, `/admin/flow-issues/{id}` `{"status"}` (+ console) | flow watcher findings; mark open/ignored/fixed |
 | POST | `/admin/flow-check` (+ console) | run the flow watcher now |
-| GET | `/admin/server-usage` (+ console) | CPU %, load, RAM/swap/disk (GB, %), uptime, running tasks, AI spend — home-screen strip |
+| GET | `/admin/server-usage` (+ console) | CPU %, load, RAM/swap/disk (GB, %), uptime, running tasks, AI spend, `containers` (who uses CPU/RAM), `who` (running/waiting work, AI calls by caller) — home-screen strip |
+| POST | `/admin/relieve` (+ console) | Netralkan: stop & keep all tasks, rest background work 15 min, host frees Hermes/worker-model memory |
+| POST | `/admin/tasks/{id}/retry`, `/admin/tasks/{id}/close` (+ console) | a stopped/failed task: continue it from its progress, or close it |
 | POST | `/api/v1/console/admin-password` | `{"current","new"}` change the web admin password (owner device) |
 | * | `/api/v1/console/…` | every web-admin endpoint (`/admin/…`) for owner-scope devices, plus `settings`, `releases` |
 

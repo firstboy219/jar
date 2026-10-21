@@ -13,6 +13,7 @@ import online.cosger.jarvis.ui.Board
 import online.cosger.jarvis.ui.Phase
 import online.cosger.jarvis.ui.ServerUsage
 import online.cosger.jarvis.ui.TurnState
+import online.cosger.jarvis.ui.Worker
 import online.cosger.jarvis.ui.console.MoreScreen
 import online.cosger.jarvis.ui.stage.BrainGraph
 import online.cosger.jarvis.ui.stage.BrainView
@@ -86,11 +87,14 @@ class StageScreenshotTest {
         paparazzi.snapshot {
             JarvisTheme {
                 TalkContent(TurnState(phase = Phase.Done, userText = "Mampir kopi dekat kantor?", answer = "Ada dua kedai di BSD yang buka sekarang."),
-                    MicState.Ready, 0f, "", false, Board(), true, {}, {}, {}, {},
+                    MicState.Ready, 0f, "", false, Board(workers = listOf(Worker(70, "Bandingkan harga emas Antam dan UBS", "stopped"))),
+                    true, {}, {}, {}, {},
                     stageContent = { StageHost(stage, brain, false, actions, Modifier.fillMaxSize()) },
                     background = { BrainView(brain, stage.pulses, false, Modifier.fillMaxSize(), dim = 1f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM) },
                     involved = stage.involved.map { it.label },
-                    server = ServerUsage(34.0, 1.2, 4, 7.4, 15.6, 0.3, 62.0, 198.0, 320.0, 1, 2, 0.42, 20.0))
+                    server = ServerUsage(91.0, 6.7, 4, 7.4, 15.6, 2.0, 15.0, 49.0, 332.0, 1, 1, 0.42, 20.0,
+                        top = listOf(ServerUsage.Consumer("AI kerja lokal", 88.0, 2.7), ServerUsage.Consumer("Hermes", 3.0, 0.3)),
+                        doing = listOf(ServerUsage.Job(65, "putarkan lagu idgitaf versi cover", true)), waiting = 2))
             }
         }
     }

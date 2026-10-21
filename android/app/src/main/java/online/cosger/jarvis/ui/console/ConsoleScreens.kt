@@ -55,12 +55,21 @@ fun DashboardScreen(vm: JarvisViewModel, onBack: () -> Unit) {
     ConsolePage("Dasbor", onBack, { status.reload(); llm.reload(); server.reload() }) {
         LoadState(server) { o ->
             val u = online.cosger.jarvis.ui.ServerUsage.parse(o)
+            var ask by remember { mutableStateOf(false) }
+            if (ask) online.cosger.jarvis.ui.screens.RelieveDialog({ ask = false }) { ask = false; vm.relieve(); server.reload() }
             Card(border = if (u.cpuPct >= 85 || u.ramPct >= 85 || u.diskPct >= 85) JarvisColors.Red else JarvisColors.Border) {
                 Label("Pemakaian server")
                 Body("CPU ${"%.0f".format(u.cpuPct)}% · beban ${"%.2f".format(u.load1)} (${u.cores} inti)", size = 13)
                 Body("RAM ${"%.1f".format(u.ramUsedGb)} dari ${"%.1f".format(u.ramTotalGb)} GB · swap ${"%.1f".format(u.swapUsedGb)} GB", size = 13)
                 Body("Disk ${"%.0f".format(u.diskUsedGb)} dari ${"%.0f".format(u.diskTotalGb)} GB (${"%.0f".format(u.diskPct)}%)", size = 13)
                 Small("Tugas berjalan: ${u.ownerTasks} milikmu, ${u.backgroundTasks} latar belakang · AI bulan ini $${"%.2f".format(u.aiSpentUsd)}")
+                Small("Untuk: ${u.purpose()}", JarvisColors.Text)
+                if (u.top.isNotEmpty()) {
+                    Label("Dipakai oleh")
+                    u.top.forEach { c -> Small("${c.label} · CPU ${"%.0f".format(c.cpuPct)}% · RAM ${"%.1f".format(c.memGb)} GB", JarvisColors.Text) }
+                }
+                Action("Netralkan CPU & memori", JarvisColors.Red) { ask = true }
+                Small("Tugas dihentikan tapi disimpan (bisa diulang/ditutup); memori, obrolan & pengaturan tidak disentuh.")
             }
         }
         LoadState(llm) { u ->
@@ -159,6 +168,13 @@ fun TasksScreen(vm: JarvisViewModel, onBack: (() -> Unit)?) {
                     if (o.s("error").isNotBlank()) Small(o.s("error").take(200), JarvisColors.Red)
                     if (o.s("status") in setOf("queued", "running")) Action("Batalkan", JarvisColors.Red) {
                         act { vm.console.post("/api/v1/console/tasks/${o.i("id")}/cancel") }
+                    }
+                    if (o.s("status") in setOf("stopped", "failed") && o.s("kind") != "flowcheck") {
+                        if (o.s("status") == "stopped") Small("Dihentikan oleh Netralkan — kemajuannya tersimpan.", JarvisColors.Violet)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Action("Ulangi", JarvisColors.Green) { act { vm.console.post("/api/v1/console/tasks/${o.i("id")}/retry") } }
+                            Action("Tutup", JarvisColors.Muted) { act { vm.console.post("/api/v1/console/tasks/${o.i("id")}/close") } }
+                        }
                     }
                 }
             }

@@ -26,6 +26,8 @@ _RULES: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^(daftar )?(workflow|workflows|alur kerja)( n8n)?\??$"), "workflows"),
     (re.compile(r"^(daftar )?(tugas|task|tasks|worker)( (aktif|worker))?\??$"), "tasks"),
     (re.compile(r"^(di ?mana (saya|aku)( sekarang)?|lokasi (saya|aku)( sekarang)?|where am i)\??$"), "whereami"),
+    (re.compile(r"^(jarvis,? )?(tolong |coba )?(netralkan|netralisir|reset|ringankan|kosongkan) (server|cpu|memori|ram|beban)"
+                r"( (dan|&) (cpu|memori|ram|memory))?( (server|nya))?( dong| sekarang)?[.!]?$"), "relieve"),
     (re.compile(r"^(jarvis,? )?(kamu |anda )?(sekarang |lagi )?(pakai|pake|memakai|menggunakan) (model|ai|otak) apa"
                 r"( (untuk|buat) \w+)?( sekarang)?\??$"), "model"),
 ]
@@ -96,5 +98,6 @@ HELP = """Perintah cepat (dijawab langsung tanpa model AI):
 • tugas — tugas worker yang sedang berjalan
 • di mana saya — lokasi HP saat ini (jika berbagi lokasi aktif)
 • pakai model apa — AI yang sedang dipakai
+• netralkan server — hentikan (dan simpan) semua tugas untuk meringankan CPU & memori
 Awali pesan dengan /privat agar tidak dikirim ke model cloud.
 Pesan lain dijawab JARVIS (agen utama), yang menugaskan worker bila perlu."""

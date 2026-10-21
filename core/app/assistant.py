@@ -102,6 +102,14 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"task_id": {"type": "integer"}},
                        "required": ["task_id"]}}},
     {"type": "function", "function": {
+        "name": "retry_task",
+        "description": "Ulangi tugas yang dihentikan (atau gagal); ia melanjutkan dari yang sudah dikerjakan.",
+        "parameters": {"type": "object", "properties": {"task_id": {"type": "integer"}}, "required": ["task_id"]}}},
+    {"type": "function", "function": {
+        "name": "close_task",
+        "description": "Tutup tugas yang dihentikan/gagal karena pemilik tidak membutuhkannya lagi.",
+        "parameters": {"type": "object", "properties": {"task_id": {"type": "integer"}}, "required": ["task_id"]}}},
+    {"type": "function", "function": {
         "name": "stay_silent",
         "description": "Jangan menjawab ucapan ini (bukan untukmu, atau kalimatnya belum selesai).",
         "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]}}},
@@ -192,6 +200,9 @@ async def _situation(text: str, location: Location | None, compact: bool = False
     tasks = await workers.active()
     if tasks:
         parts.append("TUGAS WORKER AKTIF:\n" + "\n".join(f"- #{t['id']} {t['title']} ({t['status']})" for t in tasks))
+    if halted := await workers.stopped():
+        parts.append("TUGAS DIHENTIKAN (oleh Netralkan; tawarkan ulangi/tutup bila relevan — retry_task/close_task):\n"
+                     + "\n".join(f"- #{t['id']} {t['title']}" for t in halted[:5]))
     pending = await reports.unconfirmed()
     if pending:
         parts.append("LAPORAN BELUM DIKONFIRMASI:\n" + "\n".join(
@@ -244,6 +255,10 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps({"acknowledged": await reports.acknowledge(ids, "voice")})
             case "cancel_task":
                 return json.dumps({"cancelled": await workers.cancel(int(a.get("task_id", 0)), actor)})
+            case "retry_task":
+                return json.dumps({"retried": bool(await workers.retry(int(a.get("task_id", 0)), actor))})
+            case "close_task":
+                return json.dumps({"closed": await workers.close(int(a.get("task_id", 0)), actor)})
             case "remember":
                 if private:
                     return json.dumps({"error": "percakapan privat tidak disimpan ke memori kecuali pemilik memintanya lewat perintah 'ingat'"})
@@ -423,6 +438,8 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             r = await media_tools.play(a["query"])
             if r.get("playing") and r.get("source") == "YouTube":
                 return f"Oke, kuputar {r['playing']} di layar, lewat YouTube."
+            if r.get("playing") and r.get("format") == "MP3":
+                return f"Oke, kuputar {r['playing']} dari {r['artist']}, sudah kuunduh sebagai MP3."
             if r.get("playing"):
                 return f"Oke, kuputar {r['playing']} dari {r['artist']}."
             gap = await perf.capability_gap("musik", f"putar lagu {a['query']}", str(r.get("error") or ""))

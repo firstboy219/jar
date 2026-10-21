@@ -2,7 +2,11 @@ package online.cosger.jarvis.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.launch
 import online.cosger.jarvis.JarvisApp
+import online.cosger.jarvis.ui.stage.arr
+import online.cosger.jarvis.ui.stage.obj
 
 data class ChatMessage(val fromUser: Boolean, val text: String, val route: String? = null)
 
@@ -55,4 +59,22 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun askReplyDraft() = engine.askReplyDraft()
     suspend fun refreshComposition() = engine.refreshComposition()
     suspend fun refreshBrain() = engine.refreshBrain()
+
+    /** Netralkan: stop (and keep) all work and free CPU/memory on the server. */
+    fun relieve() = viewModelScope.launch {
+        runCatching { console.post("/api/v1/console/relieve").obj() }
+            .onSuccess { r -> notify("Server dinetralkan: ${r["stopped"].arr().size} tugas dihentikan & disimpan. Hasilnya dilaporkan sebentar lagi.") }
+            .onFailure { notify(it.message ?: "Gagal menetralkan server") }
+    }
+
+    /** A stopped task: run it again (it continues from what it had done) or close it. */
+    fun retryTask(taskId: Long) = viewModelScope.launch {
+        runCatching { console.post("/api/v1/console/tasks/$taskId/retry") }
+            .onSuccess { notify("Tugas #$taskId dilanjutkan.") }.onFailure { notify(it.message ?: "Gagal") }
+    }
+
+    fun closeTask(taskId: Long) = viewModelScope.launch {
+        runCatching { console.post("/api/v1/console/tasks/$taskId/close") }
+            .onSuccess { engine.forgetTask(taskId) }.onFailure { notify(it.message ?: "Gagal") }
+    }
 }

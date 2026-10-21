@@ -1,0 +1,14 @@
+[Unit]
+Description=JARVIS per-container CPU/memory for the app's home screen (docker stats every 10 s)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/home/ubuntu/my-project/infra/scripts/usage-collector.sh
+Restart=always
+RestartSec=10
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

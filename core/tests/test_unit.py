@@ -463,3 +463,20 @@ def test_bugs_found_in_the_live_session():
         "Oke, saya akan cek kenapa video tidak bisa diputar."
     assert song_query("bunga cintail estari tapi pakai cover aja") == ("bunga cintail estari cover", True)
     assert song_query("peterpan") == ("peterpan", False)
+
+
+def test_who_uses_the_server():
+    from app import ops
+    raw = {"containers": [{"Name": "jarvis-llm-worker", "CPUPerc": "363.04%", "MemUsage": "2.719GiB / 6GiB"},
+                          {"Name": "jarvis-core", "CPUPerc": "0.15%", "MemUsage": "650.3MiB / 15.41GiB"},
+                          {"Name": "jarvis-brain", "CPUPerc": "12.0%", "MemUsage": "339.9MiB / 4GiB"}]}
+    rows = ops.parse_stats(raw, cores=4)
+    assert [r["name"] for r in rows] == ["jarvis-llm-worker", "jarvis-brain", "jarvis-core"]
+    assert rows[0] == {"name": "jarvis-llm-worker", "label": "AI kerja lokal", "cpu_pct": 90.8, "mem_gb": 2.72}
+    assert rows[2]["mem_gb"] == 0.64
+    assert parse("netralkan server") == Intent("relieve") and parse("tolong reset cpu dan memori") == Intent("relieve")
+
+
+def test_ai_calls_in_words():
+    from app import ops
+    assert ops.ai_calls([{"caller": "flowwatch"}, {"caller": "chat"}, {"caller": "chat"}]) == ["pengawas alur", "ngobrol denganmu ×2"]

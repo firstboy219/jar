@@ -41,6 +41,9 @@ class Settings:
     # hermes -> jarvis-core LLM gateway (/llm/v1)
     llm_gateway_key: str = field(default_factory=lambda: _env("LLM_GATEWAY_KEY"))
     groq_api_key: str = field(default_factory=lambda: _env("GROQ_API_KEY"))
+    # YouTube link → MP3 converter (cobalt-compatible API); JARVIS never downloads from YouTube itself
+    mp3_converter_url: str = field(default_factory=lambda: _env("MP3_CONVERTER_URL"))
+    mp3_converter_key: str = field(default_factory=lambda: _env("MP3_CONVERTER_KEY"))
     # local speech recognition service (faster-whisper) and speaker verification
     whisper_url: str = field(default_factory=lambda: _env("WHISPER_URL", "http://jarvis-ears:8000"))
     embed_model: str = field(default_factory=lambda: _env(

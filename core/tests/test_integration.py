@@ -955,3 +955,60 @@ async def test_a_new_request_is_started_even_while_other_work_runs(pool, monkeyp
     _fake_llm(monkeypatch, [("Masih aku cek ya.", [])])
     await chat.handle("mana?", "s70", actor="test")
     assert await pool.fetchval("SELECT count(*) FROM tasks") == 2  # a follow-up about running work, not a new task
+
+
+async def test_netralkan_stops_and_keeps_work_for_retry_or_close(pool, monkeypatch, tmp_path):
+    import asyncio
+    from app import hermes, ops, workers
+    monkeypatch.setattr(ops, "ROOT", tmp_path)
+
+    async def no_report(*a):
+        return None
+    monkeypatch.setattr(ops, "_report", no_report)
+    runs = []
+
+    async def slow(text, session_id, image=None, **kw):
+        runs.append(text)
+        yield {"type": "tool", "name": "web_search", "status": "done", "label": "harga emas antam"}
+        yield {"type": "thought", "text": "Antam Rp1,9 juta menurut logammulia."}
+        if "LANJUTAN" not in text:
+            await asyncio.sleep(3600)  # still working when the owner presses Netralkan
+        yield {"type": "done", "reply": hermes.HermesReply("Antam Rp1,9 juta/gram.", 10, 2, 5)}
+
+    async def no_stop(run_id):
+        return None
+    monkeypatch.setattr(hermes, "stream", slow)
+    monkeypatch.setattr(hermes, "stop", no_stop)
+    _fake_llm(monkeypatch, [])
+    t = await workers.spawn("Harga emas", "Bandingkan harga emas Antam dan UBS hari ini", "s80", "test", category="analisis")
+    for _ in range(50):
+        if runs:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.1)
+    r = await ops.relieve("owner")
+    assert r["stopped"] == [{"id": t["id"], "title": "Harga emas"}] and ops.calm()
+    assert (tmp_path / "relieve.request").exists()
+    for _ in range(50):
+        if await pool.fetchval("SELECT status FROM tasks WHERE id = $1", t["id"]) == "stopped":
+            break
+        await asyncio.sleep(0.05)
+    row = await pool.fetchrow("SELECT status, progress FROM tasks WHERE id = $1", t["id"])
+    assert row["status"] == "stopped" and "harga emas antam" in row["progress"] and "logammulia" in row["progress"]
+    assert (await workers.stopped())[0]["id"] == t["id"]
+    # retry: it continues with what it had done
+    assert await workers.retry(t["id"], "owner")
+    for _ in range(50):
+        if await pool.fetchval("SELECT status FROM tasks WHERE id = $1", t["id"]) == "completed":
+            break
+        await asyncio.sleep(0.05)
+    assert "LANJUTAN" in runs[1] and "logammulia" in runs[1]
+    assert await pool.fetchval("SELECT result FROM tasks WHERE id = $1", t["id"]) == "Antam Rp1,9 juta/gram."
+    # close: a stopped task the owner does not want any more
+    t2 = await workers.spawn("Lain", "Cari jadwal kereta ke Bandung besok", "s80", "test", category="analisis")
+    await asyncio.sleep(0.1)
+    await workers.stop(t2["id"], "owner")
+    await asyncio.sleep(0.1)
+    assert await workers.close(t2["id"], "owner")
+    assert await pool.fetchval("SELECT status FROM tasks WHERE id = $1", t2["id"]) == "cancelled"
+    ops._state["calm_until"] = 0

@@ -16,6 +16,9 @@ log = logging.getLogger("jarvis-core.workers")
 
 _sem: asyncio.Semaphore | None = None
 _running: dict[int, asyncio.Task] = {}
+_stopping: set[int] = set()  # stopped by "Netralkan": kept as 'stopped' (retry/close), not 'cancelled'
+_progress: dict[int, list[str]] = {}  # what a running worker has done so far (for a retry after a stop)
+waiting: set[int] = set()  # background tasks waiting for their turn on the CPU
 
 # Intent and context only — how to do the work (tools, skills, sub-agents, schedules) is Hermes' call.
 WORKER_BRIEF = (
@@ -107,6 +110,7 @@ async def _run(task_id: int, context: str) -> None:
                             await _bridge_approval(task_id, row["title"], ev)
                             continue
                         await hub.broadcast({"type": "task_event", "task_id": task_id, "event": ev})
+                        _note(task_id, ev)
                         if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
                             await hub.broadcast({"type": "task_event", "task_id": task_id,
                                                  "event": await memory.context_event(ev["label"])})
@@ -128,9 +132,11 @@ async def _run(task_id: int, context: str) -> None:
             await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "completed", "kind": kind})
             await _deliver(task_id, kind, row["title"], result.text, row["session_id"])
         except asyncio.CancelledError:
+            stopped = task_id in _stopping
             await db.pool().execute(
-                "UPDATE tasks SET status = 'cancelled', finished_at = now() WHERE id = $1", task_id)
-            await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "cancelled"})
+                "UPDATE tasks SET status = $2, finished_at = now(), progress = coalesce($3, progress) WHERE id = $1",
+                task_id, "stopped" if stopped else "cancelled", progress_text(task_id) if stopped else None)
+            await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "stopped" if stopped else "cancelled"})
             raise
         except Exception as e:
             log.exception("worker %s failed", task_id)
@@ -145,9 +151,14 @@ async def _run(task_id: int, context: str) -> None:
             if kind == "owner" and "saldo OpenRouter habis" not in str(e):  # JARVIS looks for its own way next time
                 from . import perf
                 await perf.capability_gap("tugas", row["title"] + ": " + row["instruction"][:300], str(e))
+        finally:
+            _stopping.discard(task_id)
+            _progress.pop(task_id, None)
+            waiting.discard(task_id)
 
 
-BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine")
+BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine", "situation")
+RESUME_MARK = "\n\n---LANJUTAN---\n"
 HERMES_RETRIES, HERMES_RETRY_S = 6, 20  # up to 2 minutes for Hermes to come back
 
 
@@ -160,8 +171,11 @@ async def _yield_to_owner(task_id: int, kind: str, row) -> None:
         busy = await db.pool().fetchval(
             """SELECT EXISTS (SELECT 1 FROM tasks WHERE kind = 'owner' AND status IN ('queued', 'running'))
                    OR EXISTS (SELECT 1 FROM messages WHERE role = 'user' AND created_at > now() - interval '5 minutes')""")
-        if not busy:
+        from . import ops
+        if not busy and not ops.calm():
+            waiting.discard(task_id)
             return
+        waiting.add(task_id)
         await hub.broadcast({"type": "task_event", "task_id": task_id,
                              "event": {"type": "thought", "text": "menunggu: mendahulukan pekerjaan pemilik"}})
         await asyncio.sleep(60)
@@ -247,6 +261,90 @@ async def cancel(task_id: int, actor: str) -> bool:
     if ok:
         await audit.record(actor, "task.cancelled", f"task:{task_id}")
     return ok
+
+
+def _note(task_id: int, ev: dict) -> None:
+    """Remember the worker's steps briefly: tools used and its latest thinking."""
+    steps = _progress.setdefault(task_id, [])
+    if ev.get("type") == "tool" and ev.get("status") != "running":
+        steps.append(f"- alat {ev.get('name')}: {str(ev.get('label') or '')[:120]}")
+    elif ev.get("type") == "thought" and ev.get("text"):
+        if steps and steps[-1].startswith("- pikir: "):
+            steps[-1] = (steps[-1] + str(ev["text"]))[-600:]
+        else:
+            steps.append("- pikir: " + str(ev["text"])[-400:])
+    del steps[:-25]
+
+
+def progress_text(task_id: int) -> str | None:
+    steps = _progress.get(task_id)
+    return "\n".join(steps)[-4000:] if steps else None
+
+
+async def stop(task_id: int, actor: str) -> bool:
+    """Stop a task but keep it (status 'stopped') so the owner can retry it with what it had done, or close it."""
+    row = await db.pool().fetchrow("SELECT status, hermes_run, kind FROM tasks WHERE id = $1", task_id)
+    if not row or row["status"] not in ("queued", "running"):
+        return False
+    _stopping.add(task_id)
+    if row["hermes_run"] and row["status"] == "running":
+        try:
+            await hermes.stop(row["hermes_run"])
+        except Exception:
+            log.warning("could not stop Hermes run of task %s", task_id)
+    t = _running.get(task_id)
+    if row["status"] == "queued":  # still waiting for a free worker slot: nothing to keep yet
+        await db.pool().execute("UPDATE tasks SET status = 'stopped', finished_at = now() WHERE id = $1 AND status = 'queued'", task_id)
+    if t and not t.done():
+        t.cancel()  # a running one records 'stopped' + its progress in the CancelledError handler
+    else:
+        await db.pool().execute(
+            "UPDATE tasks SET status = 'stopped', finished_at = now() WHERE id = $1 AND status IN ('queued', 'running')", task_id)
+        _stopping.discard(task_id)
+    await audit.record(actor, "task.stopped", f"task:{task_id}")
+    return True
+
+
+async def stop_all(actor: str) -> list[dict]:
+    rows = await db.pool().fetch("SELECT id, title, kind FROM tasks WHERE status IN ('queued', 'running') ORDER BY id")
+    for r in rows:
+        await stop(r["id"], actor)
+    return [dict(r) for r in rows]
+
+
+async def retry(task_id: int, actor: str) -> dict | None:
+    """Run a stopped (or failed) task again; it continues from what it had done."""
+    row = await db.pool().fetchrow("SELECT id, title, status, kind, instruction, progress FROM tasks WHERE id = $1", task_id)
+    if not row or row["status"] not in ("stopped", "failed") or row["kind"] == "flowcheck":
+        return None
+    instruction = row["instruction"].split(RESUME_MARK)[0]
+    if row["progress"]:
+        instruction += (RESUME_MARK + "Tugas ini sempat dihentikan pemilik untuk meringankan server. Yang sudah "
+                        "dikerjakan sebelumnya:\n" + row["progress"] + "\nLanjutkan dari situ; jangan ulangi langkah yang sudah selesai.")
+    await db.pool().execute(
+        """UPDATE tasks SET status = 'queued', instruction = $2, started_at = NULL, finished_at = NULL, error = NULL
+           WHERE id = $1""", task_id, instruction[:16000])
+    await audit.record(actor, "task.retried", f"task:{task_id}")
+    await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "queued", "kind": row["kind"]})
+    _start(task_id)
+    return {"id": task_id, "status": "queued"}
+
+
+async def close(task_id: int, actor: str) -> bool:
+    """The owner does not want a stopped/failed task any more."""
+    r = await db.pool().execute(
+        "UPDATE tasks SET status = 'cancelled' WHERE id = $1 AND status IN ('stopped', 'failed')", task_id)
+    if r.endswith("1"):
+        await audit.record(actor, "task.closed", f"task:{task_id}")
+        await hub.broadcast({"type": "task", "id": task_id, "title": "", "status": "cancelled"})
+        return True
+    return False
+
+
+async def stopped() -> list[dict]:
+    rows = await db.pool().fetch(
+        "SELECT id, title, kind, finished_at FROM tasks WHERE status = 'stopped' ORDER BY id DESC LIMIT 10")
+    return [dict(r) for r in rows]
 
 
 async def active() -> list[dict]:

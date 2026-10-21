@@ -152,7 +152,8 @@ async def tick(now: datetime | None = None) -> str | None:
     from . import llm, workers
     now = now or datetime.now(timezone.utc)
     ctx = _state["context"]
-    if ctx is None or not hub.online() or notifications.quiet_now(now):
+    from . import ops
+    if ctx is None or not hub.online() or notifications.quiet_now(now) or ops.calm():
         return None
     if any(t["kind"] == "situation" for t in await workers.active()):
         return None

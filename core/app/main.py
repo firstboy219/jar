@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import (approvals, audit, auditor, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
-               media, memory, notifications, overrides, questions, reports, self_model, selfimprove, stage, status,
+               media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
 from .location import Location
@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
     async def purge_daily():
         while True:
             await notifications.purge_old()
+            musiclib.purge_old()
             try:
                 await meetings.purge_audio()
             except Exception:
@@ -96,7 +97,7 @@ async def lifespan(app: FastAPI):
             try:
                 await dev.poll()
                 await perf.watch_recurring_errors()
-                if await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
+                if not ops.calm() and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
                     await auditor.run()
                 if perf.weekly_due(last_review):
                     last_review = __import__("datetime").datetime.now(awareness.WIB).date()
@@ -461,7 +462,8 @@ async def ws(websocket: WebSocket):
         caps = {c.strip() for c in (websocket.headers.get("x-app-caps") or "").split(",")}
         client_id = hub.register(send, device=device["name"], scope=device.get("scope"), caps=sorted(caps - {""}),
                                  app_version=(websocket.headers.get("x-app-version") or "")[:20] or None)
-        await send({"type": "tasks", "items": jsonable(await workers.active())})
+        stopped = [{**t, "status": "stopped"} for t in await workers.stopped()]  # still waiting for retry/close
+        await send({"type": "tasks", "items": jsonable(await workers.active() + stopped)})
         if current_stage := stage.current():
             await send(current_stage)
         await reports.on_connect(send)
@@ -839,9 +841,32 @@ async def admin_server_usage(_: str = admin):
     from . import hostinfo
     tasks = await workers.active()
     b = await budget.state()
-    return {**await hostinfo.snapshot(),
+    snap = await hostinfo.snapshot()
+    return {**snap,
             "tasks": {"owner": sum(t["kind"] == "owner" for t in tasks), "background": sum(t["kind"] != "owner" for t in tasks)},
-            "ai": {"spent_usd": round(b["spent_usd"], 4), "budget_usd": b["budget_usd"], "pct": b["pct"]}}
+            "ai": {"spent_usd": round(b["spent_usd"], 4), "budget_usd": b["budget_usd"], "pct": b["pct"]},
+            "containers": ops.containers(snap["cpu_cores"] or 1)[:6], "who": await ops.who()}
+
+
+@app.post("/admin/relieve")
+async def admin_relieve(actor: str = admin):
+    """Netralkan: stop (and keep) all work, quiet background work, free Hermes/worker-model memory on the host."""
+    return jsonable(await ops.relieve(actor))
+
+
+@app.post("/admin/tasks/{task_id}/retry")
+async def admin_task_retry(task_id: int, actor: str = admin):
+    r = await workers.retry(task_id, actor)
+    if not r:
+        raise HTTPException(409, "tugas ini tidak bisa diulang")
+    return r
+
+
+@app.post("/admin/tasks/{task_id}/close")
+async def admin_task_close(task_id: int, actor: str = admin):
+    if not await workers.close(task_id, actor):
+        raise HTTPException(409, "tugas ini tidak bisa ditutup")
+    return {"closed": task_id}
 
 
 @app.get("/admin/approvals")

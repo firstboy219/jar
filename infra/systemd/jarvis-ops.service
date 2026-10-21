@@ -1,0 +1,11 @@
+[Unit]
+Description=JARVIS "Netralkan": restart Hermes, calm the local worker model, move swap back to RAM (no data touched)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=600
+ExecStart=/home/ubuntu/my-project/infra/scripts/ops.sh
+StandardOutput=append:/home/ubuntu/my-project/infra/data/ops/ops.log
+StandardError=append:/home/ubuntu/my-project/infra/data/ops/ops.log

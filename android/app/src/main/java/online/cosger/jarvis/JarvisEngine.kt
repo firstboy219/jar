@@ -393,6 +393,11 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     fun dismissMedia(seq: Long) = _board.update { it.dismissMedia(seq) }
 
+    /** A closed task disappears from the home screen right away. */
+    fun forgetTask(taskId: Long) {
+        _board.update { b -> b.copy(workers = b.workers.filter { it.id != taskId }) }
+    }
+
     fun cancelTask(taskId: Long) {
         socket.sendControl(Protocol.control("cancel_task", "task_id", taskId))
     }
