@@ -164,7 +164,7 @@ class MainActivity : FragmentActivity() {
                         modifier = Modifier.padding(padding),
                     ) {
                         val back: () -> Unit = { nav.popBackStack() }
-                        composable(Tab.Talk.route) { TalkScreen(vm) }
+                        composable(Tab.Talk.route) { TalkScreen(vm) { nav.navigate("console/${ConsoleRoute.Dashboard.path}") } }
                         composable(Tab.Chat.route) { ChatScreen(vm) }
                         composable(Tab.Tasks.route) { TasksScreen(vm, null) }
                         composable(Tab.Meetings.route) { MeetingsScreen(vm, null) { id -> nav.navigate("meeting/$id") } }

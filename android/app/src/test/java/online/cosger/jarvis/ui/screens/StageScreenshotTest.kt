@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 import online.cosger.jarvis.net.ConsoleApi
 import online.cosger.jarvis.ui.Board
 import online.cosger.jarvis.ui.Phase
+import online.cosger.jarvis.ui.ServerUsage
 import online.cosger.jarvis.ui.TurnState
 import online.cosger.jarvis.ui.console.MoreScreen
 import online.cosger.jarvis.ui.stage.BrainGraph
@@ -88,7 +89,8 @@ class StageScreenshotTest {
                     MicState.Ready, 0f, "", false, Board(), true, {}, {}, {}, {},
                     stageContent = { StageHost(stage, brain, false, actions, Modifier.fillMaxSize()) },
                     background = { BrainView(brain, stage.pulses, false, Modifier.fillMaxSize(), dim = 1f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM) },
-                    involved = stage.involved.map { it.label })
+                    involved = stage.involved.map { it.label },
+                    server = ServerUsage(34.0, 1.2, 4, 7.4, 15.6, 0.3, 62.0, 198.0, 320.0, 1, 2, 0.42, 20.0))
             }
         }
     }

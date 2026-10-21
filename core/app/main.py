@@ -833,6 +833,17 @@ async def admin_status(_: str = admin):
     return await status.check_all()
 
 
+@app.get("/admin/server-usage")
+async def admin_server_usage(_: str = admin):
+    """CPU, memory, disk, running work and AI spend — the strip on the phone's home screen."""
+    from . import hostinfo
+    tasks = await workers.active()
+    b = await budget.state()
+    return {**await hostinfo.snapshot(),
+            "tasks": {"owner": sum(t["kind"] == "owner" for t in tasks), "background": sum(t["kind"] != "owner" for t in tasks)},
+            "ai": {"spent_usd": round(b["spent_usd"], 4), "budget_usd": b["budget_usd"], "pct": b["pct"]}}
+
+
 @app.get("/admin/approvals")
 async def admin_approvals(status_: str | None = None, _: str = admin):
     return await approvals.list_(status_)

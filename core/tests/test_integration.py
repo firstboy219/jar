@@ -913,3 +913,10 @@ async def test_background_work_waits_for_the_owner_on_the_local_cpu(pool, monkey
     assert waited == [60]  # waited once, until the owner's task was done
     await workers._yield_to_owner(owner["id"], "owner", row)  # the owner's own work never waits
     assert waited == [60]
+
+
+async def test_server_usage_for_the_home_screen(pool):
+    from app import main
+    u = await main.admin_server_usage("test")
+    assert 0 <= u["cpu_pct"] <= 100 and u["memory_gb"]["total"] > 0 and u["disk_gb"]["total"] > 0
+    assert u["tasks"] == {"owner": 0, "background": 0} and "spent_usd" in u["ai"]

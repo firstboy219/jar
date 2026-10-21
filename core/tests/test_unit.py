@@ -434,3 +434,12 @@ def test_videos_named_songs_and_misheard_news():
     assert not wants_specific_song("lagu santai buat tidur")
     assert not matches({"title": "Takan Ada Yang Abadi", "artist": "chatoer"}, "peterpan")  # a stranger's cover
     assert matches({"title": "Peterpan - Takan Ada Yang Abadi", "artist": "x"}, "peterpan")
+
+
+def test_server_usage_parsing():
+    from app import hostinfo
+    a = hostinfo.cpu_times("cpu  100 0 50 800 50 0 0 0 0 0")
+    b = hostinfo.cpu_times("cpu  160 0 70 880 70 0 0 0 0 0")
+    assert hostinfo.busy_pct(a, b) == 44.4  # 80 busy of 180 ticks
+    m = hostinfo.meminfo("MemTotal: 16384000 kB\nMemAvailable: 8192000 kB\nSwapTotal: 4194304 kB\nSwapFree: 4194304 kB\n")
+    assert m == {"total": 15.62, "used": 7.81, "swap_total": 4.0, "swap_used": 0.0}

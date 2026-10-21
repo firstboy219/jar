@@ -14,7 +14,6 @@ import hmac
 import json
 import os
 import re
-import shutil
 
 import httpx
 import uvicorn
@@ -433,19 +432,8 @@ async def db_query_ro(sql: str, limit: int = 100) -> dict:
 @mcp.tool()
 async def host_metrics() -> dict:
     """Health of JARVIS' server right now: load, memory, swap, disk, and each service's status."""
-    from . import status
-    with open("/proc/loadavg") as f:
-        load = f.read().split()[:3]
-    mem = {}
-    with open("/proc/meminfo") as f:
-        for line in f:
-            k, v = line.split(":", 1)
-            if k in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree"):
-                mem[k] = round(int(v.split()[0]) / 1024 / 1024, 2)
-    du = shutil.disk_usage("/data") if os.path.isdir("/data") else shutil.disk_usage("/")
-    return {"cpu_cores": os.cpu_count(), "load_1_5_15": load, "memory_gb": mem,
-            "disk_gb": {"total": round(du.total / 1e9, 1), "free": round(du.free / 1e9, 1)},
-            "services": await status.check_all()}
+    from . import hostinfo, status
+    return {**await hostinfo.snapshot(), "services": await status.check_all()}
 
 
 def build_app():

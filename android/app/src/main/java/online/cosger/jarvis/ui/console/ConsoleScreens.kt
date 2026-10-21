@@ -51,7 +51,18 @@ private fun time(iso: String) = iso.take(16).replace('T', ' ')
 fun DashboardScreen(vm: JarvisViewModel, onBack: () -> Unit) {
     val status = rememberLoad { vm.console.get("/api/v1/console/status").arr() }
     val llm = rememberLoad { vm.console.get("/api/v1/console/llm-usage").obj() }
-    ConsolePage("Dasbor", onBack, { status.reload(); llm.reload() }) {
+    val server = rememberLoad { vm.console.get("/api/v1/console/server-usage").obj() }
+    ConsolePage("Dasbor", onBack, { status.reload(); llm.reload(); server.reload() }) {
+        LoadState(server) { o ->
+            val u = online.cosger.jarvis.ui.ServerUsage.parse(o)
+            Card(border = if (u.cpuPct >= 85 || u.ramPct >= 85 || u.diskPct >= 85) JarvisColors.Red else JarvisColors.Border) {
+                Label("Pemakaian server")
+                Body("CPU ${"%.0f".format(u.cpuPct)}% · beban ${"%.2f".format(u.load1)} (${u.cores} inti)", size = 13)
+                Body("RAM ${"%.1f".format(u.ramUsedGb)} dari ${"%.1f".format(u.ramTotalGb)} GB · swap ${"%.1f".format(u.swapUsedGb)} GB", size = 13)
+                Body("Disk ${"%.0f".format(u.diskUsedGb)} dari ${"%.0f".format(u.diskTotalGb)} GB (${"%.0f".format(u.diskPct)}%)", size = 13)
+                Small("Tugas berjalan: ${u.ownerTasks} milikmu, ${u.backgroundTasks} latar belakang · AI bulan ini $${"%.2f".format(u.aiSpentUsd)}")
+            }
+        }
         LoadState(llm) { u ->
             val b = u["budget"].obj()
             Card {

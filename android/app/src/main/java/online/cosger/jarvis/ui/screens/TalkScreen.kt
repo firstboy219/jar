@@ -71,12 +71,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import online.cosger.jarvis.camera.CameraPreview
 import online.cosger.jarvis.net.Connection
 import online.cosger.jarvis.screen.ScreenShareService
 import online.cosger.jarvis.ui.Board
 import online.cosger.jarvis.ui.JarvisViewModel
 import online.cosger.jarvis.ui.Phase
+import online.cosger.jarvis.ui.ServerUsage
 import online.cosger.jarvis.ui.SpokenReport
 import online.cosger.jarvis.ui.ToolActivity
 import online.cosger.jarvis.ui.TurnState
@@ -85,13 +87,15 @@ import online.cosger.jarvis.ui.console.MemoryCardDialog
 import online.cosger.jarvis.ui.stage.BrainView
 import online.cosger.jarvis.ui.stage.StageActions
 import online.cosger.jarvis.ui.stage.StageHost
+import online.cosger.jarvis.ui.stage.obj
 import online.cosger.jarvis.ui.theme.JarvisColors
 import online.cosger.jarvis.voice.MicState
+import kotlin.math.roundToInt
 
 val LOCATION_PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
 
 @Composable
-fun TalkScreen(vm: JarvisViewModel) {
+fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}) {
     val turn by vm.turn.collectAsStateWithLifecycle()
     val interim by vm.interim.collectAsStateWithLifecycle()
     val level by vm.micLevel.collectAsStateWithLifecycle()
@@ -123,6 +127,14 @@ fun TalkScreen(vm: JarvisViewModel) {
         if (hasMic) vm.toggleMute()
     }
     LaunchedEffect(Unit) { vm.prefetchVoice() } // token ready before the first unmute
+    // Server usage on the home screen: refreshed while this screen is shown (owner devices only)
+    var server by remember { mutableStateOf<ServerUsage?>(null) }
+    LaunchedEffect(connection) {
+        while (connection == Connection.Connected) {
+            server = runCatching { ServerUsage.parse(vm.console.get("/api/v1/console/server-usage").obj()) }.getOrNull()
+            delay(15_000)
+        }
+    }
 
     TalkContent(
         turn = turn, mic = mic, micLevel = level, interim = interim, speaking = speaking, board = board,
@@ -167,6 +179,8 @@ fun TalkScreen(vm: JarvisViewModel) {
                 dim = if (stage.panel != null || cameraOn) 0.45f else 1f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM)
         },
         involved = stage.involved.map { it.label },
+        server = server,
+        onServerTap = onOpenServer,
         onReply = { vm.askReplyDraft() },
         wakeListening = wakeListening,
     )
@@ -214,6 +228,8 @@ fun TalkContent(
     wakeListening: Boolean = false,
     background: (@Composable () -> Unit)? = null,
     involved: List<String> = emptyList(),
+    server: ServerUsage? = null,
+    onServerTap: () -> Unit = {},
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
@@ -230,6 +246,7 @@ fun TalkContent(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
+            server?.let { ServerStrip(it, onServerTap) }
             if (sharing) ShareBanner(onToggleShare, onReply)
 
             if (cameraOn) {
@@ -293,6 +310,42 @@ fun TalkContent(
 
             MuteButton(mic, onToggleMute)
             Spacer(Modifier.height(14.dp))
+        }
+    }
+}
+
+/** CPU, memory, disk and AI spend of the JARVIS server, always visible; tap for the dashboard. */
+@Composable
+private fun ServerStrip(u: ServerUsage, onTap: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(12.dp))
+            .background(JarvisColors.Surface.copy(alpha = 0.78f)).border(1.dp, JarvisColors.Border, RoundedCornerShape(12.dp))
+            .clickable(onClick = onTap).padding(horizontal = 10.dp, vertical = 7.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Meter("CPU", "${u.cpuPct.roundToInt()}%", u.cpuPct, Modifier.weight(1f))
+        Meter("RAM", "${"%.1f".format(u.ramUsedGb)}/${u.ramTotalGb.roundToInt()} GB", u.ramPct, Modifier.weight(1.3f))
+        Meter("DISK", "${u.diskPct.roundToInt()}%", u.diskPct, Modifier.weight(1f))
+        val aiPct = if (u.aiBudgetUsd > 0) 100 * u.aiSpentUsd / u.aiBudgetUsd else 0.0
+        Meter("AI", "$${"%.2f".format(u.aiSpentUsd)}", aiPct, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun Meter(label: String, value: String, pct: Double, modifier: Modifier) {
+    val color = when {
+        pct >= 85 -> JarvisColors.Red
+        pct >= 60 -> JarvisColors.Amber
+        else -> JarvisColors.Green
+    }
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(label, color = JarvisColors.Muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            Spacer(Modifier.width(4.dp))
+            Text(value, color = JarvisColors.Text, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Clip)
+        }
+        Box(Modifier.padding(top = 3.dp).fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)).background(JarvisColors.SurfaceHigh)) {
+            Box(Modifier.fillMaxWidth((pct / 100).coerceIn(0.02, 1.0).toFloat()).height(3.dp).background(color))
         }
     }
 }
