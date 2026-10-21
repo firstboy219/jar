@@ -320,10 +320,44 @@ def inflight() -> list[dict]:
     return list(_inflight.values())
 
 
+VOLATILE_MARK = "\n\nActive Hermes profile:"
+
+
+def hoist_volatile(body: dict) -> dict:
+    """Hermes ends its system prompt with per-session lines ("Conversation started: <date>", "Model:
+    jarvis-<category>", runtime). The chat template puts the tool schemas AFTER the system text, so those
+    lines made every new session re-read ~6k tokens of unchanged tools on the CPU (ADR-031). Move them to
+    the start of the first user message: system text + tools become one prefix shared by all sessions.
+    Pure; unit-tested."""
+    msgs = body.get("messages") or []
+    if not msgs or msgs[0].get("role") != "system" or not isinstance(msgs[0].get("content"), str):
+        return body
+    sysm = msgs[0]["content"]
+    i = sysm.find(VOLATILE_MARK)
+    first_user = next((k for k, m in enumerate(msgs) if m.get("role") == "user"), None)
+    if i < 0 or first_user is None:
+        return body
+    tail = "[Konteks sesi]\n" + sysm[i:].strip() + "\n\n"
+    user = dict(msgs[first_user])
+    c = user.get("content")
+    if isinstance(c, str):
+        user["content"] = tail + c
+    elif isinstance(c, list):
+        user["content"] = [{"type": "text", "text": tail}, *c]
+    else:
+        return body
+    new = list(msgs)
+    new[0] = {**msgs[0], "content": sysm[:i]}
+    new[first_user] = user
+    return {**body, "messages": new}
+
+
 async def stream(category: str, body: dict, *, caller: str, session_id: str | None = None, private: bool = False,
                  worker: bool = False, on_route: Callable[[Route], None] | None = None) -> AsyncIterator[dict]:
     key = next(_seq)
     _inflight[key] = {"caller": caller, "category": category, "since": time.time()}
+    if caller == "hermes":
+        body = hoist_volatile(body)
     try:
         async for chunk in _stream(category, body, caller=caller, session_id=session_id, private=private,
                                    worker=worker, on_route=on_route, _key=key):
@@ -404,6 +438,8 @@ async def complete(category: str, body: dict, *, caller: str, session_id: str | 
                    private: bool = False, worker: bool = False) -> dict:
     key = next(_seq)
     _inflight[key] = {"caller": caller, "category": category, "since": time.time()}
+    if caller == "hermes":
+        body = hoist_volatile(body)
     try:
         return await _complete(category, body, caller=caller, session_id=session_id, private=private, worker=worker, _key=key)
     finally:

@@ -204,5 +204,11 @@ async def recent(limit: int = 50) -> list[dict]:
 
 
 async def daily_due(last_day) -> bool:
+    """03.00–03.59 WIB, once a day — remembered in the database: a restart during that hour started a
+    second self-check (seen 2026-10-21)."""
     now = datetime.now(timezone.utc).astimezone(WIB)
-    return now.hour == 3 and last_day != now.date()
+    if now.hour != 3 or last_day == now.date():
+        return False
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return not await db.pool().fetchval(
+        "SELECT 1 FROM tasks WHERE kind = 'selfcheck' AND created_at >= $1 LIMIT 1", midnight)

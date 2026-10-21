@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
                 await perf.watch_recurring_errors()
                 if (await ops.background_ok())[0] and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
                     await auditor.run()
-                if perf.weekly_due(last_review):
+                if perf.weekly_due(last_review) and not await perf.reviewed_today():
                     last_review = __import__("datetime").datetime.now(awareness.WIB).date()
                     await perf.start_review()
             except Exception:

@@ -89,6 +89,13 @@ async def start_review(actor: str = "jarvis-core") -> dict:
                                "selfimprove", actor, kind="selfimprove", category="coding")
 
 
+async def reviewed_today() -> bool:
+    """The weekly review already ran today (survives restarts)."""
+    midnight = datetime.now(timezone.utc).astimezone(WIB).replace(hour=0, minute=0, second=0, microsecond=0)
+    return bool(await db.pool().fetchval(
+        "SELECT 1 FROM tasks WHERE kind = 'selfimprove' AND title = 'Tinjauan efisiensi mingguan' AND created_at >= $1", midnight))
+
+
 def weekly_due(last_day, now: datetime | None = None) -> bool:
     now = (now or datetime.now(timezone.utc)).astimezone(WIB)
     return now.weekday() == 6 and now.hour == 2 and last_day != now.date()  # Sunday 02:00 WIB

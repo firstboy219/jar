@@ -28,6 +28,8 @@ async def pool(monkeypatch):
     async def no_quick(instruction):  # the fast worker searches the real web; tests opt in explicitly
         return None
     monkeypatch.setattr(quick, "answer", no_quick)
+    from app import workers as _w
+    _w._background_turn = None  # an asyncio.Lock belongs to one event loop (one per test)
     gateway.invalidate()
     budget.forget()
     budget._notified.clear()
@@ -1049,3 +1051,33 @@ async def test_background_work_only_below_half_cpu_and_everything_is_listed(pool
     await pool.execute("UPDATE tasks SET status = 'completed' WHERE id = $1", t["id"])
     await ops.tick()
     assert json.loads((tmp_path / "policy.json").read_text())["worker_cpus"] == 2.0
+
+
+
+async def test_background_tasks_take_turns_and_the_daily_check_runs_once(pool, monkeypatch):
+    from datetime import datetime, timezone
+    from app import ops, selfimprove, workers
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    ops._state.update(calm_until=0, cpu=10.0)
+    a = await workers.spawn("Cek diri", "x" * 20, "selfcheck", "jarvis-core", kind="selfcheck")
+    b = await workers.spawn("Kebiasaan", "y" * 20, "routine", "jarvis-core", kind="routine")
+    row_a = await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", a["id"])
+    row_b = await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", b["id"])
+    turn = await workers._yield_to_owner(a["id"], "selfcheck", row_a)
+    assert turn is not None and turn.locked()
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+        turn.release()  # the first one finishes
+    monkeypatch.setattr(workers.asyncio, "sleep", fake_sleep)
+    turn_b = await workers._yield_to_owner(b["id"], "routine", row_b)
+    assert slept == [60] and turn_b is not None  # waited for its turn, then ran
+    turn_b.release()
+    # a self-check already today: a restart at 03.xx WIB does not start another one
+    monkeypatch.setattr(selfimprove, "datetime", type("D", (), {"now": staticmethod(
+        lambda tz=None: datetime(2026, 10, 21, 20, 30, tzinfo=timezone.utc))}))
+    await pool.execute("UPDATE tasks SET created_at = '2026-10-21 20:05+00' WHERE id = $1", a["id"])
+    assert not await selfimprove.daily_due(None)
+    await pool.execute("DELETE FROM tasks WHERE kind = 'selfcheck'")
+    assert await selfimprove.daily_due(None)

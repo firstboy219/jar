@@ -495,3 +495,19 @@ def test_background_rules_and_orphan_watchdog():
 def test_hermes_profile_follows_where_it_runs():
     from app.composition import hermes_profile_for
     assert hermes_profile_for(False) == "lean" and hermes_profile_for(True) == "full"
+
+
+
+def test_hermes_session_lines_move_after_the_shared_prefix():
+    from app.gateway import hoist_volatile
+    body = {"messages": [
+        {"role": "system", "content": "You are JARVIS.\n\n## Skills\n<available_skills>a</available_skills>"
+                                      "\n\nActive Hermes profile: default.\n\nConversation started: Wednesday\nModel: jarvis-web"},
+        {"role": "user", "content": "Cari harga emas"}], "tools": [{"type": "function"}]}
+    out = hoist_volatile(body)
+    assert out["messages"][0]["content"] == "You are JARVIS.\n\n## Skills\n<available_skills>a</available_skills>"
+    assert out["messages"][1]["content"].startswith("[Konteks sesi]\nActive Hermes profile: default.")
+    assert out["messages"][1]["content"].endswith("Model: jarvis-web\n\nCari harga emas")
+    assert out["tools"] == body["tools"] and body["messages"][0]["content"].endswith("jarvis-web")  # input untouched
+    other = {"messages": [{"role": "system", "content": "no marker"}, {"role": "user", "content": "x"}]}
+    assert hoist_volatile(other) == other

@@ -18,6 +18,7 @@ _sem: asyncio.Semaphore | None = None
 _running: dict[int, asyncio.Task] = {}
 _stopping: set[int] = set()  # stopped by "Netralkan": kept as 'stopped' (retry/close), not 'cancelled'
 _progress: dict[int, list[str]] = {}  # what a running worker has done so far (for a retry after a stop)
+_background_turn: asyncio.Lock | None = None  # one background Hermes task at a time on the local CPU
 waiting: set[int] = set()  # background tasks waiting for their turn on the CPU
 
 # Intent and context only — how to do the work (tools, skills, sub-agents, schedules) is Hermes' call.
@@ -90,9 +91,10 @@ async def _run(task_id: int, context: str) -> None:
         async def remember_run(run_id: str) -> None:
             await db.pool().execute("UPDATE tasks SET hermes_run = $2 WHERE id = $1", task_id, run_id)
 
+        turn = None
         try:
             result = None
-            await _yield_to_owner(task_id, kind, row)
+            turn = await _yield_to_owner(task_id, kind, row)
             if await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
                 await hub.broadcast({"type": "task_event", "task_id": task_id,
                                      "event": {"type": "thought", "text": "mencari cepat di web"}})
@@ -155,6 +157,8 @@ async def _run(task_id: int, context: str) -> None:
                 from . import perf
                 await perf.capability_gap("tugas", row["title"] + ": " + row["instruction"][:300], str(e))
         finally:
+            if turn is not None:
+                turn.release()
             _stopping.discard(task_id)
             _progress.pop(task_id, None)
             waiting.discard(task_id)
@@ -165,27 +169,32 @@ RESUME_MARK = "\n\n---LANJUTAN---\n"
 HERMES_RETRIES, HERMES_RETRY_S = 6, 20  # up to 2 minutes for Hermes to come back
 
 
-async def _yield_to_owner(task_id: int, kind: str, row) -> None:
+async def _yield_to_owner(task_id: int, kind: str, row) -> asyncio.Lock | None:
     """On the local CPU one Hermes session at a time is already slow: JARVIS' own background work
     (self-improvement, self-check, habits) waits while the owner has work running or is talking."""
+    global _background_turn
     if kind not in BACKGROUND_KINDS:
-        return
+        return None
     from . import ops
+    if _background_turn is None:
+        _background_turn = asyncio.Lock()
     while not (await gateway.plan(row["category"], caller="worker", worker=True))[0].cloud:
         talking = await db.pool().fetchval(
             "SELECT EXISTS (SELECT 1 FROM messages WHERE role = 'user' AND created_at > now() - interval '5 minutes')")
         ok, why = await ops.background_ok()
-        if ok and not talking:
+        if ok and not talking and not _background_turn.locked():
+            await _background_turn.acquire()  # several background sessions on one CPU slot only evict each other's cache
             if task_id in waiting:
                 ops.note(f"Giliran {ops.KIND_TEXT.get(kind, kind)} #{task_id} dimulai: {row['title']}.")
             waiting.discard(task_id)
-            return
-        why = why or "kamu sedang mengobrol denganku"
+            return _background_turn
+        why = why or ("kamu sedang mengobrol denganku" if talking else "kerja latar lain sedang berjalan (satu per satu)")
         if task_id not in waiting:
             ops.note(f"{ops.KIND_TEXT.get(kind, kind).capitalize()} #{task_id} menunggu giliran — {why}.")
         waiting.add(task_id)
         await hub.broadcast({"type": "task_event", "task_id": task_id, "event": {"type": "thought", "text": f"menunggu: {why}"}})
         await asyncio.sleep(60)
+    return None
 
 
 async def _nothing():
