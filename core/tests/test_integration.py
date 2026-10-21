@@ -1016,16 +1016,13 @@ async def test_netralkan_stops_and_keeps_work_for_retry_or_close(pool, monkeypat
     ops._state["calm_until"] = 0
 
 
-async def test_background_work_only_below_half_cpu_and_everything_is_listed(pool, monkeypatch, tmp_path):
+async def test_background_work_waits_for_the_owner_and_everything_is_listed(pool, monkeypatch, tmp_path):
     import json, time
     from app import hostinfo, ops, workers
     monkeypatch.setattr(ops, "ROOT", tmp_path)
     monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
-    ops._state.update(calm_until=0, cpu=72.0, worker_cpus=None, orphan_ticks=0, reset_at=0)
-    ok, why = await ops.background_ok()
-    assert not ok and "CPU 72%" in why
-    ops._state["cpu"] = 20.0
-    assert await ops.background_ok() == (True, "")
+    ops._state.update(calm_until=0, cpu=95.0, worker_cpus=None, orphan_ticks=0, reset_at=0)
+    assert await ops.background_ok() == (True, "")  # a busy CPU alone no longer holds background work back
     t = await workers.spawn("Cek harga", "Cari harga emas hari ini", "s90", "test")
     ok, why = await ops.background_ok()
     assert not ok and "mendahulukan pekerjaanmu" in why
@@ -1046,11 +1043,9 @@ async def test_background_work_only_below_half_cpu_and_everything_is_listed(pool
     assert json.loads((tmp_path / "policy.json").read_text())["worker_cpus"] == 4.0
     assert (tmp_path / "worker-reset.request").exists()
     b = await ops.background()
-    assert b["now"]["tasks"][0]["mine"] and "kerja latar hanya mulai saat cpu < 50%" in b["rule"].lower()
+    assert b["now"]["tasks"][0]["mine"] and "tidak ada batas cpu" in b["rule"].lower()
     assert any("tidak ditunggu" in a["text"] for a in b["activity"]) and b["schedule"]
-    await pool.execute("UPDATE tasks SET status = 'completed' WHERE id = $1", t["id"])
-    await ops.tick()
-    assert json.loads((tmp_path / "policy.json").read_text())["worker_cpus"] == 2.0
+    assert json.loads((tmp_path / "policy.json").read_text())["worker_cpus"] == 4.0
 
 
 

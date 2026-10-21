@@ -11,11 +11,12 @@ Per-container usage comes from infra/scripts/usage-collector.sh (docker stats on
 because jarvis-core deliberately has no docker socket.
 
 Background work (owner, 2026-10-21): JARVIS' own work — self-improvement, flow watcher, self-check,
-situations, habits — only STARTS while the server CPU is under 50% and none of the owner's work is running,
-and while only background work runs, the local worker model is held to 2 of the 4 CPU threads (the owner's
-work gets all of them; the collector applies `docker update --cpus`). A watchdog stops the worker model when
-it keeps computing an answer nobody waits for any more (seen: 286% CPU with no task). Everything done
-behind the scenes is listed for the owner (background()).
+situations, habits — starts only when none of the owner's work is running, one background task at a time
+(workers.py). The first version also required CPU < 50% and held the worker model to 2 of 4 threads; the owner
+removed that limit the same day (it made background work slower without freeing anything the owner needs: the
+worker model already runs at idle priority). A watchdog stops the worker model when it keeps computing an
+answer nobody waits for any more (seen: 286% CPU with no task). Everything done behind the scenes is listed
+for the owner (background()).
 """
 
 import asyncio
@@ -29,8 +30,7 @@ from . import audit, gateway, reports, workers
 
 ROOT = Path("/data/ops")
 CALM_S = 15 * 60
-BACKGROUND_MAX_CPU = 50.0  # background work only starts below this (% of the whole server)
-WORKER_CPUS_OWNER, WORKER_CPUS_BACKGROUND = 4.0, 2.0
+WORKER_CPUS = 4.0  # the worker model may use every thread (it runs at idle priority; docker --cpus applied by usage-collector.sh)
 ORPHAN_CPU, ORPHAN_TICKS = 25.0, 3  # worker model busy with nobody waiting for 3 checks (~60 s) = orphan
 OWNER_CALLERS = ("chat", "meeting")
 _state = {"calm_until": 0.0, "cpu": 0.0, "worker_cpus": None, "orphan_ticks": 0, "reset_at": 0.0}
@@ -101,16 +101,12 @@ async def background_ok() -> tuple[bool, str]:
         return False, "istirahat setelah Netralkan"
     if busy := await owner_busy():
         return False, f"mendahulukan pekerjaanmu ({busy})"
-    if _state["cpu"] >= BACKGROUND_MAX_CPU:
-        return False, f"CPU {_state['cpu']:.0f}% (kerja latar hanya mulai di bawah {BACKGROUND_MAX_CPU:.0f}%)"
     return True, ""
 
 
 def worker_policy(owner: str) -> tuple[float, str]:
-    """How many CPU threads the local worker model may use. Pure."""
-    if owner:
-        return WORKER_CPUS_OWNER, f"penuh untuk pekerjaanmu ({owner})"
-    return WORKER_CPUS_BACKGROUND, "dibatasi 50% — hanya kerja latar JARVIS / menganggur"
+    """How many CPU threads the local worker model may use: all of them. Pure."""
+    return WORKER_CPUS, f"semua inti, prioritas paling rendah ({owner})" if owner else "semua inti, prioritas paling rendah"
 
 
 def orphaned(worker_cpu: float, inflight: list[dict]) -> bool:
@@ -198,8 +194,8 @@ async def background() -> dict:
             {"what": "memahami situasimu", "when": "saat ada kejadian (pindah tempat, agenda, notifikasi penting)"},
             {"what": "perbaiki error berulang", "when": "bila error yang sama muncul ≥ 3× dalam 1 jam (maks 1×/hari)"},
             *cron],
-        "rule": f"Kerja latar hanya mulai saat CPU < {BACKGROUND_MAX_CPU:.0f}% dan tidak ada pekerjaanmu; "
-                f"selama itu model AI kerja lokal dibatasi {WORKER_CPUS_BACKGROUND:.0f} dari {WORKER_CPUS_OWNER:.0f} inti.",
+        "rule": "Kerja latar hanya mulai saat tidak ada pekerjaanmu, dan satu per satu. Tidak ada batas CPU: model AI kerja lokal "
+                "memakai semua inti, tapi berprioritas paling rendah sehingga layanan lain tidak terganggu.",
         "last24h": {"ai": [{"what": CALLERS.get(r["caller"], r["caller"]), "calls": r["n"], "minutes": float(r["minutes"] or 0),
                             "cost_usd": round(r["cost"], 4), "local": r["local"]} for r in usage],
                     "tasks": [{"what": KIND_TEXT.get(r["kind"], r["kind"]), "count": r["n"], "minutes": float(r["minutes"] or 0)}

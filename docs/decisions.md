@@ -396,3 +396,7 @@ step re-read 4 tokens. Also fixed: Hermes saw the gateway as a cloud provider (1
 the same request while the CPU was still reading it, giving up after 5 "stale attempts" — the lean profile
 sets `providers.jarvis.stale_timeout_seconds: 2700`.
 Ideas not taken: more parallel workers (same 4 threads, every worker re-reads its own ~20k-token prompt).
+
+**Update (same day, owner):** the 50% CPU start gate and the 2-thread cap on the worker model were removed.
+Background work still waits for the owner's own work and runs one task at a time; the worker model uses all
+4 threads at idle priority (it never slows other services), and the orphan watchdog stays.

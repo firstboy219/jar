@@ -485,7 +485,7 @@ def test_ai_calls_in_words():
 def test_background_rules_and_orphan_watchdog():
     from app import ops
     assert ops.worker_policy("1 tugasmu berjalan")[0] == 4.0
-    assert ops.worker_policy("") == (2.0, "dibatasi 50% — hanya kerja latar JARVIS / menganggur")
+    assert ops.worker_policy("") == (4.0, "semua inti, prioritas paling rendah")  # no 50% limit (owner, 2026-10-21)
     assert ops.orphaned(71.0, [])  # computing while nobody waits: the 286% bug
     assert ops.orphaned(71.0, [{"caller": "flowwatch", "provider": "lokal"}])  # the chat model is another server
     assert not ops.orphaned(71.0, [{"caller": "hermes", "provider": "lokal-kerja"}])
