@@ -45,29 +45,38 @@ class ScreenCapture(private val context: Context) {
     }
 
     fun detach() {
+        lastFrame = null
         display?.release(); display = null
         reader?.close(); reader = null
         projection?.let { p -> projection = null; runCatching { p.stop() } }
         _active.value = false
     }
 
-    /** Latest frame as base64 JPEG (≈60–150 KB), or null if nothing captured yet. */
-    fun latestJpegBase64(): String? {
-        val image = runCatching { reader?.acquireLatestImage() }.getOrNull() ?: return null
+    @Volatile private var lastFrame: Bitmap? = null
+
+    /** Latest frame (kept, because acquireLatestImage hands each image out only once). */
+    fun latestBitmap(): Bitmap? {
+        val image = runCatching { reader?.acquireLatestImage() }.getOrNull() ?: return lastFrame
         return image.use { img ->
             val plane = img.planes[0]
             val rowPadding = plane.rowStride - plane.pixelStride * img.width
             val bmp = Bitmap.createBitmap(img.width + rowPadding / plane.pixelStride, img.height, Bitmap.Config.ARGB_8888)
             bmp.copyPixelsFromBuffer(plane.buffer)
-            val cropped = Bitmap.createBitmap(bmp, 0, 0, img.width, img.height)
-            val out = ByteArrayOutputStream()
-            cropped.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-            Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+            Bitmap.createBitmap(bmp, 0, 0, img.width, img.height).also { lastFrame = it }
         }
     }
 
+    /** Latest frame as base64 JPEG (≈60–150 KB), or null if nothing captured yet. */
+    fun latestJpegBase64(): String? = latestBitmap()?.let { jpeg(it) }
+
+    fun jpeg(bmp: Bitmap): String {
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }
+
     companion object {
-        const val TARGET_WIDTH = 720
+        const val TARGET_WIDTH = 1080 // sharp enough for ML Kit to read chat text (≥16 px characters)
         const val JPEG_QUALITY = 60
     }
 }

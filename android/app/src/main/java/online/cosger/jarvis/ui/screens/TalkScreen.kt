@@ -80,6 +80,9 @@ import online.cosger.jarvis.ui.SpokenReport
 import online.cosger.jarvis.ui.ToolActivity
 import online.cosger.jarvis.ui.TurnState
 import online.cosger.jarvis.ui.Worker
+import online.cosger.jarvis.ui.console.MemoryCardDialog
+import online.cosger.jarvis.ui.stage.StageActions
+import online.cosger.jarvis.ui.stage.StageHost
 import online.cosger.jarvis.ui.theme.JarvisColors
 import online.cosger.jarvis.voice.MicState
 
@@ -96,6 +99,9 @@ fun TalkScreen(vm: JarvisViewModel) {
     val connection by vm.connection.collectAsStateWithLifecycle()
     val sharing by vm.screenSharing.collectAsStateWithLifecycle()
     val cameraOn by vm.cameraOn.collectAsStateWithLifecycle()
+    val stage by vm.stage.collectAsStateWithLifecycle()
+    val brain by vm.brain.collectAsStateWithLifecycle()
+    var card by remember { mutableStateOf<String?>(null) }
     var frontCamera by remember { mutableStateOf(false) }
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.setCamera(true)
@@ -143,7 +149,16 @@ fun TalkScreen(vm: JarvisViewModel) {
         },
         camera = { CameraPreview(frontCamera, vm::setCameraFrameSource, Modifier.fillMaxSize()) },
         onFlipCamera = { frontCamera = !frontCamera },
+        panelOpen = stage.panel != null,
+        stageContent = {
+            val workersBusy = board.workers.any { it.active }
+            StageHost(stage, brain, orbPhase(turn, mic, speaking, workersBusy) != Phase.Idle,
+                StageActions(vm.console, vm::stageEvent, vm::notify, mic == MicState.Hearing), Modifier.fillMaxSize(),
+                onNode = { card = it })
+        },
+        onReply = { vm.askReplyDraft() },
     )
+    card?.let { id -> MemoryCardDialog(vm, id) { card = null } }
 }
 
 /** What the orb shows: the owner speaking, JARVIS speaking, the main agent thinking, or workers busy. */
@@ -177,6 +192,9 @@ fun TalkContent(
     onToggleCamera: () -> Unit = {},
     camera: @Composable () -> Unit = {},
     onFlipCamera: () -> Unit = {},
+    panelOpen: Boolean = false,
+    stageContent: (@Composable () -> Unit)? = null,
+    onReply: () -> Unit = {},
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
@@ -185,7 +203,7 @@ fun TalkContent(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
-        if (sharing) ShareBanner(onToggleShare)
+        if (sharing) ShareBanner(onToggleShare, onReply)
 
         if (cameraOn) {
             // Point the camera at something and talk: JARVIS sees the frame with each utterance.
@@ -203,10 +221,19 @@ fun TalkContent(
                         .background(Color.Black.copy(alpha = 0.5f)).padding(horizontal = 8.dp, vertical = 4.dp))
             }
             Spacer(Modifier.height(8.dp))
+        } else if (panelOpen && stageContent != null) {
+            // JARVIS opened something for this conversation: music, video, map, web, document, drafts
+            Box(Modifier.fillMaxWidth().height(340.dp).padding(top = 8.dp)) { stageContent() }
+            Spacer(Modifier.height(6.dp))
         } else {
-            Box(Modifier.fillMaxWidth().height(210.dp), contentAlignment = Alignment.Center) {
-                ReadinessRing(mic, Modifier.size(206.dp))
-                ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f, Modifier.size(180.dp))
+            Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
+                // Default: JARVIS' brain — its memories in 3D; the orb shows on top while it listens/thinks/talks.
+                stageContent?.let { Box(Modifier.fillMaxSize()) { it() } }
+                ReadinessRing(mic, Modifier.size(226.dp))
+                if (stageContent == null || phase != Phase.Idle) {
+                    ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f,
+                        Modifier.size(if (stageContent == null) 180.dp else 110.dp))
+                }
             }
         }
         ReadinessLabel(mic, connected)
@@ -269,17 +296,20 @@ private fun Header(connected: Boolean, workers: Int, sharing: Boolean, onToggleS
 }
 
 @Composable
-private fun ShareBanner(onStop: () -> Unit) {
+private fun ShareBanner(onStop: () -> Unit, onReply: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(10.dp)).background(JarvisColors.Red.copy(alpha = 0.15f))
-            .clickable(onClick = onStop).padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(JarvisColors.Red))
         Spacer(Modifier.width(8.dp))
-        Text("Layar dibagikan — JARVIS melihat layarmu setiap kamu bicara", color = JarvisColors.Text, fontSize = 12.sp,
+        Text("Layar dibagikan — JARVIS membaca layarmu setiap kamu bicara", color = JarvisColors.Text, fontSize = 12.sp,
             modifier = Modifier.weight(1f))
-        Text("Stop", color = JarvisColors.Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text("Balas", color = JarvisColors.Cyan, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clickable(onClick = onReply).padding(horizontal = 8.dp))
+        Text("Stop", color = JarvisColors.Red, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clickable(onClick = onStop))
     }
 }
 

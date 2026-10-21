@@ -22,6 +22,9 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         buildConfigField("String", "DEFAULT_SERVER", "\"https://vis1.cosger.online\"")
+        // Native libs (onnxruntime for the on-phone VAD, MapLibre): 64-bit ARM phones only (the owner's
+        // Infinix HOT 11S is arm64); a second ABI would add ~40 MB.
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
 
     signingConfigs {
@@ -79,6 +82,19 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
+    // v0.7: on-phone voice activity detection (Silero VAD) — only speech is sent to the server
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
+    // v0.7 "Panggung": music/video player, map with route options, reading screen text for reply drafts
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("androidx.media3:media3-session:1.5.1")
+    implementation("org.maplibre.gl:android-sdk:11.13.5")
+    // Text recognition through Google Play services: the model is downloaded once by Play, not bundled (−11 MB)
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
+    // Owner console: fingerprint/face before sensitive screens
+    implementation("androidx.biometric:biometric:1.1.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

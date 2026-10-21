@@ -22,6 +22,11 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val notice = engine.notice
     val screenSharing = engine.screenSharing
     val cameraOn = engine.cameraOn
+    val stage = engine.stage
+    val brain = engine.brain
+    val sttEngine = engine.sttEngine
+    val console = engine.console
+    val meetings = engine.meetings
 
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) = engine.saveSettings(serverUrl, token, speak)
     fun setShareLocation(enabled: Boolean) = engine.setShareLocation(enabled)
@@ -40,4 +45,10 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun setCamera(on: Boolean) = engine.setCamera(on)
     fun setCameraFrameSource(source: (() -> String?)?) { engine.cameraFrame = source }
     fun setUseCalendar(enabled: Boolean) = engine.setUseCalendar(enabled)
+    fun stageEvent(event: String, detail: Map<String, Int>) = engine.stageEvent(event, detail)
+    fun prepareMeeting() = engine.prepareMeeting()
+    fun notify(text: String) = engine.notify(text)
+    fun askReplyDraft() = engine.askReplyDraft()
+    suspend fun refreshComposition() = engine.refreshComposition()
+    suspend fun refreshBrain() = engine.refreshBrain()
 }

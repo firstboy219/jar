@@ -78,10 +78,19 @@ async def lifespan(app: FastAPI):
     purger = asyncio.create_task(purge_daily())
     cron = asyncio.create_task(cron_deliveries())
     meeting_worker = asyncio.create_task(meetings.run_forever())
+
+    async def warm_local_worker():
+        # llama-worker may have restarted: put Hermes' cached prompt prefix back (see gateway.SLOT_FILE)
+        for _ in range(20):
+            if await gateway.restore_worker_slot():
+                log.info("local worker prompt cache restored")
+                return
+            await asyncio.sleep(30)
+    warm = asyncio.create_task(warm_local_worker())
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm):
         t.cancel()
     await db.close()
 

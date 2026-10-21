@@ -25,7 +25,20 @@ sealed interface ServerEvent {
     ) : ServerEvent
     data class Context(val query: String, val items: List<ContextItem>, override val sessionId: String?) : ServerEvent
     data class Delta(val text: String, override val sessionId: String?) : ServerEvent
-    data class Reply(val text: String, val route: String, override val sessionId: String?) : ServerEvent
+    /** [spoken]: the reply was already said sentence by sentence ([Say] events) — do not say it again. */
+    data class Reply(val text: String, val route: String, override val sessionId: String?, val spoken: Boolean = false) : ServerEvent
+    /** One finished sentence of the answer, to speak right away (BR-001: talk while still thinking). */
+    data class Say(val text: String, override val sessionId: String?) : ServerEvent
+    /** What the server heard in an utterance the phone sent (on-phone VAD + server speech recognition). */
+    data class Transcript(val text: String, val seq: Long?, val isOwner: Boolean?, val error: String?, override val sessionId: String?) : ServerEvent
+    /** The phone's front screen ("Panggung"): show/update/close a panel (music, video, map, web, doc, draft, gallery). */
+    data class Stage(val id: String, val panel: String, val mode: String, val payload: JsonObject, val caption: String) : ServerEvent {
+        override val sessionId: String? = null
+    }
+    /** Memories just read or written — the 3D brain flashes them. */
+    data class BrainPulse(val ids: List<String>, val kind: String) : ServerEvent { override val sessionId: String? = null }
+    /** Hermes paused before a risky command and asks the owner (Approval Center). */
+    data class Approval(val id: Long, val title: String, val risk: String) : ServerEvent { override val sessionId: String? = null }
     data class Error(val message: String, override val sessionId: String?) : ServerEvent
     /** A worker task changed state (queued/running/completed/failed/cancelled). */
     data class Task(val id: Long, val title: String, val status: String) : ServerEvent { override val sessionId: String? = null }
@@ -93,7 +106,20 @@ object Protocol {
                 sid,
             )
             "delta" -> ServerEvent.Delta(o.str("text"), sid)
-            "reply" -> ServerEvent.Reply(o.str("text"), o.str("route"), sid)
+            "reply" -> ServerEvent.Reply(o.str("text"), o.str("route"), sid, o["spoken"]?.jsonPrimitive?.booleanOrNull == true)
+            "say" -> ServerEvent.Say(o.str("text"), sid)
+            "transcript" -> ServerEvent.Transcript(
+                o.str("text"), o.long("seq"), o["is_owner"]?.jsonPrimitive?.booleanOrNull,
+                o["error"]?.jsonPrimitive?.contentOrNull, sid,
+            )
+            "stage" -> ServerEvent.Stage(
+                o.str("id"), o.str("panel"), o.str("mode").ifEmpty { "show" },
+                o["payload"] as? JsonObject ?: JsonObject(emptyMap()), o.str("caption"),
+            )
+            "brain_pulse" -> ServerEvent.BrainPulse(
+                o["ids"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(), o.str("kind"),
+            )
+            "approval" -> ServerEvent.Approval(o.long("id") ?: return null, o.str("title"), o.str("risk"))
             "error" -> ServerEvent.Error(o.str("message"), sid)
             "task" -> ServerEvent.Task(o.long("id") ?: return null, o.str("title"), o.str("status"))
             "tasks" -> ServerEvent.Tasks(
@@ -132,10 +158,11 @@ object Protocol {
 
     fun command(
         text: String, sessionId: String, location: DeviceLocation? = null, screenJpegBase64: String? = null,
-        imageSource: String? = null, confidence: Double? = null, speakers: Int? = null,
+        imageSource: String? = null, confidence: Double? = null, speakers: Int? = null, screenText: String? = null,
     ): String = buildJsonObject {
         put("user_command", text)
         put("session_id", sessionId)
+        screenText?.takeIf { it.isNotBlank() }?.let { put("screen_text", it.take(20_000)) }
         screenJpegBase64?.let {
             put("screen", it)
             put("image_source", imageSource ?: "screen")
@@ -153,6 +180,38 @@ object Protocol {
                 location.address?.let { put("address", it.take(300)) }
             })
         }
+    }.toString()
+
+    /** One utterance cut by the phone's VAD: PCM16 mono 16 kHz, transcribed on the server (v0.7). */
+    fun utterance(
+        sessionId: String, seq: Long, pcm: ByteArray, location: DeviceLocation? = null, screenJpegBase64: String? = null,
+        imageSource: String? = null, screenText: String? = null,
+    ): String = buildJsonObject {
+        put("type", "utterance")
+        put("session_id", sessionId)
+        put("seq", seq)
+        put("audio", java.util.Base64.getEncoder().encodeToString(pcm))
+        screenText?.takeIf { it.isNotBlank() }?.let { put("screen_text", it.take(20_000)) }
+        screenJpegBase64?.let {
+            put("screen", it)
+            put("image_source", imageSource ?: "screen")
+        }
+        location?.let { l ->
+            put("location", buildJsonObject {
+                put("lat", l.lat); put("lon", l.lon)
+                l.accuracyM?.let { put("accuracy_m", it) }
+                put("age_s", l.ageSeconds)
+                l.address?.let { put("address", it.take(300)) }
+            })
+        }
+    }.toString()
+
+    /** The owner acted on a stage panel: closed, login_done, route_selected, draft_copied, draft_sent, paused. */
+    fun stageEvent(id: String, event: String, detail: Map<String, Int> = emptyMap()): String = buildJsonObject {
+        put("type", "stage_event")
+        put("id", id)
+        put("event", event)
+        if (detail.isNotEmpty()) put("detail", buildJsonObject { detail.forEach { (k, v) -> put(k, v) } })
     }.toString()
 
     fun control(type: String, idKey: String, id: Long): String = buildJsonObject {

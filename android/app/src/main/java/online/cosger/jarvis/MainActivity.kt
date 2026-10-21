@@ -1,7 +1,7 @@
 package online.cosger.jarvis
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -9,8 +9,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -32,6 +34,24 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import online.cosger.jarvis.ui.JarvisViewModel
+import online.cosger.jarvis.ui.console.AppUpdateScreen
+import online.cosger.jarvis.ui.console.AuditScreen
+import online.cosger.jarvis.ui.console.CompositionScreen
+import online.cosger.jarvis.ui.console.ConsoleRoute
+import online.cosger.jarvis.ui.console.DashboardScreen
+import online.cosger.jarvis.ui.console.DevicesScreen
+import online.cosger.jarvis.ui.console.DocumentsScreen
+import online.cosger.jarvis.ui.console.MeetingDetailScreen
+import online.cosger.jarvis.ui.console.MeetingsScreen
+import online.cosger.jarvis.ui.console.MemoryScreen
+import online.cosger.jarvis.ui.console.MoreScreen
+import online.cosger.jarvis.ui.console.NotificationsScreen
+import online.cosger.jarvis.ui.console.PhoneSetupScreen
+import online.cosger.jarvis.ui.console.SelfScreen
+import online.cosger.jarvis.ui.console.ServerSettingsScreen
+import online.cosger.jarvis.ui.console.StudioScreen
+import online.cosger.jarvis.ui.console.TasksScreen
+import online.cosger.jarvis.ui.console.VoiceprintScreen
 import online.cosger.jarvis.ui.screens.ChatScreen
 import online.cosger.jarvis.ui.screens.LOCATION_PERMISSIONS
 import online.cosger.jarvis.ui.screens.SettingsScreen
@@ -42,10 +62,13 @@ import online.cosger.jarvis.ui.theme.JarvisTheme
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Talk("talk", "Bicara", Icons.Filled.GraphicEq),
     Chat("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
-    Settings("settings", "Pengaturan", Icons.Filled.Settings),
+    Tasks("tasks", "Tugas", Icons.AutoMirrored.Filled.FactCheck),
+    Meetings("meetings", "Rapat", Icons.Filled.Groups),
+    More("more", "Lainnya", Icons.Filled.Apps),
 }
 
-class MainActivity : ComponentActivity() {
+// FragmentActivity (not ComponentActivity): the owner console asks for fingerprint/face via BiometricPrompt.
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -75,7 +98,9 @@ class MainActivity : ComponentActivity() {
                         NavigationBar(containerColor = JarvisColors.Surface) {
                             Tab.entries.forEach { tab ->
                                 NavigationBarItem(
-                                    selected = current?.destination?.route == tab.route,
+                                    selected = current?.destination?.route == tab.route ||
+                                        (tab == Tab.More && current?.destination?.route?.startsWith("console/") == true) ||
+                                        (tab == Tab.Meetings && current?.destination?.route?.startsWith("meeting/") == true),
                                     onClick = {
                                         nav.navigate(tab.route) {
                                             popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -93,13 +118,35 @@ class MainActivity : ComponentActivity() {
                 ) { padding ->
                     NavHost(
                         nav,
-                        startDestination = if (settings.isConfigured) Tab.Talk.route else Tab.Settings.route,
+                        startDestination = if (settings.isConfigured) Tab.Talk.route else "console/app",
                         modifier = Modifier.padding(padding),
                     ) {
+                        val back: () -> Unit = { nav.popBackStack() }
                         composable(Tab.Talk.route) { TalkScreen(vm) }
                         composable(Tab.Chat.route) { ChatScreen(vm) }
-                        composable(Tab.Settings.route) {
-                            SettingsScreen(vm, onSaved = { nav.navigate(Tab.Talk.route) { launchSingleTop = true } })
+                        composable(Tab.Tasks.route) { TasksScreen(vm, null) }
+                        composable(Tab.Meetings.route) { MeetingsScreen(vm, null) { id -> nav.navigate("meeting/$id") } }
+                        composable("meeting/{id}") { e -> MeetingDetailScreen(vm, e.arguments?.getString("id").orEmpty(), back) }
+                        composable(Tab.More.route) { MoreScreen { r -> nav.navigate("console/${r.path}") } }
+                        ConsoleRoute.entries.forEach { r ->
+                            composable("console/${r.path}") {
+                                when (r) {
+                                    ConsoleRoute.Dashboard -> DashboardScreen(vm, back)
+                                    ConsoleRoute.Memory -> MemoryScreen(vm, back)
+                                    ConsoleRoute.Composition -> CompositionScreen(vm, back)
+                                    ConsoleRoute.Studio -> StudioScreen(vm, back)
+                                    ConsoleRoute.Self -> SelfScreen(vm, back)
+                                    ConsoleRoute.Documents -> DocumentsScreen(vm, back)
+                                    ConsoleRoute.Notifications -> NotificationsScreen(vm, back)
+                                    ConsoleRoute.Devices -> DevicesScreen(vm, back)
+                                    ConsoleRoute.Update -> AppUpdateScreen(vm, back)
+                                    ConsoleRoute.Audit -> AuditScreen(vm, back)
+                                    ConsoleRoute.Server -> ServerSettingsScreen(vm, back)
+                                    ConsoleRoute.Voice -> VoiceprintScreen(vm, back)
+                                    ConsoleRoute.Phone -> PhoneSetupScreen(back)
+                                    ConsoleRoute.App -> SettingsScreen(vm, onSaved = { nav.navigate(Tab.Talk.route) { launchSingleTop = true } })
+                                }
+                            }
                         }
                     }
                 }

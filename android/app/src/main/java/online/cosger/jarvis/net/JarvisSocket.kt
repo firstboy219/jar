@@ -61,9 +61,9 @@ class JarvisSocket(
     fun sendControl(json: String): Boolean = _connection.value == Connection.Connected && ws?.send(json) == true
 
     fun send(text: String, sessionId: String, location: DeviceLocation? = null, screen: String? = null,
-             imageSource: String? = null, confidence: Double? = null, speakers: Int? = null): Boolean =
+             imageSource: String? = null, confidence: Double? = null, speakers: Int? = null, screenText: String? = null): Boolean =
         _connection.value == Connection.Connected &&
-            ws?.send(Protocol.command(text, sessionId, location, screen, imageSource, confidence, speakers)) == true
+            ws?.send(Protocol.command(text, sessionId, location, screen, imageSource, confidence, speakers, screenText)) == true
 
     private suspend fun runLoop() {
         var attempt = 0
@@ -71,7 +71,8 @@ class JarvisSocket(
             _connection.value = Connection.Connecting
             val closed = kotlinx.coroutines.CompletableDeferred<Int>()
             val request = Request.Builder().url(url).header("Authorization", "Bearer $token")
-                .header("X-App-Version", online.cosger.jarvis.BuildConfig.VERSION_NAME).build()
+                .header("X-App-Version", online.cosger.jarvis.BuildConfig.VERSION_NAME)
+                .header("X-App-Caps", CAPS).build()
             missedPongs = 0
             ws = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -128,6 +129,8 @@ class JarvisSocket(
 
     companion object {
         const val UNAUTHORIZED = 4401
+        /** What this app understands, so the server knows it may stream sentences and stage panels. */
+        const val CAPS = "say,stage,utterance,brain"
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

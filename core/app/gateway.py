@@ -273,6 +273,35 @@ async def _next_data(lines) -> dict | None:
     return None
 
 
+# ---------- local prompt cache that survives restarts ----------
+# Hermes' ~20k-token prompt prefix takes ~1 h to read on this CPU the first time, then ~seconds when
+# cached. llama-server can save a slot's KV cache to disk; we save it after Hermes work and restore it
+# when llama-worker starts, so a restart does not cost that hour again.
+SLOT_FILE = "hermes-prefix.bin"
+_slot_saved_at = 0.0
+
+
+async def save_worker_slot() -> None:
+    global _slot_saved_at
+    if time.monotonic() - _slot_saved_at < 600:
+        return
+    _slot_saved_at = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=120) as c:
+            await c.post("http://llama-worker:8080/slots/0?action=save", json={"filename": SLOT_FILE})
+    except httpx.HTTPError as e:
+        log.debug("slot save failed: %s", e)
+
+
+async def restore_worker_slot() -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=300) as c:
+            r = await c.post("http://llama-worker:8080/slots/0?action=restore", json={"filename": SLOT_FILE})
+        return r.status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
 def _note_exhausted(route: Route, status: int, text: str) -> None:
     from . import billing
     if route.provider == "openrouter" and (status == 402 or billing.is_exhausted(text)):
@@ -339,6 +368,8 @@ async def stream(category: str, body: dict, *, caller: str, session_id: str | No
             await resp.aclose()
             await client.aclose()
             await _record(route, category, caller, usage, started, first_ms, ok, err, session_id)
+            if ok and route.provider == LOCAL_WORKER:
+                asyncio.create_task(save_worker_slot())
         return
     raise GatewayError("semua model gagal: " + " | ".join(errors))
 

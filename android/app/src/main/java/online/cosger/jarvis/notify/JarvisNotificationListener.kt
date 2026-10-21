@@ -18,6 +18,7 @@ class JarvisNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val engine = (application as JarvisApp).engine
         if (!engine.settings.value.readNotifications) return
+        runCatching { Conversations.capture(sbn, appLabel(sbn.packageName)) }
         val n = sbn.notification
         val extras = n.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
@@ -31,14 +32,16 @@ class JarvisNotificationListener : NotificationListenerService() {
         )
         if (!NotificationFilter.shouldForward(candidate)) return
         if (!deduper.firstTime(sbn.key, title, text, System.currentTimeMillis())) return
-        val app = runCatching {
-            val info = if (Build.VERSION.SDK_INT >= 33) {
-                packageManager.getApplicationInfo(sbn.packageName, PackageManager.ApplicationInfoFlags.of(0))
-            } else {
-                @Suppress("DEPRECATION") packageManager.getApplicationInfo(sbn.packageName, 0)
-            }
-            packageManager.getApplicationLabel(info).toString()
-        }.getOrDefault(sbn.packageName)
+        val app = appLabel(sbn.packageName)
         engine.forwardNotification(app, sbn.packageName, title.take(300), NotificationFilter.safeText(title, text), sbn.postTime)
     }
+
+    private fun appLabel(pkg: String): String = runCatching {
+        val info = if (Build.VERSION.SDK_INT >= 33) {
+            packageManager.getApplicationInfo(pkg, PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION") packageManager.getApplicationInfo(pkg, 0)
+        }
+        packageManager.getApplicationLabel(info).toString()
+    }.getOrDefault(pkg)
 }

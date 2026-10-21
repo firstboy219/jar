@@ -45,36 +45,37 @@ enum class MicState {
 class ContinuousListener(
     private val scope: CoroutineScope,
     private val client: OkHttpClient = OkHttpClient(),
-) {
+) : VoiceInput {
     private val _state = MutableStateFlow(MicState.Muted)
-    val state: StateFlow<MicState> = _state
+    override val state: StateFlow<MicState> = _state
 
     private val _level = MutableStateFlow(0f)
-    val level: StateFlow<Float> = _level
+    override val level: StateFlow<Float> = _level
 
     private val _interim = MutableStateFlow("")
-    val interim: StateFlow<String> = _interim
+    override val interim: StateFlow<String> = _interim
 
     private val _utterances = MutableSharedFlow<UtteranceSegmenter.Output.Utterance>(extraBufferCapacity = 16)
-    val utterances: SharedFlow<UtteranceSegmenter.Output.Utterance> = _utterances
+    override val texts: SharedFlow<UtteranceSegmenter.Output.Utterance> = _utterances
+    override val audio: SharedFlow<ByteArray> = MutableSharedFlow()
 
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 4)
-    val errors: SharedFlow<String> = _errors
+    override val errors: SharedFlow<String> = _errors
 
     private val segmenter = UtteranceSegmenter()
     private val pending = ArrayDeque<ByteString>()
     @Volatile private var ws: WebSocket? = null
     @Volatile private var socketOpen = false
     @Volatile private var paused = false
-    @Volatile var lastSpeechAtMs = 0L
+    @Volatile override var lastSpeechAtMs = 0L
         private set
     private var recorder: AudioRecord? = null
     private var jobs = mutableListOf<Job>()
 
-    val unmuted: Boolean get() = _state.value != MicState.Muted
+    override val unmuted: Boolean get() = _state.value != MicState.Muted
 
     @SuppressLint("MissingPermission") // caller checks RECORD_AUDIO
-    fun unmute(config: suspend () -> SttConfig) {
+    override fun unmute(config: suspend () -> SttConfig) {
         if (unmuted) return
         _state.value = MicState.Preparing
         lastSpeechAtMs = System.currentTimeMillis()
@@ -99,7 +100,7 @@ class ContinuousListener(
         }
     }
 
-    fun mute() {
+    override fun mute() {
         if (!unmuted) return
         jobs.forEach { it.cancel() }
         jobs.clear()
@@ -115,14 +116,14 @@ class ContinuousListener(
     }
 
     /** While JARVIS speaks: drop mic audio so it does not transcribe itself. */
-    fun pause() {
+    override fun pause() {
         paused = true
         segmenter.reset()
         _interim.value = ""
         if (unmuted) _state.value = MicState.Paused
     }
 
-    fun resume() {
+    override fun resume() {
         paused = false
         if (unmuted) _state.value = if (socketOpen) MicState.Ready else MicState.Preparing
     }
