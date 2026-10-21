@@ -278,6 +278,7 @@ async def _next_data(lines) -> dict | None:
 # cached. llama-server can save a slot's KV cache to disk; we save it after Hermes work and restore it
 # when llama-worker starts, so a restart does not cost that hour again.
 SLOT_FILE = "hermes-prefix.bin"
+SLOT_MIN_TOKENS = 4000
 _slot_saved_at = 0.0
 
 
@@ -391,7 +392,9 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
             await resp.aclose()
             await client.aclose()
             await _record(route, category, caller, usage, started, first_ms, ok, err, session_id)
-            if ok and route.provider == LOCAL_WORKER:
+            if ok and route.provider == LOCAL_WORKER and caller == "hermes" and (usage.get("prompt_tokens") or 0) >= SLOT_MIN_TOKENS:
+                # only Hermes' own long prompt is worth keeping on disk: a small call saved here once replaced
+                # the 22k-token Hermes prefix with 279 tokens, and every restore then forced a full re-read
                 asyncio.create_task(save_worker_slot())
         return
     raise GatewayError("semua model gagal: " + " | ".join(errors))

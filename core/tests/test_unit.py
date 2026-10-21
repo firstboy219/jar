@@ -490,3 +490,8 @@ def test_background_rules_and_orphan_watchdog():
     assert ops.orphaned(71.0, [{"caller": "flowwatch", "provider": "lokal"}])  # the chat model is another server
     assert not ops.orphaned(71.0, [{"caller": "hermes", "provider": "lokal-kerja"}])
     assert not ops.orphaned(10.0, [])
+
+
+def test_hermes_profile_follows_where_it_runs():
+    from app.composition import hermes_profile_for
+    assert hermes_profile_for(False) == "lean" and hermes_profile_for(True) == "full"

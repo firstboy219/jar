@@ -81,6 +81,8 @@ services:
       # JARVIS' own tools (memory, the owner, the phone's screen, documents, approvals, n8n) via jarvis-tools
       - MCP_TOKEN=${MCP_TOKEN}
       - TZ=${TZ}
+      # lean while Hermes runs on the local CPU (fewer prompt tokens), full with cloud models (ADR-031)
+      - HERMES_PROFILE=${HERMES_PROFILE:-lean}
     networks:
       - jarvis-network
     depends_on:
@@ -111,13 +113,13 @@ services:
     restart: always
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     cpu_shares: 128
-    mem_limit: 6g
+    mem_limit: 8g # model 2.7 GB + KV + 4 GB prompt cache (ADR-031)
     entrypoint: ["chrt", "-i", "0", "nice", "-n", "19", "/app/llama-server"]
     # -b 512: a cancelled request stops within ~30 s (llama.cpp checks between batches; 2048 took 2–4 min on this CPU)
     # CPU limit: 2 of 4 threads while only JARVIS' background work runs, all 4 for the owner's (ops.py → usage-collector.sh)
     command: ["-m", "/models/Qwen3.5-4B-Q4_K_M.gguf", "-c", "65536", "-np", "1", "-t", "4", "-b", "512", "-ctk", "q8_0", "-ctv", "q8_0",
               "--jinja", "--host", "0.0.0.0", "--port", "8080", "--no-webui",
-              "--slot-save-path", "/slots", "--cache-ram", "2048", "--alias", "qwen-lokal"]
+              "--slot-save-path", "/slots", "--cache-ram", "4096", "--alias", "qwen-lokal"]
     volumes:
       - ./data/models:/models:ro
       - ./data/llm-slots/worker:/slots

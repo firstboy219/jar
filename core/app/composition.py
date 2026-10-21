@@ -5,7 +5,11 @@ of JARVIS is not part of the composition and cannot be switched off: Hermes (the
 Qdrant + Postgres (memory) and n8n (automation) are always used, whatever models are chosen.
 """
 
+import logging
+
 from . import audit, db, gateway
+
+log = logging.getLogger("jarvis-core.composition")
 
 CORE = ["Hermes Agent", "Qdrant", "n8n"]
 STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whisper (cepat, ±gratis)",
@@ -156,6 +160,7 @@ async def apply_preset(name: str, actor: str) -> dict:
     await _set_kv("composition:stt", preset["stt"])
     gateway.invalidate()
     await audit.record(actor, "composition.preset", None, preset=name)
+    await sync_hermes_profile(actor)
     return await get()
 
 
@@ -194,4 +199,36 @@ async def update(changes: dict, actor: str) -> dict:
     from . import budget
     budget.forget()
     await audit.record(actor, "composition.updated", None, changes=list(changes))
+    if changes.get("categories"):
+        await sync_hermes_profile(actor)
     return await get()
+
+
+ADMIN_URL = "http://jarvis-admin:8000"
+
+
+def hermes_profile_for(web_route_is_cloud: bool) -> str:
+    """Hermes on the local CPU gets the lean prompt; on a cloud model everything eager (ADR-031). Pure."""
+    return "full" if web_route_is_cloud else "lean"
+
+
+async def sync_hermes_profile(actor: str) -> str | None:
+    """Follow the composition: when Hermes' model moves between the local CPU and the cloud, switch its
+    profile (jarvis-admin writes .env; jarvis-apply recreates only Hermes). Returns the new profile, if changed."""
+    import httpx
+    from .config import settings
+    want = hermes_profile_for((await gateway.plan("web", caller="hermes", worker=True))[0].cloud)
+    headers = {"X-Admin-Token": settings.admin_token}
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            fields = (await c.get(ADMIN_URL + "/internal/settings", headers=headers)).json().get("fields", [])
+            have = next((f.get("value") for f in fields if f.get("key") == "HERMES_PROFILE"), "") or "lean"
+            if have == want:
+                return None
+            r = await c.post(ADMIN_URL + "/internal/settings", headers=headers, json={"HERMES_PROFILE": want})
+            r.raise_for_status()
+    except (httpx.HTTPError, ValueError) as e:
+        log.warning("could not switch the Hermes profile: %s", e)
+        return None
+    await audit.record(actor, "hermes.profile", None, profile=want)
+    return want

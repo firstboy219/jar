@@ -7,6 +7,9 @@
 #   memory            Hermes' own memory ON, mirrored into JARVIS' one memory by the jarvis-memory plugin
 #   toolsets          everything the API server can use, plus kanban, tts, video, project, debugging
 #   mcp_servers       jarvis-tools (memory, the owner, the phone's screen, documents, approvals, n8n, BR-003)
+#   HERMES_PROFILE    lean (default while Hermes runs on the local CPU, ADR-031): heavy tools deferred behind
+#                     tool_search, only JARVIS' own skills in the prompt, side tasks on the chat model, one
+#                     sub-agent at a time — measured 22.6k → ~10k prompt tokens. full: everything eager (cloud).
 # Hermes decides its own flow (tools, skills, sub-agents, schedules). What stays fixed are the owner's
 # safety rules: approvals for dangerous actions (bridged to the phone), no credentials for n8n/DB/admin,
 # web content is data, budget enforced by the gateway.
@@ -72,6 +75,35 @@ pt = cfg.get("platform_toolsets") if isinstance(cfg.get("platform_toolsets"), di
 pt["api_server"] = ["hermes-api-server", "kanban", "tts", "video", "project", "debugging", "todo"]
 cfg["platform_toolsets"] = pt
 
+# --- prompt size (ADR-031). Measured 2026-10-21: of ~22.6k prompt tokens per step, 16.4k were tool schemas
+# (kanban alone 6.1k) and 3.4k the index of 149 skills; the local CPU reads ~10–17 tokens/s.
+PROFILE = (env("HERMES_PROFILE") or "lean").strip().lower()
+LEAN_DEFER = {"kanban_create", "kanban_complete", "kanban_request_review", "kanban_block", "kanban_attach",
+              "kanban_list", "kanban_attach_url", "kanban_show", "kanban_request_changes", "kanban_heartbeat",
+              "kanban_comment", "kanban_attachments", "kanban_link", "kanban_unblock", "manage_connections",
+              "delegate_task", "skill_manage", "browser_exec", "text_to_speech"}
+ts = cfg.setdefault("tools", {}).setdefault("tool_search", {})
+default_defer = set(DEFAULT_CONFIG["tools"]["tool_search"]["defer"])
+skills_root = os.path.join(os.environ.get("HERMES_HOME", "/opt/data"), "skills")
+if PROFILE == "lean":
+    ts["enabled"] = True
+    ts["defer"] = sorted(default_defer | LEAN_DEFER)  # still usable: tool_search loads a schema when needed
+    delegation["max_concurrent_children"] = 1  # one CPU: parallel children only queue up
+    for task, entry in aux.items():  # side tasks on the chat model (its own server), not the work model
+        if isinstance(entry, dict) and entry.get("provider") == "jarvis" and task != "vision":
+            entry["model"] = "jarvis-cepat"
+    hidden = []
+    for root, _, files in os.walk(skills_root):
+        if "SKILL.md" in files and os.path.relpath(root, skills_root).split(os.sep)[0] != "jarvis":
+            for line in open(os.path.join(root, "SKILL.md"), errors="replace").read().splitlines()[:15]:
+                if line.startswith("name:"):
+                    hidden.append(line.split(":", 1)[1].strip().strip('"\''))
+                    break
+    cfg.setdefault("skills", {})["disabled"] = sorted(set(hidden))  # only JARVIS' own skills in the prompt
+else:
+    ts["defer"] = sorted(default_defer)
+    cfg.setdefault("skills", {})["disabled"] = []
+
 # Memory: Hermes' own memory on, mirrored into JARVIS' shared memory (plugin infra/hermes/plugins/jarvis-memory).
 mem = cfg.setdefault("memory", {})
 mem.update({"memory_enabled": True, "user_profile_enabled": True, "nudge_interval": 10, "provider": "jarvis-memory"})
@@ -102,5 +134,6 @@ cfg["mcp_servers"] = servers
 
 with open(path, "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
-print(f"[jarvis] gateway={GATEWAY} routes={len(extra['model_routes'])} memory={mem['provider']} mcp={list(servers)}")
+print(f"[jarvis] gateway={GATEWAY} routes={len(extra['model_routes'])} memory={mem['provider']} mcp={list(servers)} "
+      f"profile={PROFILE} deferred={len(ts['defer'])} skills_hidden={len(cfg['skills']['disabled'])}")
 PY

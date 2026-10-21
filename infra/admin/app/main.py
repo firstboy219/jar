@@ -42,6 +42,9 @@ SETTINGS = [
      "Opsional: kunci untuk tugas kecil & latar belakang (situasi, cek diri, laporan)."),
     ("GROQ_API_KEY", "Groq API key", True, r"^gsk_[A-Za-z0-9]{20,}$",
      "Opsional. Pengenalan suara cepat (Whisper turbo, gratis ±8 jam audio/hari). console.groq.com/keys."),
+    ("HERMES_PROFILE", "Profil Hermes", False, r"^(lean|full)?$",
+     "lean: prompt ramping untuk model lokal (cepat di CPU). full: semua alat & skill langsung (untuk model cloud). "
+     "Diatur otomatis saat Komposisi AI berganti."),
     ("MP3_CONVERTER_URL", "Converter YouTube → MP3 (alamat API)", False, r"^(https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?)?$",
      "Opsional. API converter kompatibel cobalt (mis. https://<instance>/). Link YouTube dikirim ke sini, hasil MP3 diputar di HP."),
     ("MP3_CONVERTER_KEY", "Converter YouTube → MP3 (API key)", True, r"^[A-Za-z0-9._-]{8,200}$",
