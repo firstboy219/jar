@@ -23,7 +23,12 @@ _state: dict = {"at": 0.0, "value": None}
 _notified: dict[str, float] = {}
 
 
+_total_override: float | None = None  # set from the chat/APK (settings_kv 'budget:total'); .env is the default
+
+
 def total_budget() -> float:
+    if _total_override:
+        return _total_override
     try:
         return float(os.getenv("JARVIS_BUDGET_USD", "20") or 20)
     except ValueError:
@@ -45,6 +50,9 @@ def month_start() -> datetime:
 async def state(force: bool = False) -> dict:
     if not force and _state["value"] and time.monotonic() - _state["at"] < 60:
         return _state["value"]
+    global _total_override
+    saved = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'budget:total'")
+    _total_override = float(saved) if isinstance(saved, (int, float)) and saved > 0 else None
     rows = await db.pool().fetch(
         "SELECT category, coalesce(sum(cost_usd), 0)::float AS spent FROM llm_usage WHERE at >= $1 GROUP BY category",
         month_start())

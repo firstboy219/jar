@@ -24,7 +24,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, attachments, audit, auditor, awareness, library, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, library, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -419,6 +419,24 @@ async def composition_put(c: CompositionIn, device: dict = Depends(owner_device_
     except composition.CompositionError as e:
         raise HTTPException(422, str(e))
     return jsonable(await composition.get())
+
+
+class ModelPick(BaseModel):
+    category: str = Field(min_length=2, max_length=30)
+    model: str = Field(min_length=1, max_length=120)
+    provider: str = Field(default="openrouter", max_length=30)
+    role: str = Field(default="utama", pattern="^(utama|cadangan)$")
+    confirmed: bool = False
+
+
+@app.put("/api/v1/composition/model")
+async def composition_model(p: ModelPick, device: dict = Depends(owner_device_auth)):
+    """The app's model picker: make this model the main one (or a fallback) of a category."""
+    try:
+        return jsonable(await composition.set_model(p.category, p.model, f"device:{device['name']}", provider=p.provider,
+                                                    role=p.role, confirmed=p.confirmed))
+    except composition.CompositionError as e:
+        raise HTTPException(422, str(e))
 
 
 class CompositionTest(BaseModel):
@@ -1188,6 +1206,23 @@ async def admin_meetings(_: str = admin):
 @app.get("/admin/hermes-studio")
 async def admin_hermes_studio(_: str = admin):
     return jsonable(hermes_studio.studio())
+
+
+@app.get("/admin/openrouter/models")
+async def admin_openrouter_models(q: str = "", free: bool = False, vision: bool = False, tools: bool = False,
+                                  sort: str = "termurah", limit: int = 60, _: str = admin):
+    """OpenRouter's live catalog for the app's model picker (filtered and sorted here, small answers)."""
+    models = await openrouter.catalog()
+    if models is None:
+        raise HTTPException(503, "daftar model OpenRouter belum bisa diambil")
+    found = openrouter.search(models, q[:80], free=True if free else None, vision=True if vision else None,
+                              tools=True if tools else None, sort=sort if sort in openrouter.SORTS else "termurah", limit=limit)
+    return {"total": len(models), "models": found}
+
+
+@app.post("/admin/openrouter/check")
+async def admin_openrouter_check(actor: str = admin):
+    return jsonable(await composition.check_openrouter(actor))
 
 
 @app.get("/admin/composition")

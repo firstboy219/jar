@@ -77,7 +77,7 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
                 return "model lokal di server (Qwen)" if str(r.get("provider", "")).startswith("lokal") or not r \
                     else f"{r.get('model')} lewat {r.get('provider')}"
             return (f"Komposisi '{c['preset']}': ngobrol pakai {first('ngobrol')}, tugas web pakai {first('web')}, "
-                    f"coding pakai {first('coding')}. Bisa diganti di menu Komposisi AI.")
+                    f"coding pakai {first('coding')}. Bisa diganti di menu Komposisi AI, atau bilang saja padaku.")
         case "relieve":
             from . import ops
             r = await ops.relieve(actor)

@@ -37,10 +37,8 @@ async def check_all() -> list[dict]:
     results.append({"name": "OpenRouter (opsional)", "ok": True,
                     "detail": "terisi" if settings.openrouter_api_key else "belum diisi — semua AI lokal"})
     if settings.openrouter_api_key:
-        b = await billing.balance()
-        results.append({"name": "Saldo OpenRouter", "ok": b is not None and b["remaining"] >= billing.LOW_BALANCE_USD,
-                        "detail": "tidak diketahui" if b is None else
-                        (f"${b['remaining']:.2f} tersisa" if b["remaining"] > 0 else f"HABIS (${b['remaining']:.2f}) — model lokal dipakai")})
+        v = await billing.verdict()
+        results.append({"name": "Saldo OpenRouter", "ok": v["working"] is not False, "detail": v["text"]})
     st = await budget.state()
     results.append({"name": "Anggaran AI bulan ini", "ok": st["level"] < 100,
                     "detail": f"${st['spent_usd']:.2f} dari ${st['budget_usd']:.0f} ({st['pct']:.0f}%)"})

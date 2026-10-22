@@ -62,6 +62,15 @@ draft_reply (TEKS LAYAR ikut di pesannya). Jika hasilnya needs_confirmation, tan
 akan diproses model cloud, boleh?" lalu panggil lagi dengan confirmed=true bila ia setuju. Kamu TIDAK \
 PERNAH mengirim pesan; pemilik yang memilih dan mengirim draf dari layarnya. Minta dibuatkan/dibalaskan email, surat, atau pesan dari BERKAS TERLAMPIR, obrolan, atau sekadar arahan (tanpa layar dibagikan) → write_draft; hasilnya tampil di layar (bisa disalin) dan jadi file .docx yang bisa diunduh. Jangan hanya berjanji membuatkannya.
 
+Pengaturan AI: pemilik BOLEH minta apa saja soal model/anggaran/pengaturan lewat obrolan dan kamu yang \
+mengerjakannya — jangan pernah bilang "tidak bisa dari obrolan" atau "belum pernah diset". Cari id model dengan \
+find_models ("pakai deepseek flash" → cari dulu), lalu ai_settings: set_model (category, model), set_budget, \
+set_stt, set_strong_mode, apply_preset, create_category (jenis pekerjaan baru dengan modelnya sendiri), \
+check_openrouter ("cek saldo/koneksi openrouter" → tes nyata, jangan menebak), show ("kamu pakai model apa?"), \
+list_settings/change_setting (jam tenang dll.). Kunci/password rahasia tidak lewat obrolan (Lainnya → \
+Pengaturan server). Setelah mengubah, sebutkan modelnya dan harganya. Model mahal: tanya dulu (needs_confirmation). \
+Hanya Qdrant dan n8n yang permanen; model lain bebas dipilih.
+
 Fakta/preferensi yang pemilik minta diingat → remember. Jangan menyimpan rahasia/kata sandi.
 
 Menampilkan: kalau pemilik ingin diperlihatkan sesuatu (foto, contoh, video tutorial), atau gambar akan \
@@ -95,10 +104,36 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "judul singkat, mis. 'Cek harga emas Antam'"},
             "instruction": {"type": "string", "description": "instruksi lengkap & mandiri untuk worker"},
-            "category": {"type": "string", "enum": ["web", "coding", "produktivitas", "analisis"],
-                         "description": "jenis pekerjaan (menentukan AI yang mengerjakan)"},
+            "category": {"type": "string",
+                         "description": "jenis pekerjaan (menentukan AI): web, coding, produktivitas, analisis, atau kategori "
+                                        "buatan pemilik (ai_settings show). Kosong = pilih otomatis"},
             "attach_image": {"type": "boolean", "description": "sertakan gambar kamera/layar yang sedang ditunjukkan"}},
             "required": ["title", "instruction"]}}},
+    {"type": "function", "function": {
+        "name": "find_models",
+        "description": "Cari model AI di katalog OpenRouter (daftar yang sama dengan pemilih di aplikasi): id, harga, konteks, "
+                       "bisa alat/gambar. Pakai ini untuk mencari id sebelum set_model.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "kata dari nama, mis. 'deepseek flash', 'claude haiku'"},
+            "free": {"type": "boolean"}, "vision": {"type": "boolean", "description": "harus bisa melihat gambar"},
+            "tools": {"type": "boolean"}, "max_price_out": {"type": "number", "description": "maks USD per juta token keluar"},
+            "sort": {"type": "string", "enum": ["termurah", "terbaru", "konteks", "nama"]}}}}},
+    {"type": "function", "function": {
+        "name": "ai_settings",
+        "description": "Lihat/ubah pengaturan AI atas permintaan pemilik: model tiap kategori, anggaran, mesin suara, mode kuat, "
+                       "kategori baru, cek OpenRouter, pengaturan lain (jam tenang dll).",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["show", "set_model", "set_budget", "set_stt", "set_strong_mode", "apply_preset",
+                                                 "create_category", "delete_category", "check_openrouter", "list_settings",
+                                                 "change_setting"]},
+            "category": {"type": "string", "description": "ngobrol, cepat, penglihatan, balas-pesan, web, coding, produktivitas, "
+                                                          "analisis, rapat, latar-belakang, atau buatan pemilik; 'total' untuk anggaran"},
+            "model": {"type": "string", "description": "id model OpenRouter dari find_models, mis. deepseek/deepseek-v4-flash"},
+            "role": {"type": "string", "enum": ["utama", "cadangan"]},
+            "value": {"description": "nilai: dolar (set_budget), whisper|groq|deepgram, true/false, nama preset, atau isi pengaturan"},
+            "key": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"},
+            "confirmed": {"type": "boolean", "description": "pemilik sudah setuju memakai model mahal"}},
+            "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "acknowledge_reports",
         "description": "Tandai laporan worker sudah didengar pemilik.",
@@ -263,7 +298,7 @@ async def _situation(text: str, location: Location | None, compact: bool = False
 
 async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, location, emit: Emit,
                     image: str | None = None, private: bool = False, screen_text: str = "",
-                    attachments: list[dict] | None = None) -> str:
+                    attachments: list[dict] | None = None, stt: dict | None = None) -> str:
     a = call.arguments
     try:
         match call.name:
@@ -304,6 +339,15 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps({"relayed": ok})
             case "close_stage":
                 return json.dumps(await stage.close())
+            case "find_models" | "ai_settings":
+                from . import chat_settings
+                if call.name == "find_models":
+                    result = await chat_settings.find_models(a)
+                else:
+                    action = str(a.get("action") or "show")
+                    refused = await chat_settings.guard(action, device_id, stt, bool(screen_text or attachments))
+                    result = {"error": refused} if refused else await chat_settings.ai_settings(a, actor)
+                return json.dumps(result, ensure_ascii=False, default=str)
             case "write_draft":
                 return json.dumps(await start_draft(str(a.get("instruction") or ""), session_id, actor, device_id, location,
                                                     private, screen_text, attachments), ensure_ascii=False)
@@ -463,7 +507,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
         for c in completion.tool_calls:
             called.append(c.name)
             result = await _run_tool(c, session_id, actor, device_id, location, send, screen, private, screen_text,
-                                     attachments or [])
+                                     attachments or [], stt)
             messages.append({"role": "tool", "tool_call_id": c.id, "content": result})
             silent = silent or c.name == "stay_silent"
         if completion.text or silent:  # said something already, or chose silence — don't talk (again)

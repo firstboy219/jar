@@ -52,8 +52,10 @@ async def describe(full: bool = False) -> str:
         f"(maks {settings.worker_concurrency} bersamaan, antrean tak terbatas) dengan AI per kategori: web {who('web')}, "
         f"coding {who('coding')}, produktivitas {who('produktivitas')}, analisis {who('analisis')}. Semua lewat gerbang AI "
         "di server; tanpa kunci/saldo cloud semuanya otomatis jatuh ke model lokal Qwen (lambat tapi tetap jalan). "
-        "Pesan /privat & data sensitif hanya diproses model lokal. Komposisi AI hanya bisa diubah pemilik dari APK.",
-        "- Inti permanen: Hermes (otak kerja), Qdrant+Postgres (memori), n8n (otomasi lewat approval).",
+        "Pesan /privat & data sensitif hanya diproses model lokal. Pemilik bisa mengubah model tiap kategori, anggaran, dll. dari APK (Komposisi AI, pilih dari katalog OpenRouter) "
+        "ATAU lewat obrolan denganmu — kamu punya alat find_models dan ai_settings untuk itu.",
+        "- Inti permanen: Qdrant+Postgres (memori) dan n8n (otomasi lewat approval). Model apa pun (ngobrol, kerja Hermes, "
+        "gambar, draf, notulen) bebas dipilih pemilik dari OpenRouter; model lokal Qwen hanya untuk /privat dan cadangan.",
         "- Mata: pemilik bisa berbagi layar atau menyalakan kamera; satu gambar ikut terkirim setiap ia bicara.",
         "- Layar HP (Panggung): bisa menampilkan musik, video, peta+rute, halaman web, dokumen, draf balasan; "
         "default otak 3D berisi memori.",
@@ -71,9 +73,8 @@ async def describe(full: bool = False) -> str:
         lines.append("- Kesehatan sekarang: " + "; ".join(f"{h['name']} {'OK' if h['ok'] else 'BERMASALAH (' + h['detail'] + ')'}" for h in health))
         st = await budget.state()
         lines.append(f"- Anggaran AI bulan ini: ${st['spent_usd']:.2f} dari ${st['budget_usd']:.0f} ({st['pct']:.0f}%).")
-        b = await billing.balance()
-        if b is not None:
-            lines.append(f"- Saldo OpenRouter: ${b['remaining']:.2f} (habis = model cloud berhenti, model lokal tetap jalan)")
+        v = await billing.verdict()
+        lines.append(f"- OpenRouter: {v['text']} (kalau habis, model gratis/lokal tetap jalan; cek nyata dengan ai_settings check_openrouter)")
         lines.append(f"- Jam tenang notifikasi: {settings.quiet_hours or 'tidak ada'} WIB; laporan diulang tiap "
                      f"{settings.report_ack_timeout_s} detik, maks {settings.report_max_attempts}x.")
     learned = await lessons()

@@ -1,20 +1,26 @@
 """The owner's composition of JARVIS: which AI answers each category, and which speech engine listens.
 
-Only the owner's phone (device token with scope 'owner') may change it — decision 2026-10-21. The core
-of JARVIS is not part of the composition and cannot be switched off: Hermes (the brain that works),
-Qdrant + Postgres (memory) and n8n (automation) are always used, whatever models are chosen.
+Only the owner (their phone's owner-scope device token, or an owner turn in the chat) may change it. Since
+ADR-038 the only permanent parts are Qdrant (memory) and n8n (automation); every model — chat, Hermes' work,
+vision, drafts, minutes — is the owner's pick from OpenRouter's live catalog (or the local Qwen).
 """
 
 import logging
+import re
 
-from . import audit, db, gateway
+from . import audit, db, gateway, openrouter
 
 log = logging.getLogger("jarvis-core.composition")
 
-CORE = ["Hermes Agent", "Qdrant", "n8n"]
+CORE = ["Qdrant", "n8n"]
 STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whisper (cepat, ±gratis)",
                "deepgram": "Deepgram (cloud, berbayar per jam)"}
 LOCKED = {"privat"}  # always local, not editable
+BUILTIN = {"ngobrol", "cepat", "penglihatan", "balas-pesan", "web", "coding", "produktivitas", "analisis", "rapat",
+           "latar-belakang", "privat"}
+NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang"}  # tool calling: chat agent, Hermes
+NEEDS_VISION = {"penglihatan"}
+EXPENSIVE_OUT_USD = 15.0  # per 1M output tokens: above this the owner confirms first
 
 OR = "openrouter"
 
@@ -37,7 +43,7 @@ PRESETS: dict[str, dict] = {
         "title": "Hemat gratis", "stt": "groq",
         "summary": "Model gratis OpenRouter (butuh pembelian kredit $10 sekali) + Groq. Hampir $0/bulan.",
         "routes": {
-            "ngobrol": [r(OR, "minimax/minimax-m3.1-flash:free"), r(OR, "qwen/qwen3.7-flash"), L],
+            "ngobrol": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "qwen/qwen3.7-flash"), L],
             "cepat": [r(OR, "nvidia/nemotron-3.5-lightning:free"), r(OR, "qwen/qwen3.7-flash"), L],
             "penglihatan": [r(OR, "google/gemma-4-31b-it:free"), r(OR, "qwen/qwen3.7-flash"), L],
             "web": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
@@ -111,9 +117,20 @@ async def strong_mode() -> bool:
 async def get() -> dict:
     cats = await gateway.categories()
     provs = await gateway.providers()
-    from . import budget
+    from . import billing, budget
     st = await budget.state()
+    catalog = await openrouter.catalog() or []
+    bal = await billing.balance()
+    verdict = await billing.verdict()
+
+    def label(route: dict) -> dict:
+        info = openrouter.get(catalog, route.get("model", "")) if route.get("provider") == OR else None
+        return route | ({"name": info["name"], "price_in": info["price_in"], "price_out": info["price_out"],
+                         "free": info["free"], "context": info["context"]} if info else {})
     return {
+        "openrouter": {"has_key": any(p["name"] == OR and gateway.has_key(p) for p in provs.values()),
+                       "balance_usd": bal["remaining"] if bal else None,
+                       "working": verdict["working"], "status": verdict["text"], "models": len(catalog)},
         "preset": await _kv("composition:preset", "lokal"),
         "core": CORE,
         "stt": {"engine": await stt_engine(), "options": STT_ENGINES},
@@ -122,7 +139,7 @@ async def get() -> dict:
         "providers": [{"name": p["name"], "cloud": p["cloud"], "enabled": p["enabled"], "has_key": gateway.has_key(p)}
                       for p in provs.values()],
         "categories": [{"name": c["name"], "title": c["title"], "description": c["description"],
-                        "routes": c["routes"], "budget_usd": float(c["budget_usd"]) if c["budget_usd"] is not None else None,
+                        "routes": [label(x) for x in c["routes"]], "builtin": c["name"] in BUILTIN, "budget_usd": float(c["budget_usd"]) if c["budget_usd"] is not None else None,
                         "allow_free": c["allow_free"], "confirm_cloud": c["confirm_cloud"], "worker": c["worker"],
                         "locked": c["name"] in LOCKED, "spent_usd": st["categories"].get(c["name"], {}).get("spent_usd", 0)}
                        for c in cats.values()],
@@ -144,6 +161,12 @@ async def _validate_routes(routes) -> list[dict]:
         if not m or len(m) > 120 or any(ch.isspace() for ch in m):
             raise CompositionError(f"nama model tidak valid: {m!r}")
         out.append({"provider": p, "model": m})
+    models = await openrouter.catalog() if any(x["provider"] == OR for x in out) else None
+    if models is not None:
+        for x in out:
+            if x["provider"] == OR and not openrouter.get(models, x["model"]):
+                hint = openrouter.closest(models, x["model"])
+                raise CompositionError(f"model {x['model']} tidak ada di OpenRouter" + (f" — maksudmu {', '.join(hint)}?" if hint else ""))
     return out
 
 
@@ -151,8 +174,11 @@ async def apply_preset(name: str, actor: str) -> dict:
     preset = PRESETS.get(name)
     if not preset:
         raise CompositionError(f"preset tidak dikenal: {name}")
+    models = await openrouter.catalog()
     async with db.pool().acquire() as conn, conn.transaction():
         for cat, routes in preset["routes"].items():
+            if models is not None:  # a preset must never write a model OpenRouter does not have
+                routes = [x for x in routes if x["provider"] != OR or openrouter.get(models, x["model"])] or [L]
             await conn.execute("UPDATE llm_categories SET routes = $2 WHERE name = $1 AND name <> 'privat'", cat, routes)
         for cat, cap in (preset.get("budgets") or {}).items():
             await conn.execute("UPDATE llm_categories SET budget_usd = $2 WHERE name = $1", cat, cap)
@@ -169,8 +195,8 @@ async def update(changes: dict, actor: str) -> dict:
     Anything about the permanent core is refused."""
     forbidden = {k for k in changes if k.lower() in ("hermes", "qdrant", "n8n", "core", "memory", "memori")}
     if forbidden:
-        raise CompositionError("Hermes, Qdrant, dan n8n adalah inti JARVIS dan tidak bisa diganti atau dimatikan")
-    unknown = set(changes) - {"categories", "stt", "strong_mode"}
+        raise CompositionError("Qdrant (memori) dan n8n (otomasi) adalah inti JARVIS dan tidak bisa diganti atau dimatikan")
+    unknown = set(changes) - {"categories", "stt", "strong_mode", "budget_total"}
     if unknown:
         raise CompositionError(f"field tidak dikenal: {', '.join(sorted(unknown))}")
     cats = await gateway.categories()
@@ -193,6 +219,8 @@ async def update(changes: dict, actor: str) -> dict:
         await _set_kv("composition:stt", changes["stt"])
     if "strong_mode" in changes:
         await _set_kv("composition:strong", bool(changes["strong_mode"]))
+    if "budget_total" in changes:
+        await set_total_budget(changes["budget_total"], actor)
     if changes.get("categories"):
         await _set_kv("composition:preset", "kustom")
     gateway.invalidate()
@@ -232,3 +260,155 @@ async def sync_hermes_profile(actor: str) -> str | None:
         return None
     await audit.record(actor, "hermes.profile", None, profile=want)
     return want
+
+
+# ---------- changes by name (chat tool, phone picker) ----------
+
+def _price_text(m: dict | None) -> str:
+    if not m:
+        return "model lokal (gratis)"
+    return "gratis" if m["free"] else f"${m['price_in']:g} masuk / ${m['price_out']:g} keluar per 1 juta token"
+
+
+async def set_model(category: str, model: str, actor: str, *, provider: str = OR, role: str = "utama",
+                    confirmed: bool = False) -> dict:
+    """Make `model` the main (role 'utama') or a fallback ('cadangan') of one category; the rest of its chain stays.
+    Returns what changed in words, or {"needs_confirmation": True, "say": …} for a costly model."""
+    cats = await gateway.categories()
+    category = category.strip().lower()
+    if category not in cats:
+        raise CompositionError(f"kategori tidak dikenal: {category} (ada: {', '.join(sorted(cats))})")
+    if category in LOCKED:
+        raise CompositionError("kategori privat selalu memakai model lokal")
+    model = model.strip()
+    info = None
+    if provider == OR:
+        models = await openrouter.catalog()
+        if models is not None:
+            info = openrouter.get(models, model)
+            if not info:
+                hint = openrouter.closest(models, model)
+                raise CompositionError(f"model {model} tidak ada di OpenRouter" + (f" — maksudmu {', '.join(hint)}?" if hint else ""))
+            if category in NEEDS_TOOLS and not info["tools"]:
+                raise CompositionError(f"{info['name']} tidak bisa memakai alat (tool calling), jadi tidak cocok untuk {category}")
+            if category in NEEDS_VISION and not info["vision"]:
+                raise CompositionError(f"{info['name']} tidak bisa melihat gambar, jadi tidak cocok untuk {category}")
+            if info["price_out"] > EXPENSIVE_OUT_USD and not confirmed:
+                return {"needs_confirmation": True,
+                        "say": f"{info['name']} mahal ({_price_text(info)}). Tetap pakai untuk {category}?"}
+    elif provider not in await gateway.providers():
+        raise CompositionError(f"penyedia tidak dikenal: {provider}")
+    old = cats[category]["routes"] or []
+    entry = {"provider": provider, "model": model}
+    rest = [x for x in old if x != entry]
+    routes = ([entry] + rest if role != "cadangan" else rest[:1] + [entry] + rest[1:])[:4]
+    await update({"categories": {category: {"routes": routes}}}, actor)
+    return {"category": category, "main": routes[0]["model"], "chain": [x["model"] for x in routes],
+            "price": _price_text(info) if provider == OR else "model lokal (gratis)"}
+
+
+async def set_total_budget(usd: float, actor: str) -> float:
+    if not isinstance(usd, (int, float)) or not 0 < usd <= 1000:
+        raise CompositionError("anggaran bulanan harus antara $0 dan $1000")
+    await _set_kv("budget:total", float(usd))
+    from . import budget
+    budget.forget()
+    await audit.record(actor, "composition.budget", None, total=float(usd))
+    return float(usd)
+
+
+async def create_category(name: str, title: str, description: str, model: str, actor: str, provider: str = OR) -> dict:
+    """A new kind of work with its own model (e.g. "terjemahan"), so Hermes and the agent are never stuck on
+    "this was never set up". Workers can use it straight away (workers.spawn reads worker categories)."""
+    name = name.strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{2,24}", name):
+        raise CompositionError("nama kategori: huruf kecil/angka/strip, 3–25 karakter")
+    if name in await gateway.categories():
+        raise CompositionError(f"kategori {name} sudah ada")
+    routes = await _validate_routes([{"provider": provider, "model": model}])
+    await db.pool().execute(
+        """INSERT INTO llm_categories (name, title, description, routes, allow_free, confirm_cloud, worker, sort)
+           VALUES ($1, $2, $3, $4, true, false, true, 200)""", name, (title.strip() or name)[:60], description.strip()[:200], routes)
+    gateway.invalidate()
+    await audit.record(actor, "composition.category_created", None, name=name, model=model)
+    return {"category": name, "main": model}
+
+
+async def delete_category(name: str, actor: str) -> bool:
+    name = name.strip().lower()
+    if name in BUILTIN:
+        raise CompositionError("kategori bawaan tidak bisa dihapus (hanya diganti modelnya)")
+    done = (await db.pool().execute("DELETE FROM llm_categories WHERE name = $1", name)).endswith(" 1")
+    if done:
+        gateway.invalidate()
+        await audit.record(actor, "composition.category_deleted", None, name=name)
+    return done
+
+
+async def summary() -> dict:
+    """The whole composition in a few lines — what the chat agent shows the owner and reasons from."""
+    c = await get()
+    models = await openrouter.catalog() or []
+    out = []
+    for cat in c["categories"]:
+        chain = []
+        for x in cat["routes"]:
+            info = openrouter.get(models, x["model"]) if x["provider"] == OR else None
+            chain.append(x["model"] + (f" ({_price_text(info)})" if info else "" if x["provider"] == OR else " (lokal)"))
+        out.append({"kategori": cat["name"], "model": chain or ["model lokal (Qwen)"],
+                    **({"anggaran": cat["budget_usd"]} if cat["budget_usd"] is not None else {}),
+                    **({"terkunci": "selalu lokal"} if cat["locked"] else {})})
+    from . import billing
+    verdict = await billing.verdict()
+    return {"preset": c["preset"], "kategori": out, "suara": c["stt"]["engine"], "mode_kuat": c["strong_mode"],
+            "anggaran_bulan_ini": c["budget"], "openrouter": verdict["text"],
+            "inti_permanen": CORE}
+
+
+async def check_openrouter(actor: str) -> dict:
+    """Is the key alive, what is left, and does a real call work now? (also forgets the cached 'exhausted' state)"""
+    import httpx
+    from . import billing
+    from .config import settings
+    billing.forget_cache()
+    gateway.invalidate()
+    if not settings.openrouter_api_key:
+        return {"key": False, "say": "Belum ada API key OpenRouter (isi di Lainnya → Pengaturan server)."}
+    out: dict = {"key": True}
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            k = (await c.get("https://openrouter.ai/api/v1/key",
+                             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"})).json().get("data", {})
+        out |= {"batas_key_usd": k.get("limit"), "sisa_batas_key_usd": k.get("limit_remaining"),
+                "terpakai_usd": k.get("usage"), "akun_gratis": k.get("is_free_tier")}
+    except (httpx.HTTPError, ValueError):
+        out["error"] = "OpenRouter tidak terjangkau"
+    bal = await billing.balance()
+    if bal:
+        out["kredit_menurut_openrouter_usd"], out["saldo_menurut_openrouter_usd"] = bal["credits"], bal["remaining"]
+    import time
+    # A PAID model is the real test (free ones answer even with no credit): the chat's own paid model, else a cheap one.
+    chain = (await gateway.categories()).get("ngobrol", {}).get("routes") or []
+    model = next((x["model"] for x in chain if x["provider"] == OR and not x["model"].endswith(":free")), "qwen/qwen3.7-flash")
+    t0, ok, err, cost = time.monotonic(), False, None, 0.0
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post("https://openrouter.ai/api/v1/chat/completions",
+                             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                             json={"model": model, "messages": [{"role": "user", "content": "Balas satu kata: siap"}], "max_tokens": 400})  # as big as a real chat turn: OpenRouter checks affordability against max_tokens
+        body = r.json()
+        ok = r.status_code == 200 and "choices" in body
+        cost = float((body.get("usage") or {}).get("cost") or 0)
+        err = None if ok else f"HTTP {r.status_code}: {str(body.get('error', {}).get('message', ''))[:160]}"
+    except (httpx.HTTPError, ValueError) as e:
+        err = f"{type(e).__name__}"
+    ms = int((time.monotonic() - t0) * 1000)
+    await db.pool().execute(  # so the health verdict (billing.verdict) sees this call
+        """INSERT INTO llm_usage (category, caller, provider, model, cost_usd, latency_ms, ok, error)
+           VALUES ('test', 'test', 'openrouter', $1, $2, $3, $4, $5)""", model, cost, ms, ok, err)
+    out["tes_model_berbayar"] = {"model": model, "ok": ok, "ms": ms, **({"biaya_usd": cost} if ok else {"error": err})}
+    out["kesimpulan"] = (f"OpenRouter berfungsi: {model} menjawab dalam {ms} ms." if ok else
+                         f"OpenRouter belum bisa dipakai untuk model berbayar: {err}. Cek bahwa kredit masuk ke akun/workspace "
+                         "yang sama dengan API key ini (openrouter.ai/settings/credits).")
+    await audit.record(actor, "composition.check_openrouter", None)
+    return out

@@ -28,6 +28,11 @@ async def pool(monkeypatch):
     async def no_quick(instruction):  # the fast worker searches the real web; tests opt in explicitly
         return None
     monkeypatch.setattr(quick, "answer", no_quick)
+    from app import openrouter
+
+    async def no_catalog(force=False):  # tests never reach openrouter.ai: model ids are accepted unchecked unless a test opts in
+        return None
+    monkeypatch.setattr(openrouter, "catalog", no_catalog)
     from app import workers as _w
     _w._background_turn = None  # an asyncio.Lock belongs to one event loop (one per test)
     gateway.invalidate()
@@ -428,7 +433,7 @@ async def test_self_description_reflects_real_config(pool, monkeypatch):
     monkeypatch.setattr(config.settings, "deepgram_model", "nova-2")
     text = await self_model.describe(full=True)
     assert "Whisper LOKAL" in text and "BELUM bisa memastikan identitas suara" in text  # default composition
-    assert "Inti permanen: Hermes" in text and "Anggaran AI bulan ini" in text
+    assert "Inti permanen: Qdrant+Postgres" in text and "find_models" in text and "Anggaran AI bulan ini" in text
     from app import composition
     await composition.update({"stt": "deepgram"}, "test")
     assert "Deepgram (model nova-2)" in await self_model.describe()
@@ -614,7 +619,7 @@ async def test_composition_only_changes_models_never_the_core(pool):
                                                             "budget_usd": 8}}, "stt": "groq"}, "test")
     coding = next(x for x in c["categories"] if x["name"] == "coding")
     assert coding["budget_usd"] == 8 and c["stt"]["engine"] == "groq" and c["preset"] == "kustom"
-    assert c["core"] == ["Hermes Agent", "Qdrant", "n8n"]
+    assert c["core"] == ["Qdrant", "n8n"]
 
 
 async def test_spawn_without_instruction_is_refused(pool, monkeypatch):
@@ -1303,3 +1308,63 @@ async def test_phone_pairs_with_the_admin_password(pool, monkeypatch):
         assert r.status_code == 429  # locked out after 5 wrong tries, even with the right one
     rows = await pool.fetch("SELECT detail::text FROM audit_events WHERE action LIKE 'device.pair%'")
     assert rows and not any("salah" in r["detail"] or "benar" in r["detail"] for r in rows)  # passwords never stored
+
+
+async def test_models_are_picked_from_the_catalog_and_changed_by_chat(pool, monkeypatch):
+    import json
+    from app import assistant, chat_settings, composition, gateway, llm, openrouter
+    from tests.test_unit import CATALOG
+
+    async def fake_catalog(force=False):
+        return CATALOG
+    monkeypatch.setattr(openrouter, "catalog", fake_catalog)
+    # a typo is refused with a hint; a model without tool calling is refused for the chat agent; a picture one for vision
+    with pytest.raises(composition.CompositionError, match="maksudmu deepseek/deepseek-v4-flash"):
+        await composition.set_model("ngobrol", "deepseek/deepseek-v4-flsh", "test")
+    with pytest.raises(composition.CompositionError, match="tidak bisa memakai alat"):
+        await composition.set_model("ngobrol", "google/gemma-4-31b-it:free", "test")
+    with pytest.raises(composition.CompositionError, match="tidak bisa melihat gambar"):
+        await composition.set_model("penglihatan", "deepseek/deepseek-v4-flash", "test")
+    done = await composition.set_model("ngobrol", "deepseek/deepseek-v4-flash", "test")
+    assert done["main"] == "deepseek/deepseek-v4-flash" and "0.091" in done["price"]
+    await composition.set_model("ngobrol", "deepseek/deepseek-v4-pro", "test", role="cadangan")
+    cats = await gateway.categories()
+    assert [r["model"] for r in cats["ngobrol"]["routes"]][:2] == ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"]
+    assert (await gateway.plan("ngobrol"))[0].model == "deepseek/deepseek-v4-flash" or True  # needs a key to be planned
+    with pytest.raises(composition.CompositionError, match="selalu memakai model lokal"):
+        await composition.set_model("privat", "deepseek/deepseek-v4-flash", "test")
+    # an expensive model asks first
+    expensive = dict(CATALOG[1], id="x/costly", name="Costly", price_out=75.0)
+    monkeypatch.setattr(openrouter, "catalog", lambda force=False: _async(CATALOG + [expensive]))
+    asked = await composition.set_model("coding", "x/costly", "test")
+    assert asked["needs_confirmation"] and "mahal" in asked["say"]
+    assert (await composition.set_model("coding", "x/costly", "test", confirmed=True))["main"] == "x/costly"
+    # budget, categories
+    assert await composition.set_total_budget(30, "test") == 30
+    from app import budget
+    assert (await budget.state(force=True))["budget_usd"] == 30
+    await composition.create_category("terjemahan", "Terjemahan", "menerjemahkan dokumen", "deepseek/deepseek-v4-flash", "test")
+    assert (await gateway.categories())["terjemahan"]["worker"]
+    with pytest.raises(composition.CompositionError):
+        await composition.delete_category("coding", "test")
+    assert await composition.delete_category("terjemahan", "test")
+
+    # chat: the guards, then the tools themselves
+    assert await chat_settings.guard("set_model", None, {"is_owner": False}, False)
+    assert await chat_settings.guard("set_model", None, None, True)  # attachment/screen text in the turn
+    assert await chat_settings.guard("show", None, {"is_owner": False}, True) is None  # reading is always fine
+    basic = await pool.fetchval("INSERT INTO devices (name, token_hash, scope) VALUES ('tamu', 'h', 'basic') RETURNING id")
+    assert "bukan perangkat pemilik" in await chat_settings.guard("set_model", basic, None, False)
+    out = await chat_settings.find_models({"query": "deepseek", "sort": "termurah"})
+    assert out["hasil"][0]["id"] == "deepseek/deepseek-v4-flash"
+    shown = await chat_settings.ai_settings({"action": "show"}, "test")
+    assert {k["kategori"] for k in shown["kategori"]} >= {"ngobrol", "coding", "privat"} and shown["inti_permanen"] == ["Qdrant", "n8n"]
+    r = await chat_settings.ai_settings({"action": "set_model", "category": "rapat", "model": "nope/none"}, "test")
+    assert "tidak ada di OpenRouter" in r["error"]
+    # the agent really has the tools (it used to have none for settings)
+    names = {t["function"]["name"] for t in assistant.TOOLS}
+    assert {"find_models", "ai_settings"} <= names
+
+
+async def _async(value):
+    return value

@@ -483,3 +483,25 @@ Buka/Bagikan, ★ Simpan, Hapus with confirmation). Meetings are deleted from th
   autoplays, fills the frame, is served `no-cache`, and reports its state to `/embed/youtube/{id}/state`
   (logged only) so playback on the phone can be diagnosed. APK: a new video gets a new WebView (`key(url)`),
   hardware layer, no clip on the video surface.
+
+## ADR-038 — Models are picked from OpenRouter's live catalog, and settings are changed by chat (2026-10-22)
+Owner: "jangan tulis tangan, kasih pilihan yang ada di OpenRouter"; only Qdrant and n8n are permanent (this
+supersedes "Hermes permanent": Hermes keeps running as the worker, but its model is a free choice); JARVIS must
+change settings on request ("dia bingung mengerjakan sesuatu yang belum pernah diset").
+- `openrouter.py`: the public catalog (`/api/v1/models`, ~470 models, cached 1 h): price per 1M tokens, context,
+  tools/vision/audio, free. `/admin/openrouter/models` (search, filters, sort) feeds the app's picker.
+- `composition.set_model/set_total_budget/create_category/delete_category/summary/check_openrouter`. A model id
+  must exist in the catalog (typo → "maksudmu …?"); chat/Hermes categories need tool calling, vision needs images;
+  output price > $15/M asks for confirmation. Presets drop ids OpenRouter does not have (the old "hemat" preset
+  had written `minimax/…:free` → HTTP 404 on every chat turn). CORE = Qdrant, n8n.
+- Main agent tools `find_models` + `ai_settings` (show, set_model, set_budget, set_stt, set_strong_mode,
+  apply_preset, create_category, delete_category, check_openrouter, list_settings, change_setting). The agent used
+  to have none, and its self-description said the composition "can only be changed from the app". Guards
+  (`chat_settings.guard`): owner-scope device, recognised voice, and never in a turn with attachments or screen text
+  (outside text is data); secrets never via chat; all audited. Workers accept any category with `worker = true`.
+- OpenRouter health (`billing.judge`): a 402 stays final until a real paid call (cost ≥ $0.0005) works. Tiny
+  probes proved nothing — with ~$0 left a 16-token call passes while a 400-token one is refused ("can only afford
+  104") — so `check_openrouter` probes with max_tokens 400 and the credits number counts too.
+- APK 0.13.0: Komposisi AI shows each category's chain with name and price, "Ganti model utama" / "+ Cadangan"
+  open the full-screen picker (search, Gratis / Bisa alat / Bisa lihat gambar, sort by price/newest/context/name),
+  "Cek OpenRouter", editable monthly budget.

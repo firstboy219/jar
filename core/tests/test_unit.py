@@ -636,3 +636,41 @@ def test_simpanan_names_what_was_shown():
     for bad in ("shown:", "x:1", "music:../../etc", "doc:1;drop"):
         with pytest.raises(library.LibraryError):
             library.parse_key(bad)
+
+
+CATALOG = [
+    {"id": "deepseek/deepseek-v4-flash", "name": "DeepSeek: V4 Flash", "context": 1048576, "price_in": 0.091, "price_out": 0.182,
+     "free": False, "tools": True, "vision": False, "audio": False, "created": 3, "description": ""},
+    {"id": "deepseek/deepseek-v4-pro", "name": "DeepSeek: V4 Pro", "context": 1048576, "price_in": 0.44, "price_out": 0.89,
+     "free": False, "tools": True, "vision": False, "audio": False, "created": 2, "description": ""},
+    {"id": "google/gemma-4-31b-it:free", "name": "Gemma 4 31B (free)", "context": 131072, "price_in": 0, "price_out": 0,
+     "free": True, "tools": False, "vision": True, "audio": False, "created": 1, "description": ""},
+]
+
+
+def test_openrouter_catalog_normalize_search_and_hints():
+    from app import openrouter as o
+    m = o.normalize({"id": "a/b", "name": "B", "context_length": 1000, "pricing": {"prompt": "0.0000003", "completion": "0.0000012"},
+                     "architecture": {"input_modalities": ["text", "image"]}, "supported_parameters": ["tools", "temperature"]})
+    assert m["price_in"] == 0.3 and m["price_out"] == 1.2 and m["vision"] and m["tools"] and not m["free"]
+    assert o.normalize({"id": "x/y:free", "pricing": {"prompt": "0", "completion": "0"}})["free"]
+    assert [x["id"] for x in o.search(CATALOG, "deepseek flash")] == ["deepseek/deepseek-v4-flash"]  # every word must match
+    assert [x["id"] for x in o.search(CATALOG, free=True)] == ["google/gemma-4-31b-it:free"]
+    assert [x["id"] for x in o.search(CATALOG, vision=True)] == ["google/gemma-4-31b-it:free"]
+    assert [x["id"] for x in o.search(CATALOG, tools=True, sort="termurah")][0] == "deepseek/deepseek-v4-flash"
+    assert [x["id"] for x in o.search(CATALOG, sort="terbaru")][0] == "deepseek/deepseek-v4-flash"
+    assert o.search(CATALOG, max_price_out=0.5)[0]["id"] != "deepseek/deepseek-v4-pro"
+    assert "deepseek/deepseek-v4-flash" in o.closest(CATALOG, "deepseek/deepseek-v4-flsh")
+    assert o.short(CATALOG[2])["harga_per_juta_token"] == "gratis"
+
+
+def test_openrouter_health_a_402_is_final_until_a_real_call_works():
+    from datetime import datetime, timedelta
+    from app.billing import judge
+    now = datetime(2026, 10, 22, 22, 0)
+    stale_zero = {"credits": 0, "usage": 0.2, "remaining": -0.2}
+    assert judge(now, now - timedelta(hours=1), stale_zero)["working"] is True   # a real paid call worked after the last 402
+    assert judge(now - timedelta(hours=1), now, stale_zero)["working"] is False  # last paid call was a 402
+    assert judge(None, None, stale_zero)["working"] is False and "HABIS" in judge(None, None, stale_zero)["text"]  # tiny probes prove nothing
+    assert judge(None, None, {"credits": 10, "usage": 1, "remaining": 9})["working"] is True
+    assert judge(None, None, None)["working"] is None

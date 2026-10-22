@@ -48,6 +48,33 @@ async def balance() -> dict | None:
     return info
 
 
+REAL_CALL_USD = 0.0005  # a real chat turn costs more than this; a tiny probe (a few tokens) costs far less
+
+
+def judge(paid_ok, paid_fail, credits: dict | None) -> dict:
+    """Is paid OpenRouter usable? paid_ok: time of the last paid call that cost >= REAL_CALL_USD and worked;
+    paid_fail: time of the last 402. A 402 is final until a real call works again. Tiny probes prove nothing: with
+    ~$0 left a 16-token call still passes while a 400-token one is refused ("can only afford 90"), so the
+    credits number counts too. Pure; unit-tested."""
+    if paid_ok is not None and (paid_fail is None or paid_ok > paid_fail):
+        return {"working": True, "text": "berfungsi (panggilan berbayar sungguhan berhasil)"}
+    if paid_fail is not None:
+        return {"working": False, "text": "HABIS — panggilan berbayar terakhir ditolak (HTTP 402: kredit tidak cukup); model gratis/lokal dipakai"}
+    if credits is not None:
+        ok = credits["remaining"] >= LOW_BALANCE_USD
+        return {"working": ok, "text": f"${credits['remaining']:.2f} tersisa" if ok else f"HABIS (${credits['remaining']:.2f}) — kredit di akun kunci ini belum ada"}
+    return {"working": None, "text": "belum diketahui (belum ada panggilan berbayar)"}
+
+
+async def verdict() -> dict:
+    from . import db
+    ok = await db.pool().fetchval(
+        "SELECT max(at) FROM llm_usage WHERE provider = 'openrouter' AND ok AND cost_usd >= $1", REAL_CALL_USD)
+    fail = await db.pool().fetchval(
+        "SELECT max(at) FROM llm_usage WHERE provider = 'openrouter' AND NOT ok AND error LIKE '%402%'")
+    return judge(ok, fail, await balance()) | {"credits_endpoint": await balance()}
+
+
 def forget_cache() -> None:
     global _cache
     _cache = (0.0, None)

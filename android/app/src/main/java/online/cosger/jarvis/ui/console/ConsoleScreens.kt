@@ -250,7 +250,8 @@ fun CompositionScreen(vm: JarvisViewModel, onBack: () -> Unit) {
     val gate = rememberOwnerGate()
     val comp = rememberLoad { vm.console.get("/api/v1/composition").obj() }
     var testResult by remember { mutableStateOf<String?>(null) }
-    val edits = remember { mutableStateMapOf<String, String>() }
+    var picking by remember { mutableStateOf<Triple<String, String, String>?>(null) } // category, title, role
+    var budgetText by remember { mutableStateOf("") }
     fun save(body: JsonObject, reason: String) = gate(reason) {
         scope.launch {
             runCatching { vm.console.put("/api/v1/composition", body) }
@@ -263,7 +264,22 @@ fun CompositionScreen(vm: JarvisViewModel, onBack: () -> Unit) {
             Card(border = JarvisColors.Cyan) {
                 Label("Inti permanen")
                 Body(c["core"].arr().joinToString(" · ") { (it as JsonPrimitive).content })
-                Small("Hermes (otak kerja), Qdrant (memori) dan n8n (otomasi) selalu dipakai, apa pun model yang dipilih.")
+                Small("Hanya ini yang permanen. Model untuk ngobrol, kerja Hermes, gambar, draf, notulen — semua kamu pilih dari OpenRouter " +
+                    "(atau bilang saja ke JARVIS: \"ngobrol pakai deepseek flash\").")
+            }
+            val or = c["openrouter"].obj()
+            Card(border = if (or["working"]?.let { it.toString() } == "false") JarvisColors.Red else JarvisColors.Border) {
+                Label("OpenRouter")
+                Body(if (or.b("has_key")) or.s("status").ifBlank { "kunci terisi" } else "Belum ada API key (Lainnya → Pengaturan server)", size = 13)
+                Small("${or.i("models") ?: 0} model tersedia di katalog. Saldo menurut OpenRouter bisa terlambat; yang dipakai di sini hasil panggilan nyata.")
+                Action("Cek OpenRouter sekarang") {
+                    testResult = "Mengecek OpenRouter…"
+                    scope.launch {
+                        testResult = runCatching { vm.console.post("/api/v1/console/openrouter/check").obj().s("kesimpulan") }
+                            .getOrElse { it.message }
+                        comp.reload()
+                    }
+                }
             }
             Card {
                 Label("Preset — sekarang: ${c.s("preset")}")
@@ -298,38 +314,48 @@ fun CompositionScreen(vm: JarvisViewModel, onBack: () -> Unit) {
                 Small("Semua tugas memakai model kategori Analisis (lebih teliti, lebih mahal).")
             }
             val budget = c["budget"].obj()
-            Small("Anggaran bulan ini: $${"%.4f".format(budget.d("spent_usd") ?: 0.0)} dari $${"%.0f".format(budget.d("budget_usd") ?: 0.0)}")
+            Card {
+                Label("Anggaran bulanan")
+                Body("Terpakai $${"%.4f".format(budget.d("spent_usd") ?: 0.0)} dari $${"%.0f".format(budget.d("budget_usd") ?: 0.0)} bulan ini", size = 13)
+                OutlinedTextField(budgetText, { budgetText = it.filter { ch -> ch.isDigit() || ch == '.' } }, Modifier.fillMaxWidth(), singleLine = true,
+                    label = { Text("Anggaran baru (USD)") })
+                Action("Simpan anggaran", enabled = budgetText.toDoubleOrNull()?.let { it > 0 } == true) {
+                    save(buildJsonObject { put("changes", buildJsonObject { put("budget_total", budgetText.toDouble()) }) }, "Ganti anggaran bulanan")
+                    budgetText = ""
+                }
+            }
             c["categories"].arr().forEach { cat ->
                 val o = cat.obj()
                 val name = o.s("name")
                 Card(border = if (o.b("locked")) JarvisColors.Green else JarvisColors.Border) {
                     Label(o.s("title"))
                     Small(o.s("description"))
-                    val routes = o["routes"].arr().joinToString("  →  ") { r -> r.obj().let { "${it.s("provider")}/${it.s("model")}" } }
-                    Body(routes + "  →  lokal", size = 12)
-                    Small("Terpakai $${"%.4f".format(o.d("spent_usd") ?: 0.0)}" + (o.d("budget_usd")?.let { " dari $${"%.0f".format(it)}" } ?: ""))
-                    if (!o.b("locked")) {
-                        OutlinedTextField(edits[name] ?: "", { edits[name] = it }, Modifier.fillMaxWidth(), singleLine = true,
-                            label = { Text("Model utama (mis. openrouter/anthropic/claude-haiku-5.5)") })
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Action("Simpan model", enabled = (edits[name] ?: "").contains("/")) {
-                                val v = edits[name]!!.trim()
-                                val provider = v.substringBefore("/")
-                                val model = v.substringAfter("/")
-                                val rest = o["routes"].arr()
+                    val routes = o["routes"].arr().map { it.obj() }
+                    routes.forEachIndexed { i, r ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.foundation.layout.Column(Modifier.weight(1f)) {
+                                Body("${i + 1}. ${Models.routeLabel(r)}", size = 13)
+                                Small(Models.routePrice(r))
+                            }
+                            if (i > 0 && !o.b("locked") && routes.size > 1) Action("Lepas", JarvisColors.Red) {
                                 save(buildJsonObject {
                                     put("changes", buildJsonObject {
                                         put("categories", buildJsonObject {
                                             put(name, buildJsonObject {
-                                                put("routes", buildJsonArray {
-                                                    add(buildJsonObject { put("provider", provider); put("model", model) })
-                                                    rest.take(3).forEach { add(it) }
-                                                })
+                                                put("routes", buildJsonArray { routes.filterIndexed { j, _ -> j != i }.forEach { add(it) } })
                                             })
                                         })
                                     })
-                                }, "Ganti model ${o.s("title")}")
+                                }, "Lepas cadangan ${Models.routeLabel(r)}")
                             }
+                        }
+                    }
+                    Small("lalu model lokal bila semuanya gagal · terpakai $${"%.4f".format(o.d("spent_usd") ?: 0.0)}" +
+                        (o.d("budget_usd")?.let { " dari $${"%.0f".format(it)}" } ?: ""))
+                    if (!o.b("locked")) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Action("Ganti model utama", JarvisColors.Green) { picking = Triple(name, o.s("title"), "utama") }
+                            Action("+ Cadangan") { picking = Triple(name, o.s("title"), "cadangan") }
                             Action("Tes") {
                                 testResult = "Menguji ${o.s("title")}…"
                                 scope.launch {
@@ -346,6 +372,10 @@ fun CompositionScreen(vm: JarvisViewModel, onBack: () -> Unit) {
             }
         }
         testResult?.let { Card(border = JarvisColors.Violet) { Small(it, JarvisColors.Text) } }
+        Small("Butuh kategori kerja baru (mis. terjemahan) atau pengaturan lain? Bilang saja ke JARVIS lewat chat.")
+    }
+    picking?.let { (category, title, role) ->
+        ModelPickerDialog(vm, category, title, role, onDone = { picking = null; comp.reload(); scope.launch { vm.refreshComposition() } }, onDismiss = { picking = null })
     }
 }
 

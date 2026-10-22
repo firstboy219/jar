@@ -47,7 +47,7 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
     'situation' (awareness), 'routine' (habits), 'selfcheck' (self-improvement).
     category: which AI does the work (gateway category); private tasks only ever use the local model."""
     from . import composition
-    if category not in WORKER_CATEGORIES:
+    if category not in WORKER_CATEGORIES and not (category and (await gateway.categories()).get(category, {}).get("worker")):
         category = KIND_CATEGORY.get(kind) or ("analisis" if await composition.strong_mode() else "web")
     if private:
         category = "privat"
