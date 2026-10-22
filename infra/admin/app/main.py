@@ -510,6 +510,23 @@ async def internal_admin_password(request: Request):
     return {"changed": True}
 
 
+PAIR_THROTTLE = Throttle(limit=10, window=3600)  # all phones together: a brute-force guard behind core's per-IP one
+
+
+@app.post("/internal/check-admin-password")
+async def internal_check_admin_password(request: Request):
+    """Core asks before pairing a phone with the admin password (ADR-037). Never logged, never stored."""
+    if not _internal(request):
+        return HTMLResponse("Not found", status_code=404)
+    if PAIR_THROTTLE.blocked("pair"):
+        return JSONResponse({"error": "Terlalu banyak percobaan. Coba lagi dalam 1 jam."}, status_code=429)
+    body = await request.json()
+    if not verify_password(str(body.get("password") or ""), ENV.read()["ADMIN_PASSWORD_HASH"]):
+        PAIR_THROTTLE.fail("pair")
+        return JSONResponse({"error": "Password admin salah."}, status_code=401)
+    return {"ok": True}
+
+
 @app.get("/internal/releases")
 async def internal_releases(request: Request):
     if not _internal(request):

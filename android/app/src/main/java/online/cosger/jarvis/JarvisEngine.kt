@@ -182,6 +182,11 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         if (s.isConfigured) socket.start(s.serverUrl, s.deviceToken) else socket.stop()
     }
 
+    /** Sign in with the admin password: get a device token for this phone, then connect. Returns an error text or null. */
+    suspend fun signIn(serverUrl: String, password: String, speak: Boolean): String? = runCatching {
+        api.pair(serverUrl, password, "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim())
+    }.fold({ token -> saveSettings(serverUrl, token, speak); null }, { it.message ?: "Gagal masuk" })
+
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) {
         settingsStore.update { it.copy(serverUrl = serverUrl, deviceToken = token, speakReplies = speak) }
         stt = null

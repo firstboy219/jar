@@ -10,7 +10,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import online.cosger.jarvis.voice.SttConfig
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
 class CoreApiException(message: String) : IOException(message)
@@ -39,7 +41,35 @@ class CoreApi(private val client: OkHttpClient = OkHttpClient()) {
         }
     }
 
+    /** Sign this phone in with the web admin password: the server makes an owner device token for it (ADR-037). */
+    suspend fun pair(baseUrl: String, password: String, deviceName: String): String = withContext(Dispatchers.IO) {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("password", kotlinx.serialization.json.JsonPrimitive(password))
+            put("device_name", kotlinx.serialization.json.JsonPrimitive(deviceName.take(80)))
+        }.toString()
+        val request = Request.Builder()
+            .url(baseUrl.trimEnd('/') + "/api/v1/devices/pair")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+        client.newCall(request).execute().use { r ->
+            val text = r.body?.string().orEmpty()
+            if (!r.isSuccessful) throw CoreApiException(pairError(r.code, text))
+            Json.parseToJsonElement(text).jsonObject["token"]?.jsonPrimitive?.contentOrNull
+                ?: throw CoreApiException("Jawaban server tidak berisi token")
+        }
+    }
+
     companion object {
+        /** The server's own message ("Password admin salah.", "Terlalu banyak percobaan…") or a plain one. Pure. */
+        fun pairError(code: Int, body: String): String =
+            runCatching { Json.parseToJsonElement(body).jsonObject["detail"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                ?: when (code) {
+                    401 -> "Password admin salah."
+                    429 -> "Terlalu banyak percobaan, coba lagi nanti."
+                    404 -> "Server belum mendukung masuk dengan password."
+                    else -> "Server HTTP $code"
+                }
+
         fun parseSttConfig(body: String, nowMs: Long): SttConfig {
             val o = Json.parseToJsonElement(body).jsonObject
             val token = o["access_token"]?.jsonPrimitive?.contentOrNull

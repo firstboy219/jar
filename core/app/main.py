@@ -16,7 +16,9 @@ import asyncio
 import contextlib
 import hmac
 import json
+import re
 import logging
+import time
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -208,14 +210,18 @@ async def healthz():
 
 YT_EMBED = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin">
-<style>html,body{margin:0;height:100%;background:#000}#p{width:100%;height:100%}</style></head><body><div id="p"></div>
-<script src="https://www.youtube.com/iframe_api"></script>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}#p{width:100%;height:100%}</style></head><body><div id="p"></div>
 <script>
+function tell(s){document.title=s;try{fetch("/embed/youtube/__ID__/state?s="+encodeURIComponent(s),{keepalive:true});}catch(e){}}
+var s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";s.onerror=function(){tell("error:api")};
+document.head.appendChild(s);
+setTimeout(function(){if(!window.YT||!YT.Player)tell("error:api-timeout")},15000);
 function onYouTubeIframeAPIReady(){
-  new YT.Player("p",{videoId:"__ID__",playerVars:{autoplay:__AUTO__,playsinline:1,rel:0,modestbranding:1,origin:location.origin},
-    events:{onReady:function(e){if(__AUTO__)e.target.playVideo();},
-            onStateChange:function(e){document.title={"0":"ended","1":"playing","2":"paused"}[e.data]||document.title;},
-            onError:function(e){document.title="error:"+e.data;}}});
+  new YT.Player("p",{videoId:"__ID__",width:"100%",height:"100%",
+    playerVars:{autoplay:0,playsinline:1,rel:0,modestbranding:1,origin:location.origin},
+    events:{onReady:function(){tell("ready")},
+            onStateChange:function(e){var t={"0":"ended","1":"playing","2":"paused","3":"buffering"}[e.data];if(t)tell(t);},
+            onError:function(e){tell("error:"+e.data);}}});
 }
 </script></body></html>"""
 
@@ -229,7 +235,14 @@ async def youtube_embed(video_id: str, autoplay: int = 1):
     if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
         raise HTTPException(404)
     return HTMLResponse(YT_EMBED.replace("__ID__", video_id).replace("__AUTO__", "1" if autoplay else "0"),
-                        headers={"Cache-Control": "public, max-age=3600"})
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/embed/youtube/{video_id}/state")
+async def youtube_embed_state(video_id: str, s: str = ""):
+    """What the player did on the phone (ready / playing / error:153 …): only logged, to diagnose playback."""
+    log.info("youtube %s: %s", video_id[:11], re.sub(r"[^a-z0-9:-]", "", s.lower())[:20])
+    return {"ok": True}
 
 
 @app.post("/api/v1/chat")
@@ -1264,6 +1277,36 @@ async def _admin_internal(method: str, path: str, **kw):
             return await c.request(method, ADMIN_URL + path, headers={"X-Admin-Token": settings.admin_token}, **kw)
     except httpx.HTTPError as e:
         raise HTTPException(502, f"web admin tidak dapat dihubungi ({type(e).__name__})")
+
+
+class PairIn(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+    device_name: str = Field(default="HP", max_length=80)
+
+
+_pair_failures: dict[str, list[float]] = {}
+
+
+@app.post("/api/v1/devices/pair")
+async def device_pair(body: PairIn, request: Request):
+    """The owner's phone signs in with the web admin password instead of a pasted token (ADR-037): a new
+    owner-scope device token is made for it. 5 wrong passwords per IP per 15 minutes, 10 per hour overall (admin)."""
+    client = request.headers.get("x-real-ip") or (request.client.host if request.client else "?")
+    now = time.time()
+    recent = [t for t in _pair_failures.get(client, []) if now - t < 900]
+    _pair_failures[client] = recent
+    if len(recent) >= 5:
+        raise HTTPException(429, "Terlalu banyak percobaan. Coba lagi dalam 15 menit.")
+    r = await _admin_internal("POST", "/internal/check-admin-password", json={"password": body.password})
+    if r.status_code != 200:
+        if r.status_code == 401:
+            recent.append(now)
+        await audit.record(f"ip:{client}", "device.pair_failed", None, status=r.status_code)
+        detail = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else None
+        raise HTTPException(r.status_code if r.status_code in (401, 429) else 502, detail or "Gagal memeriksa password")
+    _pair_failures.pop(client, None)
+    device, token = await devices.create(body.device_name or "HP", f"pair:{client}", scope="owner")
+    return {"token": token, "device": jsonable(device)}
 
 
 @app.get(CONSOLE + "/settings")

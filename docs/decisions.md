@@ -472,3 +472,14 @@ served to the phone under `/api/v1/console`. Starred items (`library_kept`) are 
 `musiclib.purge_old`, history entries survive the 500 cap. The main agent has `show_saved` ("tampilkan lagi gambar
 tadi"), Hermes `saved_items` / `show_saved`. APK 0.12.0: Lainnya → Simpanan (filters, search, Putar/Tampilkan,
 Buka/Bagikan, ★ Simpan, Hapus with confirmation). Meetings are deleted from the Rapat menu only.
+
+## ADR-037 — Phone signs in with the admin password; YouTube player without autoplay (2026-10-22)
+- `POST /api/v1/devices/pair {password, device_name}`: core asks the web admin (`/internal/check-admin-password`,
+  internal network only) to verify the password against `ADMIN_PASSWORD_HASH`, then makes an owner-scope device
+  token for that phone. The password is never stored, logged or audited. Lockout: 5 wrong per IP / 15 min (core),
+  10 wrong per hour overall (admin). APK 0.12.1 Pengaturan: "Password admin" (token entry stays under "lanjutan").
+- YouTube in the app was a black box: the embed page autoplayed, and an autoplaying player inside the WebView
+  showed nothing (reproduced headless; without autoplay the thumbnail + play button appear). The page no longer
+  autoplays, fills the frame, is served `no-cache`, and reports its state to `/embed/youtube/{id}/state`
+  (logged only) so playback on the phone can be diagnosed. APK: a new video gets a new WebView (`key(url)`),
+  hardware layer, no clip on the video surface.

@@ -36,6 +36,7 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val updater = engine.updater
 
     fun saveSettings(serverUrl: String, token: String, speak: Boolean) = engine.saveSettings(serverUrl, token, speak)
+    suspend fun signIn(serverUrl: String, password: String, speak: Boolean) = engine.signIn(serverUrl, password, speak)
     fun setShareLocation(enabled: Boolean) = engine.setShareLocation(enabled)
     fun setReadNotifications(enabled: Boolean) = engine.setReadNotifications(enabled)
     fun locationPermissionMissing() = engine.locationPermissionMissing()

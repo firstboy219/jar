@@ -1278,3 +1278,28 @@ async def test_simpanan_lists_everything_shows_again_keeps_and_deletes(pool, mon
     assert not await library.items("draf") and not list((tmp_path / "docs").glob("*.docx"))
     with pytest.raises(library.LibraryError):
         await library.delete("../etc:passwd", "test")
+
+
+async def test_phone_pairs_with_the_admin_password(pool, monkeypatch):
+    import httpx
+    from app import devices, main
+
+    async def fake_admin(method, path, **kw):
+        assert path == "/internal/check-admin-password"
+        ok = kw["json"]["password"] == "benar-sekali-123"
+        return httpx.Response(200 if ok else 401, json={"ok": True} if ok else {"error": "Password admin salah."})
+    monkeypatch.setattr(main, "_admin_internal", fake_admin)
+    main._pair_failures.clear()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.post("/api/v1/devices/pair", json={"password": "salah", "device_name": "Infinix"})
+        assert r.status_code == 401 and r.json()["detail"] == "Password admin salah."
+        r = await c.post("/api/v1/devices/pair", json={"password": "benar-sekali-123", "device_name": "Infinix"})
+        assert r.status_code == 200
+        token = r.json()["token"]
+        assert (await devices.authenticate(token))["scope"] == "owner"
+        for _ in range(5):
+            await c.post("/api/v1/devices/pair", json={"password": "salah"})
+        r = await c.post("/api/v1/devices/pair", json={"password": "benar-sekali-123"})
+        assert r.status_code == 429  # locked out after 5 wrong tries, even with the right one
+    rows = await pool.fetch("SELECT detail::text FROM audit_events WHERE action LIKE 'device.pair%'")
+    assert rows and not any("salah" in r["detail"] or "benar" in r["detail"] for r in rows)  # passwords never stored

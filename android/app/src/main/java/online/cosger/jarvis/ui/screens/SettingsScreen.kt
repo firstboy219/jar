@@ -27,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +48,11 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
     val connection by vm.connection.collectAsStateWithLifecycle()
     var server by remember(s.serverUrl) { mutableStateOf(s.serverUrl) }
     var token by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var useToken by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var signInError by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     var speak by remember(s.speakReplies) { mutableStateOf(s.speakReplies) }
     val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         // Without any location permission the toggle would silently do nothing — turn it off instead.
@@ -61,7 +68,7 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
             when (connection) {
                 Connection.Connected -> "● Terhubung"
                 Connection.Connecting -> "● Menghubungkan…"
-                Connection.Unauthorized -> "● Token ditolak server — buat token baru di web admin"
+                Connection.Unauthorized -> "● Ditolak server — masuk lagi dengan password admin"
                 Connection.Disconnected -> "● Terputus"
             },
             color = when (connection) {
@@ -75,15 +82,30 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
 
         OutlinedTextField(server, { server = it }, Modifier.fillMaxWidth(), label = { Text("Server") }, singleLine = true)
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(
-            token, { token = it }, Modifier.fillMaxWidth(),
-            label = { Text(if (s.isConfigured) "Token perangkat (tersimpan — isi untuk mengganti)" else "Token perangkat") },
-            placeholder = { Text("jdv_…") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
-        )
+        if (!useToken) {
+            OutlinedTextField(
+                password, { password = it; signInError = null }, Modifier.fillMaxWidth(),
+                label = { Text(if (s.isConfigured) "Password admin (isi hanya untuk masuk ulang)" else "Password admin") },
+                singleLine = true, visualTransformation = PasswordVisualTransformation(),
+            )
+            Text(
+                "Sama dengan password web admin. Password tidak disimpan di HP — server membuatkan token khusus HP ini " +
+                    "(terenkripsi di HP, bisa dicabut di Lainnya → Perangkat).",
+                color = JarvisColors.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp),
+            )
+        } else {
+            OutlinedTextField(
+                token, { token = it }, Modifier.fillMaxWidth(),
+                label = { Text(if (s.isConfigured) "Token perangkat (tersimpan — isi untuk mengganti)" else "Token perangkat") },
+                placeholder = { Text("jdv_…") }, singleLine = true, visualTransformation = PasswordVisualTransformation(),
+            )
+        }
         Text(
-            "Buat token di web admin → Perangkat. Token disimpan terenkripsi di HP ini.",
-            color = JarvisColors.Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp),
+            if (useToken) "Pakai password admin saja" else "Pakai token perangkat (lanjutan)",
+            color = JarvisColors.Cyan, fontSize = 12.sp,
+            modifier = Modifier.padding(top = 6.dp).clickable { useToken = !useToken },
         )
+        signInError?.let { Text(it, color = JarvisColors.Red, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
         Spacer(Modifier.height(16.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Bacakan jawaban (suara)", color = JarvisColors.Text, modifier = Modifier.weight(1f))
@@ -154,13 +176,25 @@ fun SettingsScreen(vm: JarvisViewModel, onSaved: () -> Unit = {}) {
         Spacer(Modifier.height(20.dp))
         Button(
             onClick = {
-                vm.saveSettings(server, token.ifBlank { s.deviceToken }, speak)
-                token = ""
-                onSaved()
+                if (!useToken && password.isNotBlank()) {
+                    busy = true
+                    scope.launch {
+                        signInError = vm.signIn(server, password, speak)
+                        busy = false
+                        if (signInError == null) {
+                            password = ""
+                            onSaved()
+                        }
+                    }
+                } else {
+                    vm.saveSettings(server, token.ifBlank { s.deviceToken }, speak)
+                    token = ""
+                    onSaved()
+                }
             },
-            enabled = token.isNotBlank() || s.isConfigured,
+            enabled = !busy && ((!useToken && password.isNotBlank()) || (useToken && token.isNotBlank()) || s.isConfigured),
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Simpan & hubungkan") }
+        ) { Text(if (busy) "Masuk…" else if (!useToken && password.isNotBlank()) "Masuk & hubungkan" else "Simpan & hubungkan") }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(onClick = vm::newConversation, modifier = Modifier.fillMaxWidth()) { Text("Mulai percakapan baru") }
         Spacer(Modifier.height(24.dp))

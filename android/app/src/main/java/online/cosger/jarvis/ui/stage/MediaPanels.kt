@@ -140,6 +140,7 @@ fun youtubeErrorText(title: String): String? = when (title.removePrefix("error:"
     title -> null
     "101", "150" -> "Pemilik video ini tidak mengizinkannya diputar di aplikasi lain."
     "100" -> "Video ini sudah dihapus atau dibuat privat."
+    "api", "api-timeout" -> "Pemutar YouTube tidak termuat — cek koneksi, Muat ulang, atau Putar di YouTube."
     else -> "Video tidak bisa diputar di sini (kode ${title.removePrefix("error:")})."
 }
 
@@ -155,7 +156,7 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
         if (yt != null) {
             val origin = actions.console.absolute("/").trimEnd('/')
-            key(reload) {
+            key(url, reload) { // a new video must get a new player (the old one kept playing before)
                 AndroidView({ ctx ->
                     WebView(ctx).apply {
                         settings.javaScriptEnabled = true
@@ -163,10 +164,13 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                         settings.mediaPlaybackRequiresUserGesture = false
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
+                        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE // the player page changes with fixes
+                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null) // video frames need the GPU, else black
                         webChromeClient = object : WebChromeClient() { // required for HTML5 video in a WebView
                             override fun onReceivedTitle(view: WebView, title: String?) {
                                 val t = title.orEmpty()
                                 if (t == "ended") actions.event("ended", emptyMap())  // a playlist moves on
+                                if (t == "ready" || t == "playing") problem = null
                                 youtubeErrorText(t)?.let { problem = it }
                             }
                         }
@@ -181,7 +185,7 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                         setBackgroundColor(android.graphics.Color.BLACK)
                         loadUrl(youtubeEmbedUrl(origin, yt, panel.autoplay))
                     }
-                }, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
+                }, Modifier.fillMaxWidth().aspectRatio(16f / 9f), // no clip: a clipped video surface can stay black
                     onRelease = { it.stopLoading(); it.destroy() })
             }
         } else {
