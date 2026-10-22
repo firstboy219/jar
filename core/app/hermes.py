@@ -49,6 +49,7 @@ TOOL_NAMES = {
     "stage_show": "Menampilkan di layar HP",
     "db_query_ro": "Membaca database",
     "host_metrics": "Memeriksa server",
+    "read_attachment": "Membaca berkas lampiran", "see_attachment": "Melihat gambar lampiran",
     "read_logs": "Membaca log",
     "skill_manage": "Mengelola skill",
     "cronjob_manage": "Mengatur jadwal",

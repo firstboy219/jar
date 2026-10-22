@@ -1076,3 +1076,138 @@ async def test_background_tasks_take_turns_and_the_daily_check_runs_once(pool, m
     assert not await selfimprove.daily_due(None)
     await pool.execute("DELETE FROM tasks WHERE kind = 'selfcheck'")
     assert await selfimprove.daily_due(None)
+
+
+async def test_attached_files_reach_the_main_agent_and_its_workers(pool, monkeypatch, tmp_path):
+    import base64, io
+    from docx import Document
+    from PIL import Image
+    from app import attachments, chat, llm, memory, workers
+    monkeypatch.setattr(attachments, "ROOT", tmp_path)
+    monkeypatch.setattr(memory, "search", _no_memory)
+    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
+    d = Document()
+    for i in range(200):
+        d.add_paragraph(f"Pasal {i}: sewa kantor BSD seluas {i} meter persegi.")
+    b = io.BytesIO(); d.save(b)
+    doc = await attachments.save("kontrak sewa.docx", "", base64.b64encode(b.getvalue()).decode())
+    pic = io.BytesIO(); Image.new("RGB", (40, 30), "white").save(pic, "PNG")
+    img = await attachments.save("struk.png", "image/png", base64.b64encode(pic.getvalue()).decode(), "Total Rp 25.000")
+    assert doc["kind"] == "docx" and doc["chars"] > 3000 and img["kind"] == "image"
+    seen = {}
+
+    async def fake_stream(messages, tools=None, **kw):
+        seen["user"] = messages[-1]["content"]
+        yield {"type": "delta", "text": "Kontrak 12 bulan."}
+        yield {"type": "done", "completion": llm.Completion(text="Kontrak 12 bulan.", tool_calls=[],
+                                                              prompt_tokens=50, completion_tokens=5)}
+    monkeypatch.setattr(llm, "stream_chat", fake_stream)
+    t = await chat.handle("ringkas kontrak ini", "s100", actor="test", attachment_ids=[doc["id"], img["id"]])
+    text = "".join(p["text"] for p in seen["user"] if p["type"] == "text") if isinstance(seen["user"], list) else seen["user"]
+    assert "BERKAS TERLAMPIR" in text and "Pasal 0: sewa kantor BSD" in text and "Total Rp 25.000" in text
+    assert "dipotong" in text and doc["id"] in text  # a long document: the beginning + how to get the rest
+    assert isinstance(seen["user"], list) and seen["user"][1]["type"] == "image_url"  # the picture goes to vision
+    assert (t.route, t.reply) == ("assistant", "Kontrak 12 bulan.")
+    logged = await pool.fetchval("SELECT content FROM messages WHERE role = 'user' ORDER BY id LIMIT 1")
+    assert "[lampiran: kontrak sewa.docx, struk.png]" in logged
+    # the worker gets the ids and can read everything
+    refs = attachments.worker_refs([attachments.meta(doc["id"])])
+    assert doc["id"] in refs and "read_attachment" in refs
+    page = attachments.read(doc["id"], 0, 1000)
+    assert page["total_chars"] == doc["chars"] and page["next_offset"] == 1000 and "Pasal 0" in page["text"]
+    assert attachments.read(doc["id"], page["total_chars"] - 5, 1000)["next_offset"] is None
+    # the local chat model can see (vision projector): it answers about the picture …
+    seen_pic = await attachments.see(img["id"], "apa ini?")
+    assert seen_pic["vision"] is True and seen_pic["answer"] == "Kontrak 12 bulan." and seen_pic["ocr_text"] == "Total Rp 25.000"
+    # … and where no model can see, the answer is honest and carries the OCR text instead of a guess
+    from app import gateway
+    await pool.execute("UPDATE llm_providers SET vision = false WHERE name = 'lokal'")
+    gateway.invalidate()
+    seen_pic = await attachments.see(img["id"], "apa ini?")
+    assert seen_pic["vision"] is False and seen_pic["ocr_text"] == "Total Rp 25.000" and "OCR" in seen_pic["note"]
+    await pool.execute("UPDATE llm_providers SET vision = true WHERE name = 'lokal'")
+    gateway.invalidate()
+
+
+async def test_sensitive_text_inside_an_attachment_keeps_the_turn_local(pool, monkeypatch, tmp_path):
+    import base64
+    from app import attachments, chat, llm, memory
+    monkeypatch.setattr(attachments, "ROOT", tmp_path)
+    monkeypatch.setattr(memory, "search", _no_memory)
+    note = await attachments.save("catatan.txt", "text/plain", base64.b64encode(
+        "Password email saya: S3cretPass! dan nomor kartu 4111 1111 1111 1111".encode()).decode())
+    routes = []
+
+    async def fake_stream(messages, tools=None, private=False, **kw):
+        routes.append(private)
+        yield {"type": "done", "completion": llm.Completion(text="Aman.", tool_calls=[], prompt_tokens=5, completion_tokens=1)}
+    monkeypatch.setattr(llm, "stream_chat", fake_stream)
+    await chat.handle("simpan catatan ini ya", "s101", actor="test", attachment_ids=[note["id"]])
+    assert routes == [True]
+
+
+async def test_meeting_gap_free_chunks_context_rename_and_abandoned_recordings(pool, monkeypatch, tmp_path):
+    import os, time
+    import httpx
+    from app import documents, llm, meetings, memory
+    monkeypatch.setattr(meetings, "ROOT", tmp_path / "meetings")
+    monkeypatch.setattr(documents, "ROOT", tmp_path / "documents")
+    monkeypatch.setattr(memory, "search", _no_memory)
+    seen = {}
+
+    async def fake_ears(path, body, timeout=0):
+        seen[path] = body
+        if path == "/meeting/transcribe":
+            return httpx.Response(200, json={"segments": [
+                {"start": 0, "end": 4, "text": "Bu Rinah, workflow Auto toko siap Kamis.", "confidence": 0.9},
+                {"start": 5, "end": 8, "text": "gumam tidak jelas", "confidence": 0.2}]})
+        return httpx.Response(200, json={"segments": [{"start": 0, "end": 4.5, "speaker": 0}, {"start": 4.6, "end": 9, "speaker": 1}], "voices": {}})
+
+    prompts = []
+
+    async def fake_complete(messages, **kw):
+        prompts.append(messages[0]["content"])
+        if "NOTULEN" in messages[0]["content"]:
+            return '{"ringkasan": "Bu Rina menyiapkan workflow.", "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}'
+        return "Catatan."
+
+    async def no_index(*a, **k):
+        return None
+    monkeypatch.setattr(meetings, "_ears", fake_ears)
+    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(meetings, "_index", no_index)
+    m = await meetings.create("UAT Autotoko", False, True, participants=["Bu Rina", "Opik"], agenda="Bahas workflow n8n")
+    mid = str(m["id"])
+    await meetings.add_chunk(mid, 0, b"\xff\xf1" + b"\0" * 100, "aac")  # continuous AAC from the new app
+    await meetings.add_chunk(mid, 1, b"\xff\xf1" + b"\0" * 100, "aac")
+    with pytest.raises(meetings.MeetingError):
+        await meetings.add_chunk(mid, 2, b"x" * 10, "exe")
+    assert [p.suffix for p in meetings.chunk_files(mid)] == [".aac", ".aac"]
+    await meetings.finish(mid, 120, 2, "test")
+    await meetings.process(mid)
+    done = await meetings.get(mid)
+    body = seen["/meeting/transcribe"]
+    assert "Bu Rina" in body["prompt"] and "Autotoko" in body["hotwords"] and body["paths"][0].endswith("chunk-00000.aac")
+    assert done["transcript"][0]["text"] == "Bu Rina, workflow Autotoko siap Kamis."  # misheard names fixed from the context
+    assert done["transcript"][1].get("low") is True
+    assert any("Peserta: Bu Rina, Opik" in p for p in prompts)  # the minutes' prompts know who is in the room
+    assert any("[?]" in p for p in prompts)
+    # the owner tells who "Pembicara 2" is
+    old = done["transcript"][1]["speaker"]
+    with pytest.raises(meetings.MeetingError):
+        await meetings.rename_speaker(mid, "Siapa Itu", "Opik", "test")
+    r = await meetings.rename_speaker(mid, old, "Opik", "test")
+    after = await meetings.get(mid)
+    assert r["to"] == "Opik" and after["transcript"][1]["speaker"] == "Opik" and "Opik" in after["speakers"].values()
+    assert str(after["document_id"]) == r["document_id"]
+    # a recording the phone abandoned (no chunk for 20+ minutes) is processed instead of hanging forever
+    m2 = await meetings.create("Rapat tertinggal", False, True)
+    mid2 = str(m2["id"])
+    await meetings.add_chunk(mid2, 0, b"\xff\xf1" + b"\0" * 100, "aac")
+    assert await meetings.finish_stale() == 0
+    old_time = time.time() - 25 * 60
+    for f in meetings.chunk_files(mid2):
+        os.utime(f, (old_time, old_time))
+    assert await meetings.finish_stale() == 1
+    assert (await meetings.get(mid2))["status"] == "queued"
+    assert await pool.fetchval("SELECT count(*) FROM reports WHERE text LIKE 'Rekaman rapat Rapat tertinggal berhenti%'") == 1

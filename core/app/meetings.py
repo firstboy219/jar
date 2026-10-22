@@ -14,13 +14,14 @@ Recording others needs their consent (Indonesia's new KUHP art. 258, from 2026-0
 """
 
 import asyncio
+import difflib
 import json
 import logging
 import re
 import shutil
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -31,7 +32,10 @@ from .location import WIB
 
 log = logging.getLogger("jarvis-core.meetings")
 ROOT = Path("/data/meetings")
-MAX_CHUNK_BYTES = 3_000_000   # 60 s of Opus at 24–32 kbps is ~250 KB; generous for other codecs
+MAX_CHUNK_BYTES = 3_000_000   # 60 s of Opus/AAC at 24–32 kbps is ~250 KB; generous for other codecs
+CHUNK_EXTS = ("ogg", "aac", "m4a")  # the phone sends continuous AAC (.aac) since v0.11; older apps Ogg/Opus
+STALE_MINUTES = 20            # a recording with no new chunk for this long was abandoned (phone off, app killed)
+LOW_CONFIDENCE = 0.40
 AUDIO_RETENTION_DAYS = 30
 COLLECTION = "jarvis_meetings"
 _queue: asyncio.Queue | None = None
@@ -45,28 +49,39 @@ def _dir(meeting_id: str) -> Path:
     return ROOT / str(uuid.UUID(meeting_id))
 
 
-async def create(title: str, confidential: bool, consent: bool, device_id=None, actor: str = "owner") -> dict:
+async def create(title: str, confidential: bool, consent: bool, device_id=None, actor: str = "owner",
+                 participants: list[str] | None = None, agenda: str = "") -> dict:
     if not consent:
         raise MeetingError("perekaman butuh persetujuan peserta")
     title = (title or "").strip()[:150] or f"Rapat {datetime.now(WIB):%d %b %Y %H:%M}"
+    context = {"participants": [p.strip()[:60] for p in (participants or []) if p.strip()][:30],
+               "agenda": (agenda or "").strip()[:2000]}
     row = await db.pool().fetchrow(
-        "INSERT INTO meetings (title, confidential, consent, device_id) VALUES ($1, $2, true, $3) RETURNING id, title, status",
-        title, confidential, device_id)
+        "INSERT INTO meetings (title, confidential, consent, device_id, context) VALUES ($1, $2, true, $3, $4) "
+        "RETURNING id, title, status",
+        title, confidential, device_id, context)
     _dir(str(row["id"])).mkdir(parents=True, exist_ok=True)
     await audit.record(actor, "meeting.started", f"meeting:{row['id']}", confidential=confidential)
     return dict(row)
 
 
-async def add_chunk(meeting_id: str, n: int, data: bytes) -> dict:
+def chunk_files(meeting_id: str) -> list[Path]:
+    """The recorded chunks in order (whatever container the phone used)."""
+    return sorted(p for p in _dir(meeting_id).glob("chunk-*.*") if p.suffix[1:] in CHUNK_EXTS)
+
+
+async def add_chunk(meeting_id: str, n: int, data: bytes, ext: str = "ogg") -> dict:
     """Idempotent: re-uploading chunk n (after a dropped connection) just replaces it."""
-    if not 0 <= n < 100_000 or not data or len(data) > MAX_CHUNK_BYTES:
+    if ext not in CHUNK_EXTS or not 0 <= n < 100_000 or not data or len(data) > MAX_CHUNK_BYTES:
         raise MeetingError("potongan audio tidak valid")
     m = await get(meeting_id)
     if not m or m["status"] != "recording":
         raise MeetingError("rapat tidak sedang direkam")
-    path = _dir(meeting_id) / f"chunk-{n:05d}.ogg"
+    for other in _dir(meeting_id).glob(f"chunk-{n:05d}.*"):
+        other.unlink(missing_ok=True)
+    path = _dir(meeting_id) / f"chunk-{n:05d}.{ext}"
     path.write_bytes(data)
-    count = len(list(_dir(meeting_id).glob("chunk-*.ogg")))
+    count = len(chunk_files(meeting_id))
     await db.pool().execute("UPDATE meetings SET chunks = $2 WHERE id = $1", uuid.UUID(meeting_id), count)
     return {"chunk": n, "chunks": count}
 
@@ -80,7 +95,7 @@ async def finish(meeting_id: str, duration_s: float | None, expected_chunks: int
     m = await get(meeting_id)
     if not m or m["status"] != "recording":
         raise MeetingError("rapat tidak sedang direkam")
-    have = len(list(_dir(meeting_id).glob("chunk-*.ogg")))
+    have = len(chunk_files(meeting_id))
     if expected_chunks is not None and have < expected_chunks:
         raise MeetingError(f"baru {have} dari {expected_chunks} potongan diterima — unggah sisanya dulu")
     if have == 0:
@@ -107,7 +122,14 @@ async def run_forever() -> None:
     for r in rows:
         _q().put_nowait(str(r["id"]))
     while True:
-        meeting_id = await _q().get()
+        try:
+            meeting_id = await asyncio.wait_for(_q().get(), timeout=300)
+        except asyncio.TimeoutError:
+            try:
+                await finish_stale()
+            except Exception:
+                log.exception("stale meeting sweep failed")
+            continue
         try:
             await process(meeting_id)
         except Exception as e:
@@ -115,6 +137,104 @@ async def run_forever() -> None:
             await db.pool().execute("UPDATE meetings SET status = 'failed', error = $2 WHERE id = $1",
                                     uuid.UUID(meeting_id), str(e)[:500])
             await reports._create(None, "meeting", f"Maaf, notulen rapat gagal dibuat: {str(e)[:150]}")
+
+
+_TERM = re.compile(r"\b(?:[A-Z]{2,}[A-Za-z0-9]*|[A-Z][a-z0-9]{2,}(?:\s[A-Z][a-z0-9]{2,})*)\b")
+_COMMON = {"Rapat", "Agenda", "Hari", "Bulan", "Tahun", "Pak", "Bu", "Mas", "Mbak", "Kita", "Kami", "Dari", "Untuk", "Yang"}
+
+
+def meeting_terms(meeting: dict, base: list[str] | None = None) -> dict:
+    """What the recogniser should expect to hear in THIS meeting: names, projects, abbreviations — from the
+    participants and agenda the owner typed, the title and the vocabulary JARVIS already learned. Pure; unit-tested.
+    Returns {"prompt" (for Whisper's initial prompt), "hotwords", "glossary"}."""
+    ctx = meeting.get("context") or {}
+    people = [p for p in (ctx.get("participants") or []) if p]
+    found: list[str] = []
+    for text in (meeting.get("title") or "", ctx.get("agenda") or ""):
+        for m in _TERM.finditer(text):
+            t = m.group(0).strip()
+            starts_sentence = m.start() == 0 or text[:m.start()].rstrip().endswith((".", "!", "?", ":", "\n"))
+            special = t.isupper() or any(c.isdigit() for c in t) or any(c.isupper() for c in t[1:])  # UAT, n8n, JavaScript
+            if (starts_sentence and not special) or t in _COMMON or t in found or t in people:
+                continue  # an ordinary word that merely begins a sentence
+            found.append(t)
+    terms = list(dict.fromkeys([*people, *found, *(base or [])]))
+    glossary = [t for t in terms if len(t) >= 5]
+    parts = [f"Rapat \"{(meeting.get('title') or '').strip()}\"."]
+    if people:
+        parts.append("Peserta: " + ", ".join(people[:12]) + ".")
+    if terms:
+        parts.append("Istilah: " + ", ".join(terms[:25]) + ".")
+    return {"prompt": " ".join(parts)[:700], "hotwords": " ".join(terms[:20])[:300], "glossary": glossary}
+
+
+def correct_terms(text: str, glossary: list[str], threshold: float = 0.86) -> str:
+    """Fix near-miss spellings of known names/terms ("Deep Drum" → "Deepgram", "Bu Rinah" → "Bu Rina").
+    A word or a pair of words is replaced only when it is very close to a glossary entry and starts with the
+    same letter — everyday words are left alone. Pure; unit-tested."""
+    if not glossary or not text:
+        return text
+    norm = lambda s: re.sub(r"\W+", "", s.lower())
+    entries = {norm(g): g for g in glossary if len(norm(g)) >= 5}
+    words, out, i = text.split(" "), [], 0
+    while i < len(words):
+        for span in (2, 1):
+            if i + span > len(words):
+                continue
+            chunk = " ".join(words[i:i + span])
+            lead, core, tail = re.match(r"^(\W*)(.*?)(\W*)$", chunk, re.DOTALL).groups()
+            n = norm(core)
+            if len(n) < 5:
+                continue
+            best, ratio = None, 0.0
+            for k, g in entries.items():
+                if k[0] != n[0]:
+                    continue
+                r = 1.0 if k == n else difflib.SequenceMatcher(None, n, k).ratio()
+                if r > ratio:
+                    best, ratio = g, r
+            if best and ratio >= threshold:
+                out.append(lead + best + tail)
+                i += span
+                break
+        else:
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
+
+
+def flag_unclear(segments: list[dict]) -> list[dict]:
+    """Mark segments the recogniser itself was unsure about; the minutes must not turn them into facts. Pure."""
+    return [{**s, "low": True} if (s.get("confidence") is not None and s["confidence"] < LOW_CONFIDENCE) else s
+            for s in segments]
+
+
+async def finish_stale() -> int:
+    """Recordings abandoned mid-way (phone switched off, app killed): after STALE_MINUTES without a new chunk,
+    process what was received instead of leaving the meeting 'recording' forever."""
+    rows = await db.pool().fetch("SELECT id, title FROM meetings WHERE status = 'recording'")
+    done = 0
+    for r in rows:
+        mid = str(r["id"])
+        files = chunk_files(mid)
+        newest = max((f.stat().st_mtime for f in files), default=None)
+        if newest is None:
+            newest = (await get(mid))["started_at"].timestamp()
+        if time.time() - newest < STALE_MINUTES * 60:
+            continue
+        if not files:
+            await db.pool().execute("UPDATE meetings SET status = 'failed', error = $2 WHERE id = $1", r["id"],
+                                    "rekaman terhenti sebelum ada audio yang terunggah")
+            continue
+        await db.pool().execute(
+            "UPDATE meetings SET status = 'queued', finished_at = now(), duration_s = $2 WHERE id = $1",
+            r["id"], len(files) * 60.0)
+        await audit.record("jarvis-core", "meeting.auto_finished", f"meeting:{mid}", chunks=len(files))
+        _q().put_nowait(mid)
+        await reports._create(None, "meeting", f"Rekaman rapat {r['title']} berhenti tanpa ditutup. "
+                                                f"Kuproses {len(files)} menit audio yang sudah masuk.")
+        done += 1
+    return done
 
 
 async def _ears(path: str, body: dict, timeout: float = 7200) -> httpx.Response:
@@ -125,7 +245,7 @@ async def _ears(path: str, body: dict, timeout: float = 7200) -> httpx.Response:
     return r
 
 
-async def _transcribe(meeting: dict, paths: list[str], prompt: str) -> tuple[list[dict], str]:
+async def _transcribe(meeting: dict, paths: list[str], prompt: str, hotwords: str = "") -> tuple[list[dict], str]:
     engine = "whisper" if meeting["confidential"] else await composition.stt_engine()
     if engine == "groq" and settings.groq_api_key:
         audio = (await _ears("/meeting/concat", {"paths": paths})).content
@@ -152,7 +272,7 @@ async def _transcribe(meeting: dict, paths: list[str], prompt: str) -> tuple[lis
             utt = r.json().get("results", {}).get("utterances") or []
             return [{"start": u["start"], "end": u["end"], "text": u["transcript"]} for u in utt], "deepgram"
         log.warning("deepgram meeting transcription failed (%s); falling back to local", r.status_code)
-    data = (await _ears("/meeting/transcribe", {"paths": paths, "prompt": prompt})).json()
+    data = (await _ears("/meeting/transcribe", {"paths": paths, "prompt": prompt, "hotwords": hotwords})).json()
     return data["segments"], "whisper"
 
 
@@ -175,7 +295,7 @@ def blocks(transcript: list[dict], seconds: int = 600, max_chars: int = 16000) -
     for s in transcript:
         if start is None:
             start = s["start"]
-        line = f"{int(s['start'] // 60):02d}:{int(s['start'] % 60):02d} {s.get('speaker', '')}: {s['text']}"
+        line = f"{int(s['start'] // 60):02d}:{int(s['start'] % 60):02d} {s.get('speaker', '')}: {s['text']}" + (" [?]" if s.get("low") else "")
         if cur and (s["start"] - start > seconds or sum(map(len, cur)) + len(line) > max_chars):
             out.append("\n".join(cur))
             cur, start = [], s["start"]
@@ -187,7 +307,11 @@ def blocks(transcript: list[dict], seconds: int = 600, max_chars: int = 16000) -
 
 NOTES_PROMPT = """Kamu notulis rapat JARVIS. Ini potongan transkrip rapat (bahasa Indonesia, hasil mesin — bisa ada \
 salah dengar). Tulis catatan padat: poin pembahasan, keputusan, tugas (siapa, apa, tenggat bila disebut), \
-pertanyaan yang belum terjawab. Jangan menambah fakta."""
+pertanyaan yang belum terjawab. Jangan menambah fakta. Baris bertanda [?] suaranya tidak jelas: jangan dijadikan \
+keputusan atau tugas. Pakai nama peserta dari konteks bila ucapannya jelas menyebut atau menunjuk orangnya.
+
+KONTEKS RAPAT:
+{context}"""
 
 FINAL_PROMPT = """Kamu notulis rapat JARVIS. Dari catatan per bagian rapat "{title}" berikut, susun NOTULEN. \
 Jawab HANYA dengan JSON:
@@ -207,14 +331,33 @@ def _json(text: str) -> dict:
         return {}
 
 
+async def context_text(meeting: dict) -> str:
+    """Agenda, participants and what JARVIS remembers about the topic — for the minutes' prompts."""
+    ctx = meeting.get("context") or {}
+    lines = [f"Judul: {meeting['title']}"]
+    if ctx.get("participants"):
+        lines.append("Peserta: " + ", ".join(ctx["participants"]))
+    if ctx.get("agenda"):
+        lines.append("Agenda/topik: " + ctx["agenda"][:1200])
+    try:
+        hits = [m["text"] for m in await memory.search(f"{meeting['title']} {ctx.get('agenda', '')}"[:300], limit=4) if m["score"] >= 0.4]
+    except Exception:
+        hits = []
+    if hits:
+        lines.append("Yang JARVIS ingat terkait (bisa usang): " + " | ".join(h[:200] for h in hits))
+    return "\n".join(lines)
+
+
 async def _summarize(meeting: dict, transcript: list[dict]) -> dict:
     private = meeting["confidential"]
     notes = []
+    system = NOTES_PROMPT.format(context=await context_text(meeting))
     for b in blocks(transcript):
-        notes.append(await llm.complete([{"role": "system", "content": NOTES_PROMPT}, {"role": "user", "content": b}],
+        notes.append(await llm.complete([{"role": "system", "content": system}, {"role": "user", "content": b}],
                                         category="rapat", caller="meeting", private=private, max_tokens=700))
     marks = "; ".join(f"{int(m['t'] // 60):02d}:{int(m['t'] % 60):02d} {m['note']}" for m in meeting["marks"] or []) or "-"
-    raw = await llm.complete([{"role": "system", "content": FINAL_PROMPT.format(title=meeting["title"], marks=marks)},
+    raw = await llm.complete([{"role": "system", "content": FINAL_PROMPT.format(title=meeting["title"], marks=marks)
+                                              + "\n\nKONTEKS RAPAT:\n" + await context_text(meeting)},
                               {"role": "user", "content": "\n\n---\n\n".join(notes)[:60000]}],
                              category="rapat", caller="meeting", private=private, max_tokens=1500, temperature=0.2)
     summary = _json(raw)
@@ -225,15 +368,23 @@ async def _summarize(meeting: dict, transcript: list[dict]) -> dict:
 
 def minutes_markdown(meeting: dict, summary: dict, transcript: list[dict], speakers: dict) -> str:
     when = meeting["started_at"].astimezone(WIB).strftime("%A, %d %B %Y %H:%M WIB")
+    ctx = meeting.get("context") or {}
     lines = [f"Waktu: {when}", f"Durasi: {int((meeting.get('duration_s') or 0) // 60)} menit",
-             f"Peserta terdeteksi: {', '.join(sorted(set(speakers.values()))) or '-'}", "",
+             f"Peserta terdeteksi: {', '.join(sorted(set(speakers.values()))) or '-'}"]
+    if ctx.get("participants"):
+        lines.append("Peserta (dari pemilik): " + ", ".join(ctx["participants"]))
+    if ctx.get("agenda"):
+        lines.append("Agenda: " + ctx["agenda"])
+    lines.append("")
+    lines += [
              "## Ringkasan", summary.get("ringkasan", ""), "", "## Keputusan"]
     lines += [f"- {k}" for k in summary.get("keputusan") or ["(tidak ada)"]]
     lines += ["", "## Action items", "| Siapa | Apa | Tenggat |", "|---|---|---|"]
     lines += [f"| {a.get('siapa', '')} | {a.get('apa', '')} | {a.get('tenggat', '')} |" for a in summary.get("action_items") or []]
     lines += ["", "## Pertanyaan terbuka"] + [f"- {q}" for q in summary.get("pertanyaan") or ["(tidak ada)"]]
     lines += ["", "## Transkrip"]
-    lines += [f"**{int(s['start'] // 60):02d}:{int(s['start'] % 60):02d} {s.get('speaker', '')}:** {s['text']}" for s in transcript]
+    lines += [f"**{int(s['start'] // 60):02d}:{int(s['start'] % 60):02d} {s.get('speaker', '')}:** {s['text']}"
+              + (" *(suara kurang jelas)*" if s.get("low") else "") for s in transcript]
     return "\n".join(lines)
 
 
@@ -265,12 +416,14 @@ async def process(meeting_id: str) -> None:
     meeting = await get(meeting_id)
     if not meeting:
         return
-    paths = [f"{mid}/{p.name}" for p in sorted(_dir(meeting_id).glob("chunk-*.ogg"))]
+    paths = [f"{mid}/{p.name}" for p in chunk_files(meeting_id)]
     started = time.monotonic()
     await db.pool().execute("UPDATE meetings SET status = 'transcribing', error = NULL WHERE id = $1", mid)
-    prompt = await stt.vocabulary()
-    segments, engine = await _transcribe(meeting, paths, prompt)
+    base = [k.strip() for k in (await stt.vocabulary()).split(",") if k.strip()]
+    terms = meeting_terms(meeting, base)
+    segments, engine = await _transcribe(meeting, paths, terms["prompt"], terms["hotwords"])
     segments = [s for s in segments if not stt.HALLUCINATIONS.match(s["text"])]
+    segments = flag_unclear([{**s, "text": correct_terms(s["text"], terms["glossary"])} for s in segments])
     diar = (await _ears("/meeting/diarize", {"paths": paths})).json()
     owner = await voice_id._load()
     names = voice_id.name_speakers(diar.get("voices") or {}, (owner or {}).get("vector"),
@@ -338,8 +491,8 @@ async def list_(limit: int = 50) -> list[dict]:
 
 
 def chunk_path(meeting_id: str, n: int) -> Path | None:
-    p = _dir(meeting_id) / f"chunk-{n:05d}.ogg"
-    return p if p.is_file() else None
+    found = list(_dir(meeting_id).glob(f"chunk-{n:05d}.*"))
+    return found[0] if found else None
 
 
 async def delete(meeting_id: str, actor: str) -> bool:
@@ -361,6 +514,35 @@ async def purge_audio() -> int:
         f"""UPDATE meetings SET audio_purged = true WHERE NOT audio_purged AND status IN ('done', 'failed')
             AND started_at < now() - interval '{AUDIO_RETENTION_DAYS} days' RETURNING id""")
     for r in rows:
-        for f in _dir(str(r["id"])).glob("chunk-*.ogg"):
+        for f in chunk_files(str(r["id"])):
             f.unlink(missing_ok=True)
     return len(rows)
+
+
+async def rename_speaker(meeting_id: str, old: str, new: str, actor: str) -> dict:
+    """The owner tells who "Pembicara 2" is: relabel the transcript, rebuild the minutes document and the
+    search index. The summary text is left as it is (it already used whatever names the recording gave)."""
+    new = (new or "").strip()[:60]
+    old = (old or "").strip()
+    m = await get(meeting_id)
+    if not m or m["status"] != "done":
+        raise MeetingError("notulen rapat ini belum siap")
+    if not new or old == "Pemilik" or old not in (m["speakers"] or {}).values():
+        raise MeetingError("pembicara tidak dikenal")
+    transcript = [{**s, "speaker": new} if s.get("speaker") == old else s for s in m["transcript"] or []]
+    speakers = {k: (new if v == old else v) for k, v in (m["speakers"] or {}).items()}
+    summary = json.loads(json.dumps(m["summary"] or {}, ensure_ascii=False).replace(old, new))
+    doc = await documents.create(f"Notulen — {m['title']}", "docx",
+                                 minutes_markdown(m, summary, transcript, speakers), "jarvis-meeting")
+    await db.pool().execute(
+        "UPDATE meetings SET transcript = $2, speakers = $3, summary = $4, document_id = $5 WHERE id = $1",
+        uuid.UUID(meeting_id), transcript, speakers, summary, doc["id"])
+    try:
+        async with memory._qdrant() as q:
+            await q.post(f"/collections/{COLLECTION}/points/delete?wait=true",
+                         json={"filter": {"must": [{"key": "meeting_id", "match": {"value": meeting_id}}]}})
+        await _index(meeting_id, m["title"], transcript)
+    except Exception:
+        log.exception("meeting %s not re-indexed", meeting_id)
+    await audit.record(actor, "meeting.speaker_renamed", f"meeting:{meeting_id}")
+    return {"renamed": old, "to": new, "document_id": str(doc["id"])}

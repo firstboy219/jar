@@ -89,8 +89,10 @@ JARVIS, `error` = something failed.
 | POST | `/api/v1/composition/test` | `{"category"}` → which model answered, ms |
 | GET | `/api/v1/brain`, `/api/v1/brain/{id}` | 3D memory graph / one memory |
 | GET/POST/DELETE | `/api/v1/voiceprint` | enrolment status / one PCM sample / delete |
-| POST | `/api/v1/meetings` | `{"title","confidential","consent":true}` → `{"id"}` |
-| PUT | `/api/v1/meetings/{id}/chunks/{n}` | audio chunk (idempotent) |
+| POST | `/api/v1/attachments` | `{"name","content_type","data":base64,"ocr_text"}` → `{"id","kind","chars","note"}` — a file/picture for the chat (≤ 12 MB); then `attachments:[id]` in a chat command |
+| POST | `/api/v1/meetings` | `{"title","confidential","consent":true,"participants":[…],"agenda"}` → `{"id"}` |
+| PUT | `/api/v1/meetings/{id}/chunks/{n}?ext=aac` | audio chunk (idempotent; `aac` = continuous ADTS from app ≥ 0.11, `ogg` older) |
+| POST | `/api/v1/meetings/{id}/speakers` | `{"from":"Pembicara 2","to":"Bu Rina"}` rename a speaker, minutes rebuilt |
 | POST | `/api/v1/meetings/{id}/marks`, `/finish`, `/ask` | mark, finish `{"duration_s","chunks"}`, question → answer |
 | GET/DELETE | `/api/v1/meetings[/{id}]`, `/api/v1/meetings/{id}/chunks/{n}` | list / detail (transcript, summary) / audio |
 | GET | `/api/v1/documents/{id}`, `/api/v1/media/{id}` | file JARVIS made / music it fetched (Range) |

@@ -163,9 +163,12 @@ object Protocol {
     fun command(
         text: String, sessionId: String, location: DeviceLocation? = null, screenJpegBase64: String? = null,
         imageSource: String? = null, confidence: Double? = null, speakers: Int? = null, screenText: String? = null,
+        attachments: List<String> = emptyList(),
     ): String = buildJsonObject {
         put("user_command", text)
         put("session_id", sessionId)
+        if (attachments.isNotEmpty()) put("attachments", kotlinx.serialization.json.JsonArray(
+            attachments.take(5).map { kotlinx.serialization.json.JsonPrimitive(it) }))
         screenText?.takeIf { it.isNotBlank() }?.let { put("screen_text", it.take(20_000)) }
         screenJpegBase64?.let {
             put("screen", it)

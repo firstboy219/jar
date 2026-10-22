@@ -22,7 +22,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, audit, auditor, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI):
         while True:
             await notifications.purge_old()
             musiclib.purge_old()
+            attachments.purge_old()
             try:
                 await meetings.purge_audio()
             except Exception:
@@ -174,11 +175,30 @@ class Command(BaseModel):
     location: Location | None = None  # only when the owner enabled location sharing in the app
     # Latest frame the owner is showing (JPEG, base64), max ~1.5 MB: shared screen or camera
     screen: str | None = Field(default=None, max_length=2_000_000)
-    image_source: str | None = Field(default=None, pattern="^(screen|camera)$")
+    image_source: str | None = Field(default=None, pattern="^(screen|camera|attachment)$")
     # How speech recognition heard it: {"confidence": 0..1, "speakers": n}
     stt: dict | None = None
     # Text the phone read from the shared screen (ML Kit) / the WhatsApp notification thread
     screen_text: str | None = Field(default=None, max_length=20000)
+    # ids from POST /api/v1/attachments (photos, PDF, Word, Excel, PowerPoint, text)
+    attachments: list[str] = Field(default_factory=list, max_length=5)
+
+
+class AttachmentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    content_type: str = Field(default="", max_length=100)
+    data: str = Field(min_length=4, max_length=17_000_000)  # base64, ≤ 12 MB of file
+    ocr_text: str = Field(default="", max_length=20000)  # text the phone's ML Kit read from a picture
+
+
+@app.post("/api/v1/attachments")
+async def upload_attachment(a: AttachmentIn, device: dict = Depends(device_auth)):
+    try:
+        m = await attachments.save(a.name, a.content_type, a.data, a.ocr_text, f"device:{device['name']}")
+    except attachments.AttachmentError as e:
+        raise HTTPException(422, str(e))
+    await audit.record(f"device:{device['name']}", "attachment.saved", f"attachment:{m['id']}", kind=m["kind"], size=m["size"])
+    return m
 
 
 @app.get("/healthz")
@@ -189,7 +209,7 @@ async def healthz():
 @app.post("/api/v1/chat")
 async def chat_rest(cmd: Command, device: dict = Depends(device_auth)):
     turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
-                             device_id=device["id"], location=cmd.location)
+                             device_id=device["id"], location=cmd.location, attachment_ids=cmd.attachments)
     return {"reply": turn.reply, "route": turn.route, "session_id": cmd.session_id}
 
 
@@ -476,7 +496,7 @@ async def ws(websocket: WebSocket):
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
                                          device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen,
                                          image_source=cmd.image_source, stt=cmd.stt, speak_live="say" in caps,
-                                         screen_text=cmd.screen_text or "")
+                                         screen_text=cmd.screen_text or "", attachment_ids=cmd.attachments)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "spoken": turn.spoken,
                             "session_id": cmd.session_id})
             except (WebSocketDisconnect, RuntimeError):
@@ -562,7 +582,8 @@ async def ws(websocket: WebSocket):
             try:
                 cmd = Command(user_command=msg.get("user_command", ""), session_id=msg.get("session_id", ""),
                               location=msg.get("location"), screen=msg.get("screen"),
-                              image_source=msg.get("image_source"), stt=msg.get("stt"), screen_text=msg.get("screen_text"))
+                              image_source=msg.get("image_source"), stt=msg.get("stt"), screen_text=msg.get("screen_text"),
+                              attachments=msg.get("attachments") or [])
             except ValueError:
                 await send({"type": "error", "message": "butuh user_command dan session_id (lokasi opsional)"})
                 continue
@@ -591,6 +612,28 @@ def _tools_auth(request: Request) -> None:
     _internal_only(request)
     if not settings.mcp_token or not hmac.compare_digest(request.headers.get("x-internal-token", ""), settings.mcp_token):
         raise HTTPException(404)
+
+
+@app.get("/internal/attachments/{attachment_id}")
+async def internal_attachment_read(attachment_id: str, request: Request, offset: int = 0, limit: int = 6000):
+    _tools_auth(request)
+    try:
+        return attachments.read(attachment_id, offset, limit)
+    except attachments.AttachmentError as e:
+        raise HTTPException(404, str(e))
+
+
+class SeeIn(BaseModel):
+    question: str = Field(default="Jelaskan isi gambar ini selengkap mungkin.", max_length=500)
+
+
+@app.post("/internal/attachments/{attachment_id}/see")
+async def internal_attachment_see(attachment_id: str, body: SeeIn, request: Request):
+    _tools_auth(request)
+    try:
+        return await attachments.see(attachment_id, body.question)
+    except attachments.AttachmentError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.get("/internal/self")
@@ -722,20 +765,23 @@ class MeetingIn(BaseModel):
     title: str = Field(default="", max_length=150)
     confidential: bool = False
     consent: bool
+    participants: list[str] = Field(default_factory=list, max_length=30)
+    agenda: str = Field(default="", max_length=2000)
 
 
 @app.post("/api/v1/meetings")
 async def meeting_create(m: MeetingIn, device: dict = Depends(owner_device_auth)):
     try:
-        return jsonable(await meetings.create(m.title, m.confidential, m.consent, device["id"], f"device:{device['name']}"))
+        return jsonable(await meetings.create(m.title, m.confidential, m.consent, device["id"], f"device:{device['name']}",
+                                              m.participants, m.agenda))
     except meetings.MeetingError as e:
         raise HTTPException(422, str(e))
 
 
 @app.put("/api/v1/meetings/{meeting_id}/chunks/{n}")
-async def meeting_chunk(meeting_id: str, n: int, request: Request, device: dict = Depends(owner_device_auth)):
+async def meeting_chunk(meeting_id: str, n: int, request: Request, ext: str = "ogg", device: dict = Depends(owner_device_auth)):
     try:
-        return await meetings.add_chunk(meeting_id, n, await request.body())
+        return await meetings.add_chunk(meeting_id, n, await request.body(), ext)
     except (meetings.MeetingError, ValueError) as e:
         raise HTTPException(422, str(e))
 
@@ -793,6 +839,19 @@ class AskMeetingIn(BaseModel):
 async def meeting_ask(meeting_id: str, q: AskMeetingIn, device: dict = Depends(owner_device_auth)):
     try:
         return await meetings.ask(meeting_id, q.question)
+    except meetings.MeetingError as e:
+        raise HTTPException(422, str(e))
+
+
+class SpeakerIn(BaseModel):
+    from_: str = Field(alias="from", min_length=1, max_length=60)
+    to: str = Field(min_length=1, max_length=60)
+
+
+@app.post("/api/v1/meetings/{meeting_id}/speakers")
+async def meeting_speaker(meeting_id: str, s: SpeakerIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return await meetings.rename_speaker(meeting_id, s.from_, s.to, f"device:{device['name']}")
     except meetings.MeetingError as e:
         raise HTTPException(422, str(e))
 

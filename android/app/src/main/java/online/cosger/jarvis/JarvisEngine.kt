@@ -2,6 +2,9 @@ package online.cosger.jarvis
 
 import android.content.Context
 import android.content.Intent
+import online.cosger.jarvis.attach.AttachmentPrep
+import online.cosger.jarvis.attach.AttachmentUploader
+import online.cosger.jarvis.attach.PendingAttachment
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -336,6 +339,30 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         // Text is enough for chats and articles; a picture only when the screen has (almost) no words.
         val image = if (text.length < MIN_SCREEN_TEXT) withContext(Dispatchers.Default) { screen.jpeg(bmp) } else null
         return Shown(image, if (image != null) "screen" else null, combined.ifBlank { null })
+    }
+
+    /** Chat message with files/pictures: each is uploaded first (shrunk + OCR'd on the phone), then the message goes with their ids. */
+    fun sendMessage(text: String, files: List<PendingAttachment>) {
+        if (files.isEmpty()) return sendText(text)
+        val clean = text.trim().ifEmpty { "Tolong lihat lampiran ini." }
+        speaker.stop()
+        spokenLive = false
+        _turn.value = TurnState(phase = Phase.Thinking, userText = clean)
+        scope.launch {
+            val uploader = AttachmentUploader(context, console)
+            val ids = mutableListOf<String>()
+            for (f in files.take(AttachmentPrep.MAX_FILES)) {
+                uploader.upload(f).onSuccess { ids += it }.onFailure { _notice.value = "Lampiran ${f.name} gagal: ${it.message}" }
+            }
+            if (ids.isEmpty()) { _turn.value = TurnState(); return@launch }
+            val loc = runCatching { locationAsync()?.let { withTimeoutOrNull(2_000) { it.await() } } }.getOrNull()
+            if (!socket.send(clean, settings.value.sessionId, loc, attachments = ids)) {
+                _turn.value = TurnState()
+                _notice.value = "Belum terhubung ke JARVIS — pesan tidak terkirim."
+                return@launch
+            }
+            _history.update { it + ChatMessage(fromUser = true, text = clean + "\n" + files.joinToString("\n") { f -> "📎 ${f.name}" }) }
+        }
     }
 
     fun sendText(text: String, confidence: Double? = null, speakers: Int? = null) {

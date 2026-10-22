@@ -4,10 +4,14 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -22,6 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -57,12 +62,15 @@ fun MeetingsScreen(vm: JarvisViewModel, onBack: (() -> Unit)?, onOpen: (String) 
     var title by remember { mutableStateOf("") }
     var confidential by remember { mutableStateOf(false) }
     var consent by remember { mutableStateOf(false) }
+    var participants by remember { mutableStateOf("") }
+    var agenda by remember { mutableStateOf("") }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(rec.recording) { while (rec.recording) { now = System.currentTimeMillis(); delay(1_000) } }
     fun begin() = scope.launch {
         vm.prepareMeeting()
-        vm.meetings.start(title, confidential).onFailure { vm.notify("Rapat tidak bisa dimulai: ${it.message}") }
-        title = ""; consent = false
+        vm.meetings.start(title, confidential, participants.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }, agenda)
+            .onFailure { vm.notify("Rapat tidak bisa dimulai: ${it.message}") }
+        title = ""; consent = false; participants = ""; agenda = ""
     }
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) begin() }
 
@@ -72,7 +80,16 @@ fun MeetingsScreen(vm: JarvisViewModel, onBack: (() -> Unit)?, onOpen: (String) 
                 Label(if (rec.finishing) "Menyelesaikan rekaman…" else if (rec.paused) "Dijeda" else "● Merekam", JarvisColors.Red)
                 Body(rec.title)
                 Body(mmss(rec.elapsedS(now)), size = 28)
-                Small("Potongan ${rec.chunks} · terunggah ${rec.uploaded}")
+                if (!rec.finishing && !rec.paused) {
+                    // what the microphone hears right now: it must move when people talk
+                    Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(JarvisColors.SurfaceHigh)) {
+                        Box(Modifier.fillMaxWidth(rec.level.coerceIn(0.02f, 1f)).height(8.dp)
+                            .background(if (rec.tooQuiet) JarvisColors.Amber else JarvisColors.Green))
+                    }
+                    if (rec.tooQuiet) Small("Hampir tidak ada suara ${rec.quietS.toInt()} detik terakhir — dekatkan HP ke pembicara atau naikkan volume pembicara.", JarvisColors.Amber)
+                    else Small("Suara terdengar. Letakkan HP di tengah meja, jangan tertutup.")
+                }
+                Small("Potongan ${rec.chunks} · terunggah ${rec.uploaded}" + if (rec.uploaded < rec.chunks) " (menunggu jaringan)" else "")
                 if (!rec.finishing) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Action(if (rec.paused) "Lanjut" else "Jeda") { if (rec.paused) vm.meetings.resume() else vm.meetings.pause() }
                     Action("Tandai penting", JarvisColors.Amber) { vm.meetings.mark(); vm.notify("Ditandai di menit ${mmss(rec.elapsedS())}") }
@@ -89,6 +106,11 @@ fun MeetingsScreen(vm: JarvisViewModel, onBack: (() -> Unit)?, onOpen: (String) 
             Card {
                 Label("Rekam rapat baru")
                 OutlinedTextField(title, { title = it }, Modifier.fillMaxWidth(), label = { Text("Judul (opsional)") }, singleLine = true)
+                OutlinedTextField(participants, { participants = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Peserta (nama, pisahkan koma)") }, singleLine = true,
+                    supportingText = { Text("Membantu JARVIS menulis nama dengan benar dan menyebut siapa yang bertugas.") })
+                OutlinedTextField(agenda, { agenda = it }, Modifier.fillMaxWidth(), label = { Text("Agenda / topik (opsional)") },
+                    supportingText = { Text("Istilah, proyek, atau produk yang akan dibahas — dipakai untuk mengenali kata yang sulit.") })
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Body("Rahasia (hanya model lokal)", size = 13)
                     Spacer(Modifier.weight(1f))
@@ -170,6 +192,24 @@ fun MeetingDetailScreen(vm: JarvisViewModel, id: String, onBack: () -> Unit) {
                     Card { Label("Pertanyaan terbuka"); sum["pertanyaan"].arr().forEach { Small("• " + (it as JsonPrimitive).content, JarvisColors.Text) } }
                 }
                 "transkrip" -> {
+                    val names = o["speakers"].obj().values.map { (it as? JsonPrimitive)?.content.orEmpty() }.filter { it.isNotBlank() }.distinct()
+                    if (names.size > 1 || names.any { it.startsWith("Pembicara") }) {
+                        Card {
+                            Label("Siapa pembicaranya?")
+                            Small("Ganti \"Pembicara 2\" dengan nama aslinya; notulen dibuat ulang.")
+                            names.filter { it != "Pemilik" }.forEach { old ->
+                                var new by remember(old) { mutableStateOf("") }
+                                OutlinedTextField(new, { new = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text(old) })
+                                if (new.isNotBlank()) Action("Simpan nama untuk $old") {
+                                    scope.launch {
+                                        runCatching { vm.console.post("/api/v1/meetings/$id/speakers", buildJsonObject { put("from", old); put("to", new.trim()) }) }
+                                            .onSuccess { vm.notify("Nama diganti; notulen diperbarui."); m.reload() }
+                                            .onFailure { vm.notify(it.message ?: "Gagal") }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     OutlinedTextField(filter, { filter = it }, Modifier.fillMaxWidth(), label = { Text("Cari di transkrip") }, singleLine = true)
                     o["transcript"].arr().map { it.obj() }.filter { filter.isBlank() || it.s("text").contains(filter, ignoreCase = true) }.forEach { seg ->
                         Small("${mmss((seg.d("start") ?: 0.0).toLong())} ${seg.s("speaker")}: ${seg.s("text")}", JarvisColors.Text)

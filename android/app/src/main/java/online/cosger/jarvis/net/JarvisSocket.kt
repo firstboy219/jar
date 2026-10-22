@@ -61,9 +61,10 @@ class JarvisSocket(
     fun sendControl(json: String): Boolean = _connection.value == Connection.Connected && ws?.send(json) == true
 
     fun send(text: String, sessionId: String, location: DeviceLocation? = null, screen: String? = null,
-             imageSource: String? = null, confidence: Double? = null, speakers: Int? = null, screenText: String? = null): Boolean =
+             imageSource: String? = null, confidence: Double? = null, speakers: Int? = null, screenText: String? = null,
+             attachments: List<String> = emptyList()): Boolean =
         _connection.value == Connection.Connected &&
-            ws?.send(Protocol.command(text, sessionId, location, screen, imageSource, confidence, speakers, screenText)) == true
+            ws?.send(Protocol.command(text, sessionId, location, screen, imageSource, confidence, speakers, screenText, attachments)) == true
 
     private suspend fun runLoop() {
         var attempt = 0

@@ -511,3 +511,75 @@ def test_hermes_session_lines_move_after_the_shared_prefix():
     assert out["tools"] == body["tools"] and body["messages"][0]["content"].endswith("jarvis-web")  # input untouched
     other = {"messages": [{"role": "system", "content": "no marker"}, {"role": "user", "content": "x"}]}
     assert hoist_volatile(other) == other
+
+
+def _office_files():
+    import io
+    from docx import Document
+    from openpyxl import Workbook
+    from pptx import Presentation
+    from reportlab.pdfgen import canvas
+    d = Document()
+    d.add_paragraph("Kontrak sewa kantor BSD berlaku 12 bulan.")
+    t = d.add_table(rows=1, cols=2)
+    t.rows[0].cells[0].text, t.rows[0].cells[1].text = "Biaya", "Rp 120 juta"
+    b = io.BytesIO(); d.save(b); docx = b.getvalue()
+    wb = Workbook(); ws = wb.active; ws.title = "Penjualan"
+    ws.append(["Bulan", "Omzet"]); ws.append(["Oktober", 1500000])
+    b = io.BytesIO(); wb.save(b); xlsx = b.getvalue()
+    p = Presentation(); s = p.slides.add_slide(p.slide_layouts[1]); s.shapes.title.text = "Rencana Q4"
+    s.placeholders[1].text = "Target naik 20 persen"
+    b = io.BytesIO(); p.save(b); pptx = b.getvalue()
+    b = io.BytesIO(); c = canvas.Canvas(b); c.drawString(72, 750, "Laporan keuangan Oktober"); c.save(); pdf = b.getvalue()
+    return {"a.docx": docx, "a.xlsx": xlsx, "a.pptx": pptx, "a.pdf": pdf}
+
+
+def test_attachments_are_read_whatever_the_format():
+    from app import attachments
+    f = _office_files()
+    kind, text, _ = attachments.extract("kontrak.docx", "", f["a.docx"])
+    assert kind == "docx" and "sewa kantor BSD" in text and "Biaya | Rp 120 juta" in text
+    kind, text, _ = attachments.extract("omzet.xlsx", "", f["a.xlsx"])
+    assert kind == "xlsx" and "[lembar Penjualan]" in text and "Oktober | 1500000" in text
+    kind, text, _ = attachments.extract("rencana.pptx", "", f["a.pptx"])
+    assert kind == "pptx" and "Rencana Q4" in text and "Target naik 20 persen" in text
+    kind, text, _ = attachments.extract("laporan.pdf", "", f["a.pdf"])
+    assert kind == "pdf" and "Laporan keuangan Oktober" in text
+    import io
+    from reportlab.pdfgen import canvas
+    blank = io.BytesIO(); c = canvas.Canvas(blank); c.showPage(); c.save()  # a page without any text = a scan
+    kind, text, note = attachments.extract("scan.pdf", "", blank.getvalue())
+    assert kind == "pdf" and text == "" and "pindai" in note  # a scanned PDF is said to be a scan, not "empty"
+    assert attachments.extract("a.csv", "text/csv", "nama,umur\nBudi,30\n".encode())[1].startswith("nama,umur")
+    assert attachments.extract("foto.jpg", "image/jpeg", b"x", "Struk Indomaret Rp 25.000")[:2] == ("image", "Struk Indomaret Rp 25.000")
+    assert attachments.extract("foto.jpg", "image/jpeg", b"x")[2]  # no OCR text → a note, not silence
+    import pytest
+    with pytest.raises(attachments.AttachmentError):
+        attachments.extract("program.exe", "application/octet-stream", b"MZ")
+    with pytest.raises(attachments.AttachmentError):
+        attachments.extract("rusak.docx", "", b"bukan zip")
+
+
+def test_meeting_terms_and_misheard_names_are_corrected():
+    from app import meetings
+    meeting = {"title": "UAT Autotoko minggu 3", "context": {"participants": ["Bu Rina", "Opik"], "agenda": "Bahas workflow n8n dan Shopee API"}}
+    t = meetings.meeting_terms(meeting, ["Deepgram"])
+    assert "Bu Rina" in t["prompt"] and "Autotoko" in t["prompt"] and "Shopee" in t["hotwords"]
+    assert "Deepgram" in t["glossary"] and "Opik" not in t["glossary"]  # too short to fuzzy-match safely
+    g = ["Autotoko", "Deepgram", "Shopee", "Bu Rina"]
+    assert meetings.correct_terms("Kita pakai Deep gram untuk suara", g) == "Kita pakai Deepgram untuk suara"
+    assert meetings.correct_terms("Toko Auto toko minggu ini", g) == "Toko Autotoko minggu ini"
+    assert meetings.correct_terms("kata Bu Rinah tadi, Shopee, ya.", g) == "kata Bu Rina tadi, Shopee, ya."
+    assert meetings.correct_terms("rapat hari ini membahas toko dan sopir", g) == "rapat hari ini membahas toko dan sopir"  # everyday words stay
+    assert meetings.correct_terms("apa saja", []) == "apa saja"
+    segs = meetings.flag_unclear([{"text": "a", "confidence": 0.9}, {"text": "b", "confidence": 0.2}, {"text": "c"}])
+    assert [s.get("low") for s in segs] == [None, True, None]
+    lines = meetings.blocks([{"start": 0, "end": 3, "speaker": "Pemilik", "text": "setuju", "low": True}])
+    assert lines == ["00:00 Pemilik: setuju [?]"]
+
+
+def test_a_real_answer_is_not_followed_by_a_promise_or_a_needless_worker():
+    from app.assistant import answer_without_promises
+    full = "Oke, aku lihat dokumen itu. Biaya sewa Rp 120 juta per tahun, mulai 1 November 2026. Oke, aku cek dokumen itu ya, nanti aku kabari."
+    assert answer_without_promises(full) == "Biaya sewa Rp 120 juta per tahun, mulai 1 November 2026."
+    assert len(answer_without_promises("Oke, aku cek dulu ya, nanti aku kabari.")) < 30  # a bare promise still starts a worker

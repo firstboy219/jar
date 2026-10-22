@@ -59,8 +59,15 @@ def _pcm(body: bytes) -> np.ndarray:
 MEETINGS = "/meetings"
 
 
-def _decode_paths(paths: list[str]) -> np.ndarray:
-    """Many chunk files (same recording) → one 16 kHz mono stream, via ffmpeg's concat demuxer."""
+# Optional room-audio filter chain, OFF by default: measured on speech with street-like noise, near and −22 dB
+# "across the table", a high-pass + dynamic normaliser (and denoise) did NOT lower Whisper's error rate (16–19 %
+# either way; Whisper normalises level itself) — only the wider beam did (ADR-032). Kept as an opt-in for rooms
+# where a real recording proves it helps: MEETING_ENHANCE="highpass=f=70,dynaudnorm=f=200:g=11:p=0.95:m=20".
+ENHANCE = os.getenv("MEETING_ENHANCE", "")
+
+
+def _decode_paths(paths: list[str], enhance: bool = True) -> np.ndarray:
+    """Many chunk files (same recording; Ogg/Opus or ADTS AAC) → one 16 kHz mono stream, via ffmpeg's concat demuxer."""
     real = []
     for p in paths:
         full = os.path.realpath(os.path.join(MEETINGS, p))
@@ -72,8 +79,9 @@ def _decode_paths(paths: list[str]) -> np.ndarray:
     with tempfile.NamedTemporaryFile("w", suffix=".txt") as lst:
         lst.write("".join(f"file '{p}'\n" for p in real))
         lst.flush()
+        af = ["-af", ENHANCE] if enhance and ENHANCE else []
         out = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-f", "concat", "-safe", "0", "-i", lst.name,
-                              "-ac", "1", "-ar", str(SR), "-f", "s16le", "-"], capture_output=True, timeout=3600)
+                              "-ac", "1", "-ar", str(SR), *af, "-f", "s16le", "-"], capture_output=True, timeout=3600)
     if out.returncode != 0 or not out.stdout:
         raise HTTPException(400, "audio rapat tidak bisa dibaca")
     return np.frombuffer(out.stdout, dtype=np.int16).astype(np.float32) / 32768.0
@@ -213,15 +221,22 @@ def _diarize(audio: np.ndarray, speakers: int, threshold: float):
 class MeetingIn(BaseModel):
     paths: list[str]
     prompt: str = ""
+    hotwords: str = ""   # names/terms of this meeting: the recogniser leans towards them
     model: str = ""
     speakers: int = 0
+    beam: int = int(os.getenv("WHISPER_MEETING_BEAM", "2"))  # measured: beam 3 beats the live path's 1 by 1–2.6 points WER but
+    # costs 2–3× the time on this CPU (a 1-hour meeting is already ~25 min); 2 is the compromise, 3 via the env var
+    enhance: bool = True  # applies MEETING_ENHANCE, which is empty unless the operator sets it
 
 
-def _transcribe_audio(audio: np.ndarray, model: str, prompt: str) -> list[dict]:
+def _transcribe_audio(audio: np.ndarray, model: str, prompt: str, hotwords: str = "", beam: int = 3) -> list[dict]:
     m = _whisper(model or FILE_MODEL)
     with _file_lock:
-        segs, _ = m.transcribe(audio, language="id", beam_size=1, vad_filter=True,
-                               initial_prompt=prompt[:600] or None, condition_on_previous_text=False)
+        segs, _ = m.transcribe(audio, language="id", beam_size=max(1, min(beam, 5)), vad_filter=True,
+                               # pauses of half a second split sentences; padding keeps word edges from being cut
+                               vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 300},
+                               initial_prompt=prompt[:700] or None, hotwords=hotwords[:300] or None,
+                               condition_on_previous_text=False, no_speech_threshold=0.6, compression_ratio_threshold=2.4)
         return [{"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip(),
                  "confidence": round(float(np.exp(s.avg_logprob)), 3)} for s in segs if s.text.strip()]
 
@@ -232,8 +247,8 @@ async def meeting_transcribe(m: MeetingIn):
 
     def run():
         _low_priority()
-        audio = _decode_paths(m.paths)
-        return _transcribe_audio(audio, m.model, m.prompt), len(audio) / SR
+        audio = _decode_paths(m.paths, m.enhance)
+        return _transcribe_audio(audio, m.model, m.prompt, m.hotwords, m.beam), len(audio) / SR
 
     segments, duration = await asyncio.to_thread(run)
     return {"segments": segments, "duration_s": round(duration, 1), "ms": int((time.monotonic() - started) * 1000)}
@@ -243,7 +258,7 @@ async def meeting_transcribe(m: MeetingIn):
 async def meeting_diarize(m: MeetingIn):
     def run():
         _low_priority()
-        return _diarize(_decode_paths(m.paths), m.speakers, 0.5)
+        return _diarize(_decode_paths(m.paths, m.enhance), m.speakers, 0.5)
     segs, voices = await asyncio.to_thread(run)
     return {"segments": segs, "speakers": len({s["speaker"] for s in segs}), "voices": voices}
 

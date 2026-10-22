@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import time
 
-from . import approvals, assistant, audit, db, llm, memory, n8n, sensitive, status, workers
+from . import approvals, assistant, attachments, audit, db, gateway, llm, memory, n8n, sensitive, status, workers
 from .location import Location, remember_last
 from .router import HELP, Intent, parse
 
@@ -19,6 +19,11 @@ class Turn:
     reply: str
     route: str  # core | assistant | silent | blocked | error
     spoken: bool = False  # already spoken sentence by sentence ("say" events)
+
+
+async def _cloud_chat() -> bool:
+    """Is the main agent's model in the cloud (bigger prompt budget for attached documents)?"""
+    return (await gateway.plan("ngobrol", caller="chat"))[0].cloud
 
 
 def _fmt_approval(a: dict) -> str:
@@ -100,7 +105,8 @@ async def _log(session_id: str, device_id, role: str, content: str, route: str, 
 
 async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
                  location: Location | None = None, screen: str | None = None, image_source: str | None = None,
-                 stt: dict | None = None, speak_live: bool = False, screen_text: str = "") -> Turn:
+                 stt: dict | None = None, speak_live: bool = False, screen_text: str = "",
+                 attachment_ids: list[str] | None = None) -> Turn:
     async def send(event: dict) -> None:
         if emit:
             await emit(event)
@@ -114,9 +120,21 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
         await remember_last(location)
     private = sensitive.is_private(text)
     found = sensitive.scan(text)
+    # Attachments (ADR-032): their text goes into the prompt; sensitive content inside keeps the turn local.
+    files, attached = "", []
+    if attachment_ids:
+        files, attached = attachments.prompt_block(attachment_ids[:5], budget=3500 if not await _cloud_chat() else 14000)
+        found = sorted(set(found) | set(sensitive.scan(files)))
+        if attached and screen is None:  # the first picture also goes to a vision model, when there is one
+            first = next((m for m in attached if m["kind"] == "image"), None)
+            # a cloud model sees up to 1280 px; the local one is held to 768 px (≈ 0.5k tokens ≈ 1 minute on this CPU)
+            if first and (b64 := attachments.image_b64(first["id"], 1280 if await _cloud_chat() else 768)):
+                screen, image_source = b64, "attachment"
 
     # Never persist secrets verbatim, even in our own message log.
     logged = text if not found else f"[disensor: {', '.join(found)}]"
+    if attached:
+        logged += "\n[lampiran: " + ", ".join(m["name"] for m in attached) + "]"
     local_only = bool(private or found) and not intent
     await _log(session_id, device_id, "user", logged, "core" if intent else ("private" if local_only else "assistant"),
                stt_confidence=(stt or {}).get("confidence"))
@@ -136,7 +154,8 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
         started = time.monotonic()
         try:
             a = await assistant.respond(text, session_id, actor, device_id, send, location, screen, image_source, stt,
-                                        private=local_only, speak_live=speak_live, screen_text=screen_text)
+                                        private=local_only, speak_live=speak_live, screen_text=screen_text,
+                                        files=files, attachments=attached)
             trace = {"first_token_ms": a.first_token_ms, "first_say_ms": a.first_say_ms,
                      "total_ms": int((time.monotonic() - started) * 1000), "route": a.route,
                      **({"stt_ms": stt["stt_ms"]} if isinstance((stt or {}).get("stt_ms"), int) else {})}

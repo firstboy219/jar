@@ -5,6 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.launch
 import online.cosger.jarvis.JarvisApp
+import online.cosger.jarvis.attach.AttachmentUploader
+import online.cosger.jarvis.attach.PendingAttachment
 import online.cosger.jarvis.ui.stage.arr
 import online.cosger.jarvis.ui.stage.obj
 
@@ -42,6 +44,8 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun prefetchVoice() = engine.prefetchVoice()
     fun toggleMute() = engine.toggleMute()
     fun sendText(text: String) = engine.sendText(text)
+    fun sendMessage(text: String, files: List<PendingAttachment>) = engine.sendMessage(text, files)
+    fun describeAttachment(uri: android.net.Uri) = AttachmentUploader(getApplication(), console).describe(uri)
     fun acknowledge(reportId: Long) = engine.acknowledge(reportId)
     fun repeatReport(reportId: Long) = engine.repeatReport(reportId)
     fun cancelTask(taskId: Long) = engine.cancelTask(taskId)

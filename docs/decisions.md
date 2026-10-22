@@ -400,3 +400,28 @@ Ideas not taken: more parallel workers (same 4 threads, every worker re-reads it
 **Update (same day, owner):** the 50% CPU start gate and the 2-thread cap on the worker model were removed.
 Background work still waits for the owner's own work and runs one task at a time; the worker model uses all
 4 threads at idle priority (it never slows other services), and the orphan watchdog stays.
+
+## ADR-032 — Chat attachments, local vision, better meeting recording (2026-10-22)
+- **Attachments in the chat** (paper-clip: gallery photo, camera, PDF/Word/Excel/PowerPoint/text/CSV/JSON/HTML):
+  the phone uploads each file once (`POST /api/v1/attachments`, ≤ 12 MB, kept 30 days in `data/attachments`);
+  pictures are shrunk to ≤ 1600 px and their words read by ML Kit ON the phone (free, exact). The server extracts
+  the text (pypdf, python-docx, openpyxl, python-pptx; Office files are zip-bomb checked), the chat message carries
+  only ids. The main agent sees names + as much text as fits (3.5k chars on the local model, 14k on a cloud one);
+  long documents say "dipotong" and any worker it starts receives the ids and reads the rest with the MCP tools
+  `read_attachment` / `see_attachment`. Document text is data, never instructions; sensitive content inside keeps
+  the whole turn on the local model. A scanned PDF is reported as a scan, not as an empty file.
+- **Local vision:** Qwen3.5-2B runs with its vision projector (`--mmproj`, +0.7 GB, `llm_providers.vision = true`).
+  Measured: a 450×1000 picture = 459 tokens ≈ 55 s; text in the picture is read almost perfectly; descriptions can
+  embellish, so the phone's OCR text always travels with the picture. The 4B with a projector gave the same quality
+  at 5× the time. Local pictures are held to 768 px (≈ 0.5k tokens); a cloud model gets 1280 px.
+- **Meetings:** (1) the phone captures CONTINUOUSLY (AudioRecord → AAC encoder → ADTS files cut on a frame
+  boundary): the old MediaRecorder stop/start lost ~0.2 s of speech every minute; (2) live level meter + warning
+  when the room is silent for 20 s; chunks left on the phone are uploaded at the next start; (3) the owner can type
+  participants and agenda: they feed Whisper's prompt/hotwords, a fuzzy corrector for misheard names/terms
+  ("Bu Rinah" → "Bu Rina"), and the minutes' prompts together with related memories; (4) a wider Whisper beam (default 2, `WHISPER_MEETING_BEAM`) with VAD
+  padding — measured on 12 noisy TTS sentences, beam 3 lowered WER by 1.0–2.6 points (17.8→16.8, 18.7→16.1) but costs
+  2–3× the time (30 s of audio: 29 s at beam 1, 95 s at beam 3 under load), beam 2 was NOT measured; while a
+  high-pass + dynamic-normaliser/denoise chain did not help (16–19 % either way, also at −22 dB), so that filter is an
+  opt-in (`MEETING_ENHANCE`), not on; (5) unsure segments are
+  marked `[?]` and never become decisions or tasks; (6) "Pembicara 2" can be renamed in the app (minutes, search
+  index rebuilt); (7) a recording abandoned for 20 minutes is processed automatically.

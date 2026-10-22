@@ -98,7 +98,10 @@ services:
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     cpu_shares: 1024
     mem_limit: 3g
-    command: ["-m", "/models/Qwen3.5-2B-Q4_0.gguf", "-c", "16384", "-np", "1", "-t", "4", "-ctk", "q8_0", "-ctv", "q8_0",
+    # --mmproj: the 2B model can SEE (photos the owner attaches, camera, shared screen). Measured: a 450×1000 picture
+    # = 459 tokens ≈ 55 s on this CPU; text in pictures is read almost perfectly (ADR-032).
+    command: ["-m", "/models/Qwen3.5-2B-Q4_0.gguf", "--mmproj", "/models/mmproj-2B-F16.gguf", "-c", "16384", "-np", "1", "-t", "4",
+              "-ctk", "q8_0", "-ctv", "q8_0",
               "--jinja", "--host", "0.0.0.0", "--port", "8080", "--no-webui",
               "--slot-save-path", "/slots", "--cache-ram", "1024", "--alias", "qwen-lokal"]
     volumes:
@@ -137,6 +140,7 @@ services:
     environment:
       - WHISPER_LIVE_MODEL=${WHISPER_LIVE_MODEL:-small}
       - WHISPER_FILE_MODEL=${WHISPER_FILE_MODEL:-small}
+      - WHISPER_MEETING_BEAM=${WHISPER_MEETING_BEAM:-2}
     volumes:
       - ./data/models:/models
       - ./data/meetings:/meetings:ro # meeting chunks written by jarvis-core
@@ -154,6 +158,7 @@ services:
       - ./data/documents:/data/documents
       - ./data/meetings:/data/meetings
       - ./data/media:/data/media
+      - ./data/attachments:/data/attachments # files and pictures attached in the chat (30 days)
       - ./data/dev:/data/dev # self-improvement requests/results exchanged with infra/scripts/self-dev.sh
       - ./data/ops:/data/ops # per-container usage (usage-collector.sh) and "netralkan" requests (ops.sh)
       - ./data/hermes:/hermes:ro # Hermes Studio (schedules, own skills, kanban) + cron result delivery
