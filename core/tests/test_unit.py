@@ -583,3 +583,43 @@ def test_a_real_answer_is_not_followed_by_a_promise_or_a_needless_worker():
     full = "Oke, aku lihat dokumen itu. Biaya sewa Rp 120 juta per tahun, mulai 1 November 2026. Oke, aku cek dokumen itu ya, nanti aku kabari."
     assert answer_without_promises(full) == "Biaya sewa Rp 120 juta per tahun, mulai 1 November 2026."
     assert len(answer_without_promises("Oke, aku cek dulu ya, nanti aku kabari.")) < 30  # a bare promise still starts a worker
+
+
+def test_charts_and_playlist_requests_are_understood():
+    from app import charts
+    from app.router import parse_action
+    assert charts.resolve("tlg carikan beberapa lagu rnb yg top10") == (15, "R&B/Soul", "us")
+    assert charts.resolve("lagu k-pop terpopuler")[1] == "K-Pop"
+    assert charts.resolve("lagu indonesia paling populer") == (None, "semua genre", "id")
+    a = parse_action("tlg Carikan beberapa lagu RnB yg top10 dan masukkan di playlist saya")
+    assert a == Intent("chart", {"text": "tlg carikan beberapa lagu rnb yg top10 dan masukkan di playlist saya", "limit": 10, "to_playlist": True})
+    assert parse_action("lagu pop top 5 apa aja?").args["limit"] == 5
+    assert parse_action("putar playlist saya") == Intent("play_playlist", {"name": ""})
+    assert parse_action("tolong putarkan lagu peterpan").name == "play_music"  # an ordinary song is still a song
+
+
+def test_draft_requests_and_writer_output():
+    from app import writer
+    from app.router import parse_action
+    for ask in ("bantu saya bikin reply draft atas email ini (btw nama saya Ilham)", "tolong draftkan email ke pak Budi",
+                "buatkan balasan email ini", "tlg bikin draf surat izin", "tolong bales email ini dong"):
+        assert parse_action(ask).name == "write_draft", ask
+    for not_ask in ("tolong cek balasan email dari pak X", "putar lagu RnB", "baca email terakhir"):
+        a = parse_action(not_ask)
+        assert a is None or a.name != "write_draft", not_ask
+    d = writer.parse('ok {"jenis": "email", "kepada": "Henry", "subjek": "Re: Publikasi", "email": "h@x.id", '
+                     '"ringkas": "konfirmasi", "isi": "Halo Pak Henry,\\n\\nTerima kasih.\\n\\nSalam,\\nIlham"}')
+    assert d["kepada"] == "Henry" and d["email"] == "h@x.id" and d["isi"].endswith("Ilham")
+    assert writer.parse("Halo, ini drafnya saja")["isi"] == "Halo, ini drafnya saja"  # plain text still becomes the body
+    assert writer.parse('{"email": "bukan-email", "isi": "x"}')["email"] == ""
+    md = writer.markdown(d)
+    assert md.startswith("# Draf email") and "**Subjek:** Re: Publikasi" in md
+
+
+def test_board_holds_a_draft_only_for_the_writer():
+    from app import stage
+    board = {"blocks": [{"kind": "draft", "variants": [{"label": "Draf", "text": "Halo"}]},
+                        {"kind": "doc", "title": "Draf", "url": "/api/v1/documents/1", "format": "docx"}]}
+    with pytest.raises(stage.StageError):
+        stage.validate("board", board)
+    assert [b["kind"] for b in stage.validate("board", board, drafts=True)["blocks"]] == ["draft", "doc"]

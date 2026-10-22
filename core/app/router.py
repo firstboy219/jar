@@ -51,7 +51,7 @@ def parse(text: str) -> Intent | None:
 
 # Clear action requests the main agent executes directly (no model guessing whether to call a tool —
 # the small local model often only SAID it would). Pure; executed by assistant.respond.
-_POLITE = r"^(?:(?:jarvis|tolong|coba|dong|bisa|bisakah|boleh|kamu|ayo)[, ]+)*"
+_POLITE = r"^(?:(?:jarvis|tolong|tlg|coba|dong|bisa|bisakah|boleh|kamu|ayo)[, ]+)*"
 _NEWS_WORD = r"(?:berita|brita|beritah|baritah?|berta|kabar terkini)"  # how STT often hears "berita"
 _ACTIONS: list[tuple[re.Pattern, str]] = [
     (re.compile(_POLITE + r"(?:putar(?:kan|in)?|puterin|mainkan|tampilkan|tunjukkan|lihat|nonton|cari(?:kan)?)\s+"
@@ -63,6 +63,11 @@ _ACTIONS: list[tuple[re.Pattern, str]] = [
     (re.compile(_POLITE + r"(?:cek |cari(?:kan)? |lihat |bacakan |apa |ada )?" + _NEWS_WORD +
                 r"(?:\s+(?:tentang|soal|mengenai|terkait))?\s*(?P<topic>.{0,80}?)[.!?]*$"), "news"),
 ]
+_CHART = re.compile(r"\b(top ?\d*|terpopuler|paling populer|populer|hits|tangga lagu|chart|teratas|terlaris)\b")
+_PLAY_PLAYLIST = re.compile(_POLITE + r"(?:putar(?:kan|in)?|mainkan|setel(?:kan)?|play)\s+playlist(?:\s+(?P<name>.{1,60}?))?[.!?]*$")
+_DRAFT = re.compile(r"\b(buat|bikin|buatkan|bikinin|draftkan|draftin|tuliskan|tulis|susun|susunkan|siapkan)\b.{0,40}"
+                    r"\b(draft?|draf|konsep|balasan|reply)\b.{0,30}\b(email|e-mail|surel|surat|pesan|wa|whatsapp|chat|ini)\b"
+                    r"|\b(draftkan|draftin)\b|\breply draft\b|\b(balas|bales)(kan)? email\b")
 _NOT_A_SONG = {"lagi", "ulang", "terus", "balik", "kembali", "sebelumnya", "berikutnya", "selanjutnya", "video", "film"}
 _SHORT_NEWS = re.compile(r"^(?:\w+\s+)?" + _NEWS_WORD + r"\s*(?P<topic>(?:\w+\s*){0,4}?)[.!?]*$")
 _NO_TOPIC = re.compile(r"^(hari ini|terkini|terbaru|sekarang|apa|apa saja|apa aja|hari ini apa|pagi ini|malam ini)?$")
@@ -70,6 +75,16 @@ _NO_TOPIC = re.compile(r"^(hari ini|terkini|terbaru|sekarang|apa|apa saja|apa aj
 
 def parse_action(text: str) -> Intent | None:
     lowered = " ".join(text.strip().lower().split())
+    # charts and playlists first: "carikan lagu RnB top 10 dan masukkan ke playlist saya", "putar playlist saya"
+    if m := _PLAY_PLAYLIST.match(lowered):
+        name = (m["name"] or "").strip()
+        return Intent("play_playlist", {"name": "" if name in ("", "saya", "ku", "aku", "kamu") else name})
+    if _DRAFT.search(lowered):
+        return Intent("write_draft", {"text": text.strip()})
+    if "lagu" in lowered and _CHART.search(lowered):
+        n = re.search(r"\btop ?(\d{1,2})\b", lowered)
+        return Intent("chart", {"text": lowered, "limit": int(n.group(1)) if n else 10,
+                                "to_playlist": "playlist" in lowered})
     for rx, name in _ACTIONS:
         m = rx.match(lowered)
         if not m:

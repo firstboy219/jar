@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -74,6 +75,7 @@ enum class ConsoleRoute(val path: String, val title: String, val hint: String, v
     Background("background", "Di balik layar", "apa yang JARVIS kerjakan sendiri, kapan, berapa lama", Icons.Filled.Visibility, "JARVIS"),
     Studio("studio", "Hermes Studio", "jadwal, skill, kanban, memori Hermes", Icons.Filled.Hub, "JARVIS"),
     Documents("documents", "Dokumen", "file buatan JARVIS", Icons.Filled.Description, "JARVIS"),
+    Playlist("playlist", "Playlist", "lagu yang kamu kumpulkan lewat JARVIS", Icons.Filled.QueueMusic, "JARVIS"),
     Composition("composition", "Komposisi AI", "AI per kategori, anggaran, mesin suara, Mode Kuat", Icons.Filled.Tune, "AI & server"),
     Server("server", "Pengaturan server", "kunci API, anggaran, jam tenang, password admin", Icons.Filled.AccountTree, "AI & server"),
     Devices("devices", "Perangkat", "token perangkat", Icons.Filled.Devices, "AI & server"),

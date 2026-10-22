@@ -42,7 +42,7 @@ def _check_urls(obj, path: str = "") -> None:
             _check_urls(v, f"{path}{i}.")
 
 
-def validate(panel: str, payload: dict) -> dict:
+def validate(panel: str, payload: dict, drafts: bool = False) -> dict:
     if panel not in PANELS:
         raise StageError(f"panel tidak dikenal: {panel}")
     if not isinstance(payload, dict):
@@ -73,7 +73,7 @@ def validate(panel: str, payload: dict) -> dict:
         checked = []
         for b in blocks:
             kind = b.get("kind")
-            if kind not in BOARD_BLOCKS:
+            if kind not in BOARD_BLOCKS and not (drafts and kind == "draft"):  # core's writer: draft + its file
                 raise StageError(f"blok tidak dikenal: {kind}")
             if kind == "web" and b.get("mode", "read") != "read":
                 raise StageError("login web hanya sebagai panel sendiri")
@@ -125,9 +125,9 @@ async def show_any(items: list[dict], caption: str = "", actor: str = "jarvis") 
     return await show("board", {"title": caption, "blocks": [{"kind": k, **p} for k, p in parts]}, caption, actor)
 
 
-async def show(panel: str, payload: dict, caption: str = "", actor: str = "jarvis") -> dict:
+async def show(panel: str, payload: dict, caption: str = "", actor: str = "jarvis", drafts: bool = False) -> dict:
     global _current
-    payload = validate(panel, payload)
+    payload = validate(panel, payload, drafts)
     event = {"type": "stage", "id": uuid.uuid4().hex[:12], "panel": panel, "mode": "show",
              "payload": payload, "caption": caption[:200], "at": time.time()}
     _current = event
@@ -140,7 +140,8 @@ async def update(stage_id: str, payload: dict) -> dict:
     global _current
     if not _current or _current["id"] != stage_id:
         raise StageError("panel itu sudah tidak tampil")
-    payload = validate(_current["panel"], {**_current["payload"], **payload})
+    drafts = any(b.get("kind") == "draft" for b in _current["payload"].get("blocks") or [])
+    payload = validate(_current["panel"], {**_current["payload"], **payload}, drafts)
     _current = {**_current, "payload": payload, "mode": "update"}
     return {"delivered": await hub.broadcast(_current)}
 
@@ -186,6 +187,9 @@ async def on_event(stage_id: str, event: str, detail: dict | None = None) -> Non
     if event == "closed":
         _current = None
         return
+    if (_current["payload"] or {}).get("playlist") and event in ("ended", "next", "prev"):
+        from . import playlists
+        playlists.on_stage_event(event)  # a playlist is playing: the following (or previous) song comes next
     _current = {**_current, "last_event": {"event": event[:40], "detail": detail or {}, "at": time.time()}}
     if event == "route_selected" and isinstance((detail or {}).get("index"), int):
         _current["payload"] = {**_current["payload"], "selected": detail["index"]}

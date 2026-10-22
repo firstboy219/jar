@@ -8,9 +8,19 @@ Peterpan, not a stranger's cover.
 
 import asyncio
 import re
+from contextvars import ContextVar
 
 from . import maps, musiclib, stage
 from .config import settings
+
+_PLAYLIST: ContextVar[dict | None] = ContextVar("playlist", default=None)
+
+
+async def _show(panel: str, payload: dict, caption: str = "", actor: str = "jarvis") -> dict:
+    """stage.show, plus the playlist position when one is playing."""
+    if pl := _PLAYLIST.get():
+        payload = {**payload, "playlist": pl}
+    return await stage.show(panel, payload, caption, actor)
 from .location import Location, last
 
 
@@ -53,7 +63,7 @@ async def video(query: str, music: bool = False) -> dict:
     if not found:
         return {"error": "videonya tidak ketemu"}
     v = found[0]
-    shown = await stage.show("video", {"url": v["url"], "title": v["title"], "channel": v["channel"]},
+    shown = await _show("video", {"url": v["url"], "title": v["title"], "channel": v["channel"]},
                              f"{'Memutar' if music else 'Video'}: {v['title']}"[:200], "jarvis")
     return {"playing": v["title"], "artist": v["channel"], "source": "YouTube", "stage_id": shown["id"]}
 
@@ -69,7 +79,7 @@ def song_query(query: str) -> tuple[str, bool]:
 
 
 async def _show_song(m: dict, source: str) -> dict:
-    shown = await stage.show("music", {"title": m["title"], "artist": m["artist"], "url": m["url"],
+    shown = await _show("music", {"title": m["title"], "artist": m["artist"], "url": m["url"],
                                        "cover_url": m.get("cover_url"), "license": "", "source_url": m["source_url"],
                                        "duration_s": m.get("duration_s")},
                              f"Memutar {m['title']} — {m['artist']}"[:200], "jarvis")
@@ -98,7 +108,17 @@ async def fetch_song(query: str, cover: bool = False) -> dict:
     return {"error": "; ".join(errors)}
 
 
-async def play(query: str) -> dict:
+async def play(query: str, playlist: dict | None = None) -> dict:
+    """playlist: {"name", "index", "total", "next"} when a playlist is playing — shown on the panel, and the phone's
+    "ended"/"next" then moves to the following song (playlists.py)."""
+    token = _PLAYLIST.set(playlist)
+    try:
+        return await _play(query)
+    finally:
+        _PLAYLIST.reset(token)
+
+
+async def _play(query: str) -> dict:
     if not query.strip():
         return {"error": "lagu apa?"}
     query, cover = song_query(query)
@@ -122,7 +142,7 @@ async def play(query: str) -> dict:
             m = await musiclib.download(t)
         except Exception:
             continue
-        shown = await stage.show("music", {"title": m["title"], "artist": m["artist"], "url": m["url"],
+        shown = await _show("music", {"title": m["title"], "artist": m["artist"], "url": m["url"],
                                            "cover_url": m.get("cover_url"), "license": m["license"],
                                            "source_url": m["source_url"], "duration_s": m["duration_s"],
                                            "queue": [{"title": x["title"], "artist": x["artist"]} for x in tracks if x is not t][:4]},

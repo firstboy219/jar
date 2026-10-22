@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -43,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -50,6 +52,8 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
 import online.cosger.jarvis.ui.theme.JarvisColors
 
@@ -78,6 +82,15 @@ fun MusicPanel(panel: Panel, actions: StageActions) {
     val player = rememberPlayer(panel.str("url"), actions, panel.autoplay)
     var playing by remember { mutableStateOf(panel.autoplay) }
     var position by remember { mutableFloatStateOf(0f) }
+    DisposableEffect(player) {
+        val ended = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED) actions.event("ended", emptyMap())  // a playlist moves on
+            }
+        }
+        player.addListener(ended)
+        onDispose { player.removeListener(ended) }
+    }
     LaunchedEffect(player) {
         while (true) {
             val d = player.duration
@@ -102,6 +115,7 @@ fun MusicPanel(panel: Panel, actions: StageActions) {
             }
             PanelButton("Dari awal") { player.seekTo(0); player.play() }
         }
+        PlaylistBar(panel, actions)
         Spacer(Modifier.height(8.dp))
         if (panel.str("license").isNotBlank()) {  // music from open sources; any other sound (audio) has none
             Text("Lisensi ${panel.str("license")} · ${Uri.parse(panel.str("source_url")).host ?: ""}", color = JarvisColors.Muted, fontSize = 10.sp)
@@ -115,16 +129,19 @@ private val YOUTUBE = Regex("^https://(?:www\\.|m\\.)?(?:youtube\\.com/(?:watch\
 fun youtubeId(url: String): String? = YOUTUBE.find(url)?.groupValues?.get(1)
 
 /**
- * The official embedded YouTube player page. Loaded with JARVIS' own https origin (YouTube refuses embeds
- * without a valid origin/referrer — "error 153"), with its normal controls so the owner can always tap play.
+ * The official YouTube player, served by JARVIS' own server (`/embed/youtube/<id>`): YouTube refuses an embed whose
+ * page has no real https origin/referrer (error 152/153 — what a page made inside the WebView has). Pure; unit-tested.
  */
-fun youtubeEmbedHtml(id: String, origin: String, autoplay: Boolean): String =
-    "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>" +
-        "<style>html,body{margin:0;height:100%;background:#000}iframe{border:0;width:100%;height:100%}</style></head><body>" +
-        "<iframe src='https://www.youtube.com/embed/$id?autoplay=${if (autoplay) 1 else 0}&playsinline=1&controls=1&rel=0" +
-        "&modestbranding=1&enablejsapi=1&origin=${Uri.encode(origin)}' " +
-        "referrerpolicy='strict-origin-when-cross-origin' " +
-        "allow='autoplay; encrypted-media; picture-in-picture; fullscreen' allowfullscreen></iframe></body></html>"
+fun youtubeEmbedUrl(origin: String, id: String, autoplay: Boolean): String =
+    "${origin.trimEnd('/')}/embed/youtube/$id?autoplay=${if (autoplay) 1 else 0}"
+
+/** What the embed page reports in its title: "playing", "paused", "ended", or "error:<code>". */
+fun youtubeErrorText(title: String): String? = when (title.removePrefix("error:")) {
+    title -> null
+    "101", "150" -> "Pemilik video ini tidak mengizinkannya diputar di aplikasi lain."
+    "100" -> "Video ini sudah dihapus atau dibuat privat."
+    else -> "Video tidak bisa diputar di sini (kode ${title.removePrefix("error:")})."
+}
 
 /** YouTube only in its official, visible embedded player (its terms forbid background/extracted playback). */
 @SuppressLint("SetJavaScriptEnabled")
@@ -134,6 +151,7 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
     val url = panel.str("url")
     val yt = youtubeId(url)
     var reload by remember(url) { mutableIntStateOf(0) }
+    var problem by remember(url) { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
         if (yt != null) {
             val origin = actions.console.absolute("/").trimEnd('/')
@@ -145,7 +163,13 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                         settings.mediaPlaybackRequiresUserGesture = false
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
-                        webChromeClient = WebChromeClient() // required for HTML5 video in a WebView
+                        webChromeClient = object : WebChromeClient() { // required for HTML5 video in a WebView
+                            override fun onReceivedTitle(view: WebView, title: String?) {
+                                val t = title.orEmpty()
+                                if (t == "ended") actions.event("ended", emptyMap())  // a playlist moves on
+                                youtubeErrorText(t)?.let { problem = it }
+                            }
+                        }
                         webViewClient = object : WebViewClient() {
                             // a tap on the YouTube logo/title leaves the player: open the YouTube app instead
                             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -155,7 +179,7 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                             }
                         }
                         setBackgroundColor(android.graphics.Color.BLACK)
-                        loadDataWithBaseURL("$origin/", youtubeEmbedHtml(yt, origin, panel.autoplay), "text/html", "utf-8", null)
+                        loadUrl(youtubeEmbedUrl(origin, yt, panel.autoplay))
                     }
                 }, Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)),
                     onRelease = { it.stopLoading(); it.destroy() })
@@ -167,6 +191,8 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
         }
         Spacer(Modifier.height(8.dp))
         Text(panel.str("title"), color = JarvisColors.Text, fontSize = 14.sp, maxLines = 2)
+        problem?.let { Text(it, color = JarvisColors.Amber, fontSize = 12.sp) }
+        PlaylistBar(panel, actions)
         if (yt != null) {
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -174,6 +200,22 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                 PanelButton("Muat ulang") { reload++ }
             }
         }
+    }
+}
+
+/** When a playlist is playing: where we are, what comes next, previous/next. */
+@Composable
+fun PlaylistBar(panel: Panel, actions: StageActions) {
+    val pl = panel.payload["playlist"] as? JsonObject ?: return
+    val index = pl.i("index") ?: 0
+    val total = pl.i("total") ?: 0
+    Spacer(Modifier.height(6.dp))
+    Text("${pl.s("name")} · lagu ${index + 1} dari $total", color = JarvisColors.Cyan, fontSize = 11.sp)
+    val next = pl["next"].arr().mapNotNull { (it as? JsonPrimitive)?.content }
+    if (next.isNotEmpty()) Text("Berikutnya: " + next.take(2).joinToString(" · "), color = JarvisColors.Muted, fontSize = 11.sp, maxLines = 1)
+    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (index > 0) PanelButton("Sebelumnya") { actions.event("prev", emptyMap()) }
+        if (index + 1 < total) PanelButton("Berikutnya") { actions.event("next", emptyMap()) }
     }
 }
 

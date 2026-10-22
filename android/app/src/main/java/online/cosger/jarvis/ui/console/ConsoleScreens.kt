@@ -709,3 +709,44 @@ fun MemoryCardDialog(vm: JarvisViewModel, id: String, onDismiss: () -> Unit) {
         confirmButton = { TextButton(onDismiss) { Text("Tutup") } },
     )
 }
+
+// ---------- Playlist ----------
+
+/** The owner's playlist: songs JARVIS added (charts, requests); play from any song, remove songs. */
+@Composable
+fun PlaylistScreen(vm: JarvisViewModel, onBack: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val data = rememberLoad { vm.console.get("/api/v1/console/playlists").obj() }
+    ConsolePage("Playlist", onBack, data.reload) {
+        Small("Minta JARVIS: \"carikan lagu RnB top 10 dan masukkan ke playlist saya\", lalu \"putar playlist saya\". " +
+            "Lagu diputar berurutan; lagu berikutnya menyusul otomatis.")
+        LoadState(data) { o ->
+            val songs = o["songs"].arr().map { it.obj() }
+            Label("${o.s("name")} · ${songs.size} lagu")
+            if (songs.isEmpty()) Small("Masih kosong.")
+            if (songs.isNotEmpty()) Action("Putar dari awal", JarvisColors.Green) {
+                scope.launch {
+                    runCatching { vm.console.post("/api/v1/console/playlists/play", buildJsonObject { put("name", o.s("name")) }) }
+                        .onSuccess { vm.notify("Diputar di layar depan.") }.onFailure { vm.notify(it.message ?: "Gagal") }
+                }
+            }
+            songs.forEachIndexed { i, x ->
+                Card {
+                    Body("${i + 1}. ${x.s("title")}", size = 14)
+                    Small("${x.s("artist")}${x.s("source").takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Action("Putar") {
+                            scope.launch {
+                                runCatching { vm.console.post("/api/v1/console/playlists/play", buildJsonObject { put("name", o.s("name")); put("index", i) }) }
+                                    .onFailure { vm.notify(it.message ?: "Gagal") }
+                            }
+                        }
+                        Action("Hapus", JarvisColors.Red) {
+                            scope.launch { runCatching { vm.console.delete("/api/v1/console/playlists/items/${x.i("id")}") }; data.reload() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

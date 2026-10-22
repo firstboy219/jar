@@ -432,3 +432,33 @@ right action 9/12 (2B: 7/12 — its misses were promises without action, small t
 "stay silent"), at ~41 s warm median instead of ~16 s; first turn after a restart ~4–5 min. Pictures: 4B + projector
 ~4–5 min per picture under load (2B: ~1 min). Both llama servers load the same GGUF (mmap'd once). The 2B file stays
 on disk as a fallback (switch back in docker-compose.yml).
+
+## ADR-034 — YouTube from JARVIS' own origin; charts and playlists (2026-10-22)
+- **YouTube in the app:** the owner's v0.11.0 still showed no playable video. A page created inside the WebView
+  (`loadDataWithBaseURL`) has no real origin/referrer and YouTube refuses the embed (error 152/153). The player page
+  is now served by jarvis-core at `https://vis1.cosger.online/embed/youtube/<id>` (IFrame API, public, no data) and
+  loaded with `loadUrl`; its document title reports playing/paused/ended/error, so the app knows when a video ended
+  (no JavaScript bridge) and explains blocked videos ("owner does not allow embedding" → "Putar di YouTube").
+- **Charts:** `charts.py` — Deezer genre charts (current, most-played; no key) for R&B, pop, rap, rock, dance,
+  electro, jazz, alternative, reggae, blues, latin, classical, metal, "Asian" (K-pop); the Indonesian iTunes Store for
+  "lagu Indonesia" and as fallback. iTunes genre charts were rejected as primary: its R&B list was mostly classics.
+- **Playlists:** `playlists.py` (tables `playlists`, `playlist_items`; default "Playlist saya"). Songs are stored as
+  title + artist and fetched at play time like any song (licensed → MP3 → official YouTube). "carikan lagu RnB top 10
+  dan masukkan ke playlist saya" and "putar playlist saya" are direct actions; the main agent also has
+  `playlist_add` / `play_playlist`, Hermes `music_chart` / `playlist_add` / `playlist_show`. The music and video
+  panels show position and next songs, previous/next buttons, and report "ended" so the next song starts.
+
+## ADR-035 — Drafts are written by core, shown copyable and saved as .docx (2026-10-22)
+The owner asked for an email reply draft (two screenshots attached) and got only "saya akan bantu buatkan draft…":
+the promise guard took the long promise for an answer, and earlier attempts went to Hermes (tens of minutes on this
+CPU, often cancelled). Now:
+- `router.parse_action` recognises "bikin/buatkan/draftkan/tulis … draf/balasan/reply … email/surat/pesan/ini" (and
+  "balas(kan) email") as `write_draft` — also when files or screen text are attached.
+- `assistant.start_draft` puts everything in the task's instruction: the owner's words, the attachments' text (the
+  phone's OCR of screenshots), the screen text and the last 6 turns. The main agent also has a `write_draft` tool, and
+  `draft_reply` without screen text falls back to it.
+- `writer.produce` (worker task, no Hermes): one `balas-pesan` call → JSON (to, subject, email, body); unknown facts
+  become `[isi: …]` placeholders. It shows a board with a draft block (Salin / Buka email — already in APK 0.11.0) and
+  the .docx (Buka / Bagikan, also in menu Dokumen). `stage.validate(..., drafts=True)` lets only core put a draft in a
+  board. JARVIS still never sends anything.
+- Measured on the real request: 101 s locally, English as in the original email, signed "Ilham".

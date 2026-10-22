@@ -260,6 +260,31 @@ async def _core(path: str, body: dict) -> dict:
 
 
 @mcp.tool()
+async def music_chart(genre_or_request: str, limit: int = 10) -> dict:
+    """Top songs right now (iTunes Store sales chart) for a genre: "rnb", "pop", "hip hop", "rock", "k-pop",
+    "jazz", "lagu indonesia"… Returns {genre, source, songs:[{title, artist}]}; always name the source."""
+    from . import charts
+    try:
+        return await charts.top(genre_or_request, limit)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def playlist_add(songs: list[dict], playlist: str = "") -> dict:
+    """Add songs [{"title", "artist"}] to the owner's playlist (default "Playlist saya"); duplicates are skipped."""
+    from . import playlists
+    return await playlists.add(songs, playlist or None, "Hermes", "hermes")
+
+
+@mcp.tool()
+async def playlist_show(playlist: str = "") -> list[dict]:
+    """The songs in the owner's playlist, in order."""
+    from . import playlists
+    return [{k: v for k, v in s.items() if k in ("title", "artist", "source")} for s in await playlists.items(playlist or None)]
+
+
+@mcp.tool()
 async def read_attachment(attachment_id: str, offset: int = 0, limit: int = 6000) -> dict:
     """Read a file the owner attached in the chat (PDF, Word, Excel, PowerPoint, text; for a picture: the text
     read from it). Returns text, total_chars and next_offset — call again with next_offset for the rest.

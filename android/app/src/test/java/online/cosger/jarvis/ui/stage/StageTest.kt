@@ -98,8 +98,10 @@ class StageTest {
         assertEquals("dQw4w9WgXcQ", youtubeId("https://youtu.be/dQw4w9WgXcQ"))
         assertEquals("dQw4w9WgXcQ", youtubeId("https://m.youtube.com/shorts/dQw4w9WgXcQ"))
         assertNull(youtubeId("https://example.com/watch?v=dQw4w9WgXcQ"))
-        val html = youtubeEmbedHtml("dQw4w9WgXcQ", "https://vis1.cosger.online", autoplay = false)
-        assertTrue("controls=1" in html && "autoplay=0" in html && "origin=https%3A%2F%2Fvis1.cosger.online" in html)
-        assertTrue("referrerpolicy='strict-origin-when-cross-origin'" in html)
+        assertEquals("https://vis1.cosger.online/embed/youtube/dQw4w9WgXcQ?autoplay=0",
+            youtubeEmbedUrl("https://vis1.cosger.online/", "dQw4w9WgXcQ", autoplay = false))
+        assertNull(youtubeErrorText("playing"))
+        assertTrue(youtubeErrorText("error:150")!!.contains("tidak mengizinkan"))
+        assertTrue(youtubeErrorText("error:5")!!.contains("kode 5"))
     }
 }

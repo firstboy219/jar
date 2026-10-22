@@ -19,10 +19,10 @@ import json
 import logging
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, attachments, audit, auditor, awareness, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -204,6 +204,32 @@ async def upload_attachment(a: AttachmentIn, device: dict = Depends(device_auth)
 @app.get("/healthz")
 async def healthz():
     return {"ok": True}
+
+
+YT_EMBED = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="strict-origin-when-cross-origin">
+<style>html,body{margin:0;height:100%;background:#000}#p{width:100%;height:100%}</style></head><body><div id="p"></div>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+function onYouTubeIframeAPIReady(){
+  new YT.Player("p",{videoId:"__ID__",playerVars:{autoplay:__AUTO__,playsinline:1,rel:0,modestbranding:1,origin:location.origin},
+    events:{onReady:function(e){if(__AUTO__)e.target.playVideo();},
+            onStateChange:function(e){document.title={"0":"ended","1":"playing","2":"paused"}[e.data]||document.title;},
+            onError:function(e){document.title="error:"+e.data;}}});
+}
+</script></body></html>"""
+
+
+@app.get("/embed/youtube/{video_id}", response_class=HTMLResponse)
+async def youtube_embed(video_id: str, autoplay: int = 1):
+    """The official YouTube player, served from JARVIS' own https origin. YouTube refuses embeds without a valid
+    origin/referrer (error 152/153), which is what a page made inside the app's WebView has (ADR-034). The page's
+    title tells the app when the video ended (playlists) — no JavaScript bridge into the app."""
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise HTTPException(404)
+    return HTMLResponse(YT_EMBED.replace("__ID__", video_id).replace("__AUTO__", "1" if autoplay else "0"),
+                        headers={"Cache-Control": "public, max-age=3600"})
 
 
 @app.post("/api/v1/chat")
@@ -1052,6 +1078,30 @@ async def admin_dev_changes(_: str = admin):
 async def admin_efficiency_review(actor: str = admin):
     t = await perf.start_review(actor)
     return {"task_id": t["id"]}
+
+
+@app.get("/admin/playlists")
+async def admin_playlists(name: str = "", _: str = admin):
+    return jsonable({"playlists": await playlists.all_(), "songs": await playlists.items(name or None),
+                     "name": name or playlists.DEFAULT})
+
+
+class PlaylistPlayIn(BaseModel):
+    name: str = Field(default="", max_length=80)
+    index: int = Field(default=0, ge=0)
+
+
+@app.post("/admin/playlists/play")
+async def admin_playlist_play(body: PlaylistPlayIn, _: str = admin):
+    try:
+        return jsonable(await playlists.play(body.name or None, body.index))
+    except playlists.PlaylistError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/admin/playlists/items/{item_id}")
+async def admin_playlist_remove(item_id: int, actor: str = admin):
+    return {"removed": await playlists.remove(item_id, actor)}
 
 
 @app.get("/admin/flow-issues")

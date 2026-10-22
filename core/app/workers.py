@@ -8,7 +8,7 @@ result becomes a spoken report (see reports.py).
 import asyncio
 import logging
 
-from . import approvals, audit, db, gateway, hermes, hub, memory, quick, reports
+from . import approvals, audit, db, gateway, hermes, hub, memory, quick, reports, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -95,7 +95,11 @@ async def _run(task_id: int, context: str) -> None:
         try:
             result = None
             turn = await _yield_to_owner(task_id, kind, row)
-            if await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
+            if row["instruction"].startswith(writer.MARK):  # a draft (email, reply, letter): written by core, minutes not hours
+                await hub.broadcast({"type": "task_event", "task_id": task_id,
+                                     "event": {"type": "thought", "text": "menulis draf"}})
+                result = hermes.HermesReply(await writer.produce(task_id, row["instruction"], row["private"]), None, None, 0)
+            elif await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
                 await hub.broadcast({"type": "task_event", "task_id": task_id,
                                      "event": {"type": "thought", "text": "mencari cepat di web"}})
                 if text := await quick.answer(row["instruction"]):
@@ -164,6 +168,7 @@ async def _run(task_id: int, context: str) -> None:
             waiting.discard(task_id)
 
 
+DRAFT_TITLE = "Menulis draf"
 BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine", "situation")
 RESUME_MARK = "\n\n---LANJUTAN---\n"
 HERMES_RETRIES, HERMES_RETRY_S = 6, 20  # up to 2 minutes for Hermes to come back
@@ -256,6 +261,8 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
     elif kind == "selfcheck":
         from . import selfimprove
         await reports._create(task_id, session_id, await selfimprove.on_selfcheck(task_id, result))
+    elif title.startswith(DRAFT_TITLE):
+        await reports._create(task_id, session_id, result)  # already worded for the owner
     else:
         if kind == "selfimprove":  # a flow watcher fix finished: its issues are handled
             from . import auditor

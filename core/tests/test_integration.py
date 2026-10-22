@@ -1211,3 +1211,37 @@ async def test_meeting_gap_free_chunks_context_rename_and_abandoned_recordings(p
     assert await meetings.finish_stale() == 1
     assert (await meetings.get(mid2))["status"] == "queued"
     assert await pool.fetchval("SELECT count(*) FROM reports WHERE text LIKE 'Rekaman rapat Rapat tertinggal berhenti%'") == 1
+
+
+async def test_top_songs_go_into_the_playlist_and_play_one_after_another(pool, monkeypatch):
+    from app import chat, charts, media_tools, playlists, stage
+    played = []
+
+    async def fake_top(text, limit=10):
+        return {"genre": "R&B/Soul", "country": "us", "source": "iTunes Store top R&B/Soul (AS)",
+                "songs": [{"title": f"Lagu {i}", "artist": f"Penyanyi {i}"} for i in range(1, limit + 1)]}
+
+    async def fake_play(query, playlist=None):
+        played.append((query, playlist["index"] if playlist else None))
+        shown = await stage.show("music", {"title": query, "artist": "", "url": "/api/v1/media/" + "a" * 32,
+                                           **({"playlist": playlist} if playlist else {})}, query, "test")
+        return {"playing": query, "artist": "", "stage_id": shown["id"]}
+    monkeypatch.setattr(charts, "top", fake_top)
+    monkeypatch.setattr(media_tools, "play", fake_play)
+    await pool.execute("TRUNCATE playlists CASCADE")
+    t = await chat.handle("tlg Carikan beberapa lagu RnB yg top10 dan masukkan di playlist saya", "s110", actor="test")
+    assert "Sudah kumasukkan 10 lagu R&B/Soul" in t.reply and "iTunes" in t.reply
+    assert [s["title"] for s in await playlists.items()][:2] == ["Lagu 1", "Lagu 2"]
+    again = await playlists.add([{"title": "Lagu 1", "artist": "Penyanyi 1"}], None, "x", "test")
+    assert again["skipped"] == 1 and again["total"] == 10  # no duplicates
+    t = await chat.handle("putar playlist saya", "s110", actor="test")
+    assert "lagu 1 dari 10" in t.reply and played[-1] == ("Penyanyi 1 Lagu 1", 0)
+    # the phone says the song ended → the next one comes
+    import asyncio
+    await stage.on_event(stage.current()["id"], "ended")
+    for _ in range(50):
+        if len(played) == 2:
+            break
+        await asyncio.sleep(0.02)
+    assert played[-1] == ("Penyanyi 2 Lagu 2", 1)
+    assert stage.current()["payload"]["playlist"]["index"] == 1
