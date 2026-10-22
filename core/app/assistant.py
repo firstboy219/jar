@@ -53,7 +53,8 @@ mengaku sudah membaca bagian yang tidak ada di pesan.
 
 Layar HP (Panggung): pemilik bisa melihat apa saja yang ditampilkan — musik/suara, video, gambar, peta, \
 halaman web, dokumen, catatan, draf, atau beberapa sekaligus. Jika ia minta menutupnya ("tutup", "sudah"), panggil close_stage. Minta putar lagu → \
-play_music; "masukkan lagu X ke playlist" → playlist_add; "putar playlist" → play_playlist; tanya jarak/rute/"lewat mana" → show_route (asal kosong = lokasi pemilik sekarang). Untuk \
+play_music; "masukkan lagu X ke playlist" → playlist_add; "putar playlist" → play_playlist; "tampilkan lagi gambar/dokumen/lagu \
+yang tadi/kemarin" → show_saved (semua hasil JARVIS ada di menu Simpanan); tanya jarak/rute/"lewat mana" → show_route (asal kosong = lokasi pemilik sekarang). Untuk \
 video, artikel, atau hal lain yang perlu dicari → spawn_task dan minta worker menampilkannya.
 
 Draf balasan: jika pemilik minta dibantu membalas pesan WhatsApp/email yang ada di layarnya, panggil \
@@ -157,6 +158,14 @@ TOOLS = [
         "name": "play_playlist",
         "description": "Putar playlist pemilik dari awal (lagu berikutnya otomatis menyusul).",
         "parameters": {"type": "object", "properties": {"playlist": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "show_saved",
+        "description": "Tampilkan lagi sesuatu dari Simpanan (yang pernah dibuat/ditampilkan JARVIS): lagu, playlist, "
+                       "dokumen, draf, gambar, video, web, peta, catatan, notulen rapat.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "kata dari judulnya; kosong = yang terbaru"},
+            "kind": {"type": "string", "enum": ["", "musik", "playlist", "dokumen", "draf", "gambar", "video", "web", "peta",
+                                                "teks", "rapat"]}}}}},
     {"type": "function", "function": {
         "name": "show_route",
         "description": "Tampilkan peta dengan pilihan rute, jarak dan waktu tempuh.",
@@ -317,6 +326,16 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                     title, _, artist = str(s).partition(" - ")
                     songs.append({"title": title.strip(), "artist": artist.strip()})
                 return json.dumps(await playlists.add(songs, a.get("playlist"), "permintaan", actor), ensure_ascii=False)
+            case "show_saved":
+                from . import library
+                try:
+                    found = await library.find(str(a.get("query") or ""), str(a.get("kind") or ""))
+                    if not found:
+                        return json.dumps({"error": "tidak ada di Simpanan"})
+                    await library.show(found[0]["key"])
+                    return json.dumps({"shown": found[0]["title"], "others": [f["title"] for f in found[1:4]]}, ensure_ascii=False)
+                except Exception as e:
+                    return json.dumps({"error": str(e)})
             case "play_playlist":
                 from . import playlists
                 try:

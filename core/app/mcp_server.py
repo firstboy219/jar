@@ -285,6 +285,28 @@ async def playlist_show(playlist: str = "") -> list[dict]:
 
 
 @mcp.tool()
+async def saved_items(query: str = "", kind: str = "") -> list[dict]:
+    """Simpanan: things JARVIS made or showed the owner before (songs, playlists, documents, drafts, pictures, videos,
+    web pages, maps, notes, meeting minutes). kind: musik|playlist|dokumen|draf|gambar|video|web|peta|teks|rapat.
+    Returns key, kind, title — pass the key to show_saved to show it again on the owner's phone."""
+    from . import library
+    try:
+        return await library.find(query, kind)
+    except library.LibraryError as e:
+        return [{"error": str(e)}]
+
+
+@mcp.tool()
+async def show_saved(key: str) -> dict:
+    """Show an item from Simpanan (a key from saved_items) again on the owner's phone."""
+    from . import library
+    try:
+        return await library.show(key)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
 async def read_attachment(attachment_id: str, offset: int = 0, limit: int = 6000) -> dict:
     """Read a file the owner attached in the chat (PDF, Word, Excel, PowerPoint, text; for a picture: the text
     read from it). Returns text, total_chars and next_offset — call again with next_offset for the rest.

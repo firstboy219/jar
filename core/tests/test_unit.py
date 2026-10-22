@@ -623,3 +623,16 @@ def test_board_holds_a_draft_only_for_the_writer():
     with pytest.raises(stage.StageError):
         stage.validate("board", board)
     assert [b["kind"] for b in stage.validate("board", board, drafts=True)["blocks"]] == ["draft", "doc"]
+
+
+def test_simpanan_names_what_was_shown():
+    from app import library
+    assert library.kind_of_panel("image", {}) == "gambar" and library.kind_of_panel("map", {}) == "peta"
+    assert library.kind_of_panel("board", {"blocks": [{"kind": "draft"}, {"kind": "doc"}]}) == "draf"
+    assert library.kind_of_panel("board", {"blocks": [{"kind": "text"}, {"kind": "video"}]}) == "video"
+    assert library.title_of("web", {"url": "https://a.id/x", "domain": "a.id"}) == "a.id"
+    assert library.title_of("text", {}) == "Catatan"
+    assert library.parse_key("shown:42") == ("shown", "42")
+    for bad in ("shown:", "x:1", "music:../../etc", "doc:1;drop"):
+        with pytest.raises(library.LibraryError):
+            library.parse_key(bad)

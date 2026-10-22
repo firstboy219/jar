@@ -62,7 +62,7 @@ async def items(name: str | None = None) -> list[dict]:
 
 async def all_() -> list[dict]:
     rows = await db.pool().fetch(
-        """SELECT p.id, p.name, count(i.id) AS songs FROM playlists p LEFT JOIN playlist_items i ON i.playlist_id = p.id
+        """SELECT p.id, p.name, p.created_at, count(i.id) AS songs FROM playlists p LEFT JOIN playlist_items i ON i.playlist_id = p.id
            GROUP BY p.id ORDER BY p.created_at""")
     return [dict(r) for r in rows]
 

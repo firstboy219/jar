@@ -288,6 +288,7 @@ fun openFile(context: Context, file: File, how: String) {
         "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         "pdf" -> "application/pdf"
         "apk" -> "application/vnd.android.package-archive"
+        "mp3" -> "audio/mpeg"
         else -> "text/plain"
     }
     val intent = if (how == "share") Intent(Intent.ACTION_SEND).apply { this.type = type; putExtra(Intent.EXTRA_STREAM, uri) }

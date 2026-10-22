@@ -22,7 +22,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, attachments, audit, auditor, awareness, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, library, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
     async def purge_daily():
         while True:
             await notifications.purge_old()
-            musiclib.purge_old()
+            await library.purge_media()
             attachments.purge_old()
             try:
                 await meetings.purge_audio()
@@ -1102,6 +1102,42 @@ async def admin_playlist_play(body: PlaylistPlayIn, _: str = admin):
 @app.delete("/admin/playlists/items/{item_id}")
 async def admin_playlist_remove(item_id: int, actor: str = admin):
     return {"removed": await playlists.remove(item_id, actor)}
+
+
+@app.get("/admin/library")
+async def admin_library(kind: str = "", q: str = "", _: str = admin):
+    try:
+        return jsonable({"items": await library.items(kind, q[:80]), "kinds": library.KINDS})
+    except library.LibraryError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/admin/library/{key}/show")
+async def admin_library_show(key: str, _: str = admin):
+    try:
+        return jsonable(await library.show(key))
+    except (library.LibraryError, stage.StageError, playlists.PlaylistError) as e:
+        raise HTTPException(422, str(e))
+
+
+class KeepIn(BaseModel):
+    keep: bool = True
+
+
+@app.post("/admin/library/{key}/keep")
+async def admin_library_keep(key: str, body: KeepIn, actor: str = admin):
+    try:
+        return {"kept": await library.keep(key, body.keep, actor)}
+    except library.LibraryError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/admin/library/{key}")
+async def admin_library_delete(key: str, actor: str = admin):
+    try:
+        return {"deleted": await library.delete(key, actor)}
+    except library.LibraryError as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/admin/flow-issues")

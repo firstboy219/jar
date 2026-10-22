@@ -49,6 +49,7 @@ import online.cosger.jarvis.ui.console.MeetingsScreen
 import online.cosger.jarvis.ui.console.MemoryScreen
 import online.cosger.jarvis.ui.console.MoreScreen
 import online.cosger.jarvis.ui.console.PlaylistScreen
+import online.cosger.jarvis.ui.console.LibraryScreen
 import online.cosger.jarvis.ui.console.NotificationsScreen
 import online.cosger.jarvis.ui.console.PasswordsScreen
 import online.cosger.jarvis.ui.console.PhoneSetupScreen
@@ -186,6 +187,7 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Flow -> FlowScreen(vm, back)
                                     ConsoleRoute.Background -> BackgroundScreen(vm, back)
                                     ConsoleRoute.Playlist -> PlaylistScreen(vm, back)
+                                    ConsoleRoute.Library -> LibraryScreen(vm, back)
                                     ConsoleRoute.Documents -> DocumentsScreen(vm, back)
                                     ConsoleRoute.Notifications -> NotificationsScreen(vm, back)
                                     ConsoleRoute.Devices -> DevicesScreen(vm, back)

@@ -462,3 +462,13 @@ CPU, often cancelled). Now:
   the .docx (Buka / Bagikan, also in menu Dokumen). `stage.validate(..., drafts=True)` lets only core put a draft in a
   board. JARVIS still never sends anything.
 - Measured on the real request: 101 s locally, English as in the original email, signed "Ilham".
+
+## ADR-036 — Simpanan: one menu for everything JARVIS made or showed (2026-10-22)
+The owner asked for one place to find what the AI produced. `core/app/library.py` lists, newest first, documents
+(drafts separately), playlists, songs fetched as MP3 (`/data/media`), finished meetings' minutes, and — new —
+everything shown on the front screen: `stage.show` records each panel (not song panels) in `stage_history`
+(migration 014, last 500 kept). Keys are `<source>:<id>`. Endpoints `/admin/library` (+ `/show`, `/keep`, DELETE),
+served to the phone under `/api/v1/console`. Starred items (`library_kept`) are never purged: songs survive
+`musiclib.purge_old`, history entries survive the 500 cap. The main agent has `show_saved` ("tampilkan lagi gambar
+tadi"), Hermes `saved_items` / `show_saved`. APK 0.12.0: Lainnya → Simpanan (filters, search, Putar/Tampilkan,
+Buka/Bagikan, ★ Simpan, Hapus with confirmation). Meetings are deleted from the Rapat menu only.

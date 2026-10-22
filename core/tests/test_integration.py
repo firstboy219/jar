@@ -17,7 +17,7 @@ async def pool(monkeypatch):
     monkeypatch.setattr(config.settings, "qdrant_url", os.getenv("TEST_QDRANT_URL", ""))
     p = await db.connect(os.environ["TEST_DATABASE_URL"])
     await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
-                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts, flow_issues "
+                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts, flow_issues, stage_history, library_kept "
                     "RESTART IDENTITY CASCADE")
     # factory composition: everything local, no category budgets
     await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
@@ -1245,3 +1245,36 @@ async def test_top_songs_go_into_the_playlist_and_play_one_after_another(pool, m
         await asyncio.sleep(0.02)
     assert played[-1] == ("Penyanyi 2 Lagu 2", 1)
     assert stage.current()["payload"]["playlist"]["index"] == 1
+
+
+async def test_simpanan_lists_everything_shows_again_keeps_and_deletes(pool, monkeypatch, tmp_path):
+    from app import documents, library, musiclib, stage
+    monkeypatch.setattr(musiclib, "ROOT", tmp_path)
+    monkeypatch.setattr(documents, "ROOT", tmp_path / "docs")
+    (tmp_path / ("b" * 32 + ".mp3")).write_bytes(b"ID3")
+    (tmp_path / ("b" * 32 + ".json")).write_text('{"title": "Saturn", "artist": "SZA", "file": "' + "b" * 32 + '.mp3"}')
+    await pool.execute("TRUNCATE playlists CASCADE")
+    await stage.show("image", {"url": "https://example.com/kucing.jpg", "title": "Kucing oren"}, "Kucing oren")
+    await stage.show("music", {"title": "x", "artist": "", "url": "/api/v1/media/" + "b" * 32}, "x")  # not a new item
+    doc = await documents.create("Draf email — Re: Publikasi", "docx", "# Draf\n\nHalo", "test")
+    items = await library.items()
+    kinds = {i["kind"]: i for i in items}
+    assert set(kinds) == {"gambar", "musik", "draf"} and kinds["gambar"]["title"] == "Kucing oren"
+    assert [i["title"] for i in await library.items("musik")] == ["Saturn"]
+    assert [i["title"] for i in await library.items(query="publikasi")] == ["Draf email — Re: Publikasi"]
+    # show again → the same panel on the phone
+    await stage.show("text", {"text": "lain"}, "lain")
+    await library.show(kinds["gambar"]["key"])
+    assert stage.current()["panel"] == "image" and stage.current()["payload"]["title"] == "Kucing oren"
+    # starred songs survive the 30-day purge
+    import os
+    for f in tmp_path.iterdir():
+        if f.is_file():
+            os.utime(f, (0, 0))
+    await library.keep(kinds["musik"]["key"], True, "test")
+    assert await library.purge_media() == 0 and (await library.items("musik"))[0]["kept"]
+    # delete removes the file too
+    assert await library.delete(f"doc:{doc['id']}", "test")
+    assert not await library.items("draf") and not list((tmp_path / "docs").glob("*.docx"))
+    with pytest.raises(library.LibraryError):
+        await library.delete("../etc:passwd", "test")

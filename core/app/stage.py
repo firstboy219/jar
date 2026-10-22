@@ -132,6 +132,8 @@ async def show(panel: str, payload: dict, caption: str = "", actor: str = "jarvi
              "payload": payload, "caption": caption[:200], "at": time.time()}
     _current = event
     delivered = await hub.broadcast(event)
+    from . import library
+    await library.record(panel, payload, caption)  # Simpanan: shown again later
     await audit.record(actor, "stage.show", None, panel=panel, delivered=delivered)
     return {"id": event["id"], "delivered": delivered}
 

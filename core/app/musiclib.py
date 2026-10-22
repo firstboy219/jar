@@ -157,14 +157,14 @@ async def soundcloud_mp3(query: str, accept: Callable[[dict], bool]) -> dict:
         raise ValueError(f"SoundCloud gagal ({type(e).__name__})") from e
 
 
-def purge_old(days: int = 30) -> int:
+def purge_old(days: int = 30, keep: set[str] | frozenset = frozenset()) -> int:
     """Songs and sounds fetched for the owner are kept for a month (disk space); returns files removed."""
     import time
     if not ROOT.is_dir():
         return 0
     cutoff, removed = time.time() - days * 86400, 0
     for f in ROOT.iterdir():
-        if f.is_file() and f.stat().st_mtime < cutoff:
+        if f.is_file() and f.stat().st_mtime < cutoff and f.stem not in keep:  # starred in Simpanan: kept
             f.unlink(missing_ok=True)
             removed += 1
     return removed
