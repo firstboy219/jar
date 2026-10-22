@@ -89,18 +89,19 @@ services:
       - jarvis-tools
 
   # 2a. LOCAL MODELS (llama.cpp, Qwen3.5). Default AI when no cloud key/credit (decision 2026-10-21).
-  # Measured on this CPU: 2B ~42 tok/s read, ~7 tok/s write, and with the static prompt prefix cached
-  # a chat reply in ~1.5 s; 4B ~20 / ~4.7 tok/s. Shared memory via mmap; models: scripts/get-models.sh.
+  # Both servers run Qwen3.5-4B Q4_K_M (same file, shared via mmap). The chat model was the 2B until 2026-10-22:
+  # replaying 12 real requests through the main agent's prompt, the 4B chose the right action 9/12 vs 7/12 but
+  # answers in ~41 s instead of ~16 s (warm) — the owner chose correctness (ADR-033). Models: scripts/get-models.sh.
   llama-chat: # CPU class 1: answers the owner (small context, prompt cache)
     image: ghcr.io/ggml-org/llama.cpp:server-b11749
     container_name: jarvis-llm-chat
     restart: always
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     cpu_shares: 1024
-    mem_limit: 3g
-    # --mmproj: the 2B model can SEE (photos the owner attaches, camera, shared screen). Measured: a 450×1000 picture
-    # = 459 tokens ≈ 55 s on this CPU; text in pictures is read almost perfectly (ADR-032).
-    command: ["-m", "/models/Qwen3.5-2B-Q4_0.gguf", "--mmproj", "/models/mmproj-2B-F16.gguf", "-c", "16384", "-np", "1", "-t", "4",
+    mem_limit: 5g # 4B 2.7 GB + vision projector 0.7 GB + KV + 1 GB prompt cache
+    # --mmproj: the chat model can SEE (photos the owner attaches, camera, shared screen). Measured with the 4B: a
+    # 450×1000 picture (459 tokens) took 279 s under load (2B: 55 s); text in pictures is read almost perfectly.
+    command: ["-m", "/models/Qwen3.5-4B-Q4_K_M.gguf", "--mmproj", "/models/mmproj-4B-F16.gguf", "-c", "16384", "-np", "1", "-t", "4",
               "-ctk", "q8_0", "-ctv", "q8_0",
               "--jinja", "--host", "0.0.0.0", "--port", "8080", "--no-webui",
               "--slot-save-path", "/slots", "--cache-ram", "1024", "--alias", "qwen-lokal"]

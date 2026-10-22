@@ -425,3 +425,10 @@ Background work still waits for the owner's own work and runs one task at a time
   opt-in (`MEETING_ENHANCE`), not on; (5) unsure segments are
   marked `[?]` and never become decisions or tasks; (6) "Pembicara 2" can be renamed in the app (minutes, search
   index rebuilt); (7) a recording abandoned for 20 minutes is processed automatically.
+
+## ADR-033 — The chat model is now Qwen3.5-4B Q4_K_M (2026-10-22)
+Owner's decision after a replay of 12 real requests through the main agent's own prompt and tools: 4B chose the
+right action 9/12 (2B: 7/12 — its misses were promises without action, small talk where a task was due, a missed
+"stay silent"), at ~41 s warm median instead of ~16 s; first turn after a restart ~4–5 min. Pictures: 4B + projector
+~4–5 min per picture under load (2B: ~1 min). Both llama servers load the same GGUF (mmap'd once). The 2B file stays
+on disk as a fallback (switch back in docker-compose.yml).
