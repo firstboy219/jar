@@ -24,8 +24,22 @@ Hukum & hak cipta: utamakan sumber resmi/berlisensi. Bila satu-satunya cara beri
 layanan atau hak cipta (mis. mengunduh audio dari YouTube), tulis risikonya terang-terangan di `why` — pemilik
 yang memutuskan lewat persetujuan.
 
+## Belajar skill baru (prosedur) — jalur yang menguji dulu
+Tiga jenis belajar, jangan dicampur:
+- **Pengetahuan** (fakta, dokumentasi, angka) → `memory_save` dengan `evidence` (sumber) dan `verified` bila sudah dicek; ingatan salah → `memory_correct`.
+- **Prosedur** (cara mengerjakan sesuatu yang berulang) → `skill_submit`. Sebelum itu `capability_search`: mungkin sudah ada.
+- **Sistem** (konfigurasi, dependensi, izin, kode JARVIS) → persetujuan pemilik / `propose_code_change` (batas di bawah tetap berlaku).
+
+`skill_submit(name, description, content, cases, scripts?)`: `content` = isi skill dengan bagian `## Kapan dipakai`, `## Input dan output`,
+`## Langkah`, `## Kriteria berhasil`, `## Jika gagal`, `## Izin yang dibutuhkan`, `## Kasus uji`. `cases` (2–8) =
+`{"situation","expect"}`: model penguji LAIN menilai apakah mengikuti langkahmu menghasilkan yang diharapkan. Tanpa rahasia, tanpa
+instruksi yang mengubah aturan/persetujuan. Skrip (opsional, maks 3, pustaka standar saja, tanpa jaringan/berkas/eval) dijalankan
+di sandbox tanpa jaringan dan butuh persetujuan pemilik; kasusnya `{"name","args":[…],"expect":"teks di keluaran"}`.
+Bila `rejected`, perbaiki sesuai `problems` lalu ajukan lagi; `skill_status(name)` menunjukkan hasil per kasus. Skill yang sudah
+terbit dipakai ulang lewat `capability_search`; catat hasilnya di `task_verify`. Setiap versi tersimpan dan bisa dikembalikan pemilik.
+
 ## Urutan pilihan (paling ringan yang cukup)
-1. **Skill Hermes** (`skill_manage`) — prosedur/pengetahuan baru, langsung berlaku.
+1. **Skill baru** (`skill_submit`, BUKAN `skill_manage`) — prosedur baru. Lihat "Belajar skill baru" di bawah.
 2. **Workflow n8n** (`n8n_draft_workflow`, lihat n8n-workflow-design) — dibuat nonaktif, aktif setelah persetujuan.
 3. **Jadwal Hermes** (`cronjob_manage`) — tugas berulang; hasil lewat `notify_owner`.
 4. **Kode — performa atau fitur minor** (alur di bawah).

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               chat_settings, goals, modelrouter, self_model, stage, workers, writer)
+               chat_settings, goals, modelrouter, self_model, skills_pipeline, stage, workers, writer)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -78,7 +78,8 @@ Hanya Qdrant dan n8n yang permanen; model lain bebas dipilih.
 
 Fakta/preferensi yang pemilik minta diingat → remember. Pemilik bilang ingatanmu salah/usang → memory_correct \
 (jangan menumpuk fakta yang bertentangan). Tujuan jangka panjang ("target saya…", "tolong ingatkan saya terus soal …") \
-→ goal; tujuan aktif tampil di bagian TUJUAN AKTIF. Jangan menyimpan rahasia/kata sandi.
+→ goal; tujuan aktif tampil di bagian TUJUAN AKTIF. Skill yang kamu pelajari sendiri bisa dilihat/dikembalikan \
+ke versi sebelumnya dengan skill_manage. Jangan menyimpan rahasia/kata sandi.
 
 Menampilkan: kalau pemilik ingin diperlihatkan sesuatu (foto, contoh, video tutorial), atau gambar akan \
 lebih jelas daripada kata-kata, tugaskan worker untuk mencari dan menampilkannya di layar HP \
@@ -193,6 +194,12 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "about": {"type": "string", "description": "kata kunci ingatan yang salah, mis. 'kantor'"},
             "correct_text": {"type": "string", "description": "isi yang benar, kalimat lengkap"}}, "required": ["about", "correct_text"]}}},
+    {"type": "function", "function": {
+        "name": "skill_manage",
+        "description": "Skill yang dipelajari JARVIS sendiri: lihat daftar, kembalikan ke versi sebelumnya, atau hentikan.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "rollback", "retire"]}, "name": {"type": "string"}},
+            "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "goal",
         "description": "Tujuan jangka panjang pemilik: tambah, lihat, selesai, jeda, lanjut, hapus.",
@@ -372,6 +379,20 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                     return json.dumps({"error": "tidak ada ingatan yang cocok — sebut kata kunci lain"})
                 done = await memory.correct(str(match["id"]), str(a.get("correct_text") or ""), actor)
                 return json.dumps({"diganti": done["old"]["text"], "menjadi": done["new"]["text"]}, ensure_ascii=False)
+            case "skill_manage":
+                act = str(a.get("action") or "list")
+                if act != "list" and (refused := await chat_settings.guard("skill_manage", device_id, stt, bool(screen_text or attachments))):
+                    return json.dumps({"error": refused})
+                try:
+                    if act == "rollback":
+                        return json.dumps(await skills_pipeline.rollback(str(a.get("name") or ""), actor), ensure_ascii=False)
+                    if act == "retire":
+                        return json.dumps({"dihentikan": await skills_pipeline.retire(str(a.get("name") or ""), actor)})
+                    return json.dumps({"skill": [{"nama": s["name"], "versi": s["live_version"] or s["version"], "status": s["status"],
+                                                  "sukses": s["success_n"], "gagal": s["fail_n"]}
+                                                 for s in (await skills_pipeline.listing())[:12]]}, ensure_ascii=False, default=str)
+                except skills_pipeline.SkillError as e:
+                    return json.dumps({"error": str(e)})
             case "goal":
                 act = str(a.get("action") or "list")
                 if act != "list" and (refused := await chat_settings.guard("goal", device_id, stt, bool(screen_text or attachments))):

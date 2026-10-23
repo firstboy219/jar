@@ -575,3 +575,19 @@ other than the author). Bug found by the tests: `openrouter/free` was counted as
   earlier one starts with "TUGAS SERUPA PERNAH DIKERJAKAN" (older than 30 days: marked possibly outdated); failures older
   than 180 days are pruned. New `goals` (active/paused/done, priority 1–5, due date): the main agent tool `goal`, active
   goals shown every turn, `/admin/goals`.
+- **Sprint 4 (2026-10-23) — learning skills safely.** `skills_pipeline.py`, migration 020, `skill-sandbox.sh` +
+  `jarvis-skill.path/.service`. Three kinds of learning stay apart: knowledge → memory with source; PROCEDURE → a skill
+  through `skill_submit` (Hermes is told in `jarvis-self-development` to use it instead of `skill_manage`); system changes →
+  approvals / `dev.py` as before. A submitted skill is validated deterministically (name, required sections — kapan
+  dipakai, input/output, langkah, kriteria berhasil, jika gagal, izin, kasus uji —, size, no secrets, no policy-changing
+  or dangerous instructions such as "abaikan aturan" / "matikan persetujuan" / `curl | sh`, scripts limited to an
+  import allowlist with no `open`/`eval`/network), then judged case by case by a model that is not the author (category
+  `review`, created by migration with GLM 5.3 Flash — cheap and different — plus the local fallback; a model that cannot
+  answer counts as a failed case). Skills with scripts are run in a throwaway container (no network, 128 MB, ½ CPU, 64
+  processes, read-only filesystem, no capabilities, user 65534, 20 s; verified live: network blocked, writes refused,
+  memory hog killed, no credentials) by a root runner on the host — core never holds the docker socket. Instruction-only
+  skills that pass are published (written to `data/hermes/skills/jarvis-learned`, which Hermes reads) and the owner is
+  told; skills with scripts also wait for the owner's approval (kind `skill_publish`, with the test summary). Each published
+  version is kept (`capability_versions`, with cases/results/scripts); `rollback` restores the previous one as a new version,
+  `retire` removes the folder. A failed use marks a capability untested again. Limits: 12 submissions a day. Hermes' lean profile
+  now treats every folder starting with `jarvis` as its own. Main agent tool `skill_manage` (list/rollback/retire), `/admin/skills`.

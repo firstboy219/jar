@@ -1650,7 +1650,7 @@ async def test_registry_finds_skills_by_meaning_versions_changes_and_keeps_score
     assert await capabilities.record("skill:riset-bersumber", True, 0.002, verified=True)
     await capabilities.record("skill:riset-bersumber", False, 0.001)
     row = await pool.fetchrow("SELECT tested, success_n, fail_n, runs FROM capabilities WHERE id = 'skill:riset-bersumber'")
-    assert (row["tested"], row["success_n"], row["fail_n"], row["runs"]) == (True, 1, 1, 2)
+    assert (row["tested"], row["success_n"], row["fail_n"], row["runs"]) == (False, 1, 1, 2)  # the failure: to be validated again
     assert "berhasil 1 dari 2" in await capabilities.brief_for("riset sumber terpercaya")
     # the skill changes → version 2, untested again, the old text stays
     (skill / "SKILL.md").write_text('---\nname: riset-bersumber\ndescription: "riset web sumber terpercaya tanggal kutipan"\nversion: 1.1.0\n---\n# v2 baru')
@@ -1763,3 +1763,111 @@ async def test_episodes_goals_and_repeated_tasks(pool, monkeypatch):
         await goals.add("x", "owner", 9)
     done = await goals.update(g1["id"], "owner", status="done")
     assert done["status"] == "done" and await goals.situation_block() == ""
+
+
+async def _settle(pool, name, want, tries=100):
+    import asyncio
+    for _ in range(tries):
+        status = await pool.fetchval("SELECT status FROM skill_drafts WHERE name = $1 ORDER BY id DESC LIMIT 1", name)
+        if status in want:
+            return status
+        await asyncio.sleep(0.03)
+    return status
+
+
+async def test_learning_a_skill_validate_evaluate_publish_version_rollback(pool, monkeypatch, tmp_path):
+    from app import capabilities, skills_pipeline as sp
+    from tests.test_unit import CASES, GOOD_BODY
+    monkeypatch.setattr(sp, "LEARNED_DIR", tmp_path / "learned")
+    monkeypatch.setattr(sp, "SANDBOX_DIR", tmp_path / "sandbox")
+    await pool.execute("TRUNCATE skill_drafts, capabilities, reports CASCADE")
+    verdicts = {"ok": True}
+
+    async def judge(messages, category="cepat", max_tokens=300, caller="core", private=False, temperature=0.4):
+        assert category in ("review", "analisis") and caller == "skills" and temperature == 0.0
+        return '{"ok": true, "alasan": "tercakup"}' if verdicts["ok"] else '{"ok": false, "alasan": "langkah tidak mencakup"}'
+    monkeypatch.setattr(sp.llm, "complete", judge)
+    desc = "Membuat laporan tren produk dari sebuah platform beserta rekomendasi"
+    # rejected: nothing is written, the reasons come back so Hermes can fix it
+    r = await sp.submit("laporan-tren", desc, "# kosong", CASES, None)
+    assert r["status"] == "rejected" and any("bagian wajib" in p for p in r["problems"])
+    assert not (tmp_path / "learned").exists()
+    # accepted and evaluated by the (other) model → published, tested, own, versioned, the owner told
+    r = await sp.submit("laporan-tren", desc, GOOD_BODY, CASES, None)
+    assert r["status"] == "evaluating" and await _settle(pool, "laporan-tren", {"published", "failed_tests"}) == "published"
+    skill_md = (tmp_path / "learned" / "laporan-tren" / "SKILL.md").read_text()
+    assert skill_md.startswith("---\nname: laporan-tren") and "## Langkah" in skill_md and "version: 1.0.0" in skill_md
+    cap = await pool.fetchrow("SELECT tested, own, version, status FROM capabilities WHERE id = 'skill:laporan-tren'")
+    assert (cap["tested"], cap["own"], cap["version"], cap["status"]) == (True, True, 1, "published")
+    assert "Aku belajar skill baru: laporan-tren" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
+    # a second version (improved) → v2; then rollback restores v1's text as v3 and keeps the history
+    await sp.submit("laporan-tren", desc, GOOD_BODY.replace("5 produk", "10 produk"), CASES, None)
+    await _settle(pool, "laporan-tren", {"published"}, tries=5)
+    for _ in range(100):
+        if await pool.fetchval("SELECT version FROM capabilities WHERE id = 'skill:laporan-tren'") == 2:
+            break
+        await __import__("asyncio").sleep(0.03)
+    assert "10 produk" in (tmp_path / "learned" / "laporan-tren" / "SKILL.md").read_text()
+    back = await sp.rollback("laporan-tren", "test")
+    assert back == {"name": "laporan-tren", "restored": 1, "version": 3}
+    restored = (tmp_path / "learned" / "laporan-tren" / "SKILL.md").read_text()
+    assert "5 produk" in restored and "10 produk" not in restored
+    assert await pool.fetchval("SELECT count(*) FROM capability_versions WHERE capability_id = 'skill:laporan-tren'") == 3
+    with pytest.raises(sp.SkillError):
+        await sp.rollback("belum-ada", "test")
+    assert await sp.retire("laporan-tren", "test") and not (tmp_path / "learned" / "laporan-tren").exists()
+    assert await pool.fetchval("SELECT status FROM capabilities WHERE id = 'skill:laporan-tren'") == "deprecated"
+    # a skill the other model does not believe in is not published; a model that cannot answer counts as failing
+    verdicts["ok"] = False
+    await sp.submit("skill-lemah", desc, GOOD_BODY, CASES, None)
+    assert await _settle(pool, "skill-lemah", {"published", "failed_tests"}) == "failed_tests"
+    assert not (tmp_path / "learned" / "skill-lemah").exists()
+    assert any("langkah tidak mencakup" in p for p in (await sp.status("skill-lemah"))["problems"])
+    # a failed use makes any capability "untested" again
+    await capabilities._upsert("skill:x-y", "skill", "x-y", "desc skill")
+    await capabilities.record("skill:x-y", True, verified=True)
+    assert await pool.fetchval("SELECT tested FROM capabilities WHERE id = 'skill:x-y'") is True
+    await capabilities.record("skill:x-y", False)
+    assert await pool.fetchval("SELECT tested FROM capabilities WHERE id = 'skill:x-y'") is False
+
+
+async def test_a_skill_with_scripts_runs_in_the_sandbox_and_needs_the_owners_approval(pool, monkeypatch, tmp_path):
+    import json
+    from app import approvals, skills_pipeline as sp
+    from tests.test_unit import GOOD_BODY
+    monkeypatch.setattr(sp, "LEARNED_DIR", tmp_path / "learned")
+    monkeypatch.setattr(sp, "SANDBOX_DIR", tmp_path / "sandbox")
+    await pool.execute("TRUNCATE skill_drafts, capabilities, approvals CASCADE")
+    desc = "Menghitung total dari angka yang diberikan lewat argumen"
+    code = "import sys\nprint(sum(float(a) for a in sys.argv[1:]))\n"
+    cases = [{"name": "dua angka", "args": ["1", "2"], "expect": "3"}, {"name": "tiga angka", "args": ["1", "2", "3"], "expect": "6"}]
+    r = await sp.submit("hitung-total", desc, GOOD_BODY, cases, {"scripts/main.py": code})
+    assert r["status"] == "evaluating"
+    assert await _settle(pool, "hitung-total", {"sandbox_testing"}) == "sandbox_testing"
+    req = json.loads((tmp_path / "sandbox" / "requests" / f"{r['draft_id']}.json").read_text())
+    assert req["files"] == {"scripts/main.py": code} and req["cases"] == cases and req["name"] == "hitung-total"
+    assert await sp.poll() == 0  # no result yet
+    # the runner answers: one case failed → not offered to the owner
+    (tmp_path / "sandbox" / "results").mkdir()
+    (tmp_path / "sandbox" / "results" / f"{r['draft_id']}.json").write_text(json.dumps({"cases": [
+        {"name": "dua angka", "ok": True, "exit": 0, "stdout": "3.0"}, {"name": "tiga angka", "ok": False, "exit": 1, "stdout": "", "note": "ValueError"}]}))
+    assert await sp.poll() == 1
+    assert (await sp.status("hitung-total"))["status"] == "failed_tests"
+    # a fixed version passes → an approval request with the test summary; nothing is published until the owner approves
+    r2 = await sp.submit("hitung-total", desc, GOOD_BODY, cases, {"scripts/main.py": code + "# v2\n"})
+    await _settle(pool, "hitung-total", {"sandbox_testing"})
+    (tmp_path / "sandbox" / "results" / f"{r2['draft_id']}.json").write_text(json.dumps({"cases": [
+        {"name": "dua angka", "ok": True, "exit": 0, "stdout": "3.0"}, {"name": "tiga angka", "ok": True, "exit": 0, "stdout": "6.0"}]}))
+    assert await sp.poll() == 1
+    st = await sp.status("hitung-total")
+    assert st["status"] == "awaiting_approval" and st["approval_id"]
+    ap = await approvals.get(st["approval_id"])
+    assert ap["kind"] == "skill_publish" and "2/2 lulus di sandbox" in ap["detail"]["tests"] and ap["detail"]["scripts"] == ["scripts/main.py"]
+    assert not (tmp_path / "learned" / "hitung-total").exists()
+    await approvals.decide(st["approval_id"], True, "owner")
+    assert (tmp_path / "learned" / "hitung-total" / "scripts" / "main.py").read_text().endswith("# v2\n")
+    assert (await sp.status("hitung-total"))["status"] == "published"
+    # the daily limit bounds how much JARVIS can spend learning
+    monkeypatch.setattr(sp, "DAILY_LIMIT", 1)
+    with pytest.raises(sp.SkillError, match="batas"):
+        await sp.submit("skill-lain", desc, GOOD_BODY, cases, None)

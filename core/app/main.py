@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, attachments, audit, auditor, awareness, capabilities, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, capabilities, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -115,6 +115,7 @@ async def lifespan(app: FastAPI):
                     last_maintained = datetime.now(awareness.WIB).date()  # memory upkeep once a night (ADR-040)
                     log.info("memory upkeep: %s, old failed episodes pruned: %s", await memory.maintain(), await episodes.prune())
                 await dev.poll()
+                await skills_pipeline.poll()  # sandbox results of skills being tested
                 await perf.watch_recurring_errors()
                 if (await ops.background_ok())[0] and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
                     await auditor.run()
@@ -708,6 +709,29 @@ async def internal_attachment_see(attachment_id: str, body: SeeIn, request: Requ
         raise HTTPException(404, str(e))
 
 
+class SkillSubmitIn(BaseModel):
+    name: str = Field(min_length=3, max_length=41)
+    description: str = Field(min_length=15, max_length=300)
+    content: str = Field(min_length=50, max_length=20_000)
+    cases: list[dict] = Field(min_length=2, max_length=8)
+    scripts: dict[str, str] = Field(default_factory=dict, max_length=3)
+
+
+@app.post("/internal/skills/submit")
+async def internal_skill_submit(body: SkillSubmitIn, request: Request):
+    _tools_auth(request)
+    try:
+        return await skills_pipeline.submit(body.name, body.description, body.content, body.cases, body.scripts)
+    except skills_pipeline.SkillError as e:
+        raise HTTPException(429, str(e))
+
+
+@app.get("/internal/skills/{name}")
+async def internal_skill_status(name: str, request: Request):
+    _tools_auth(request)
+    return jsonable(await skills_pipeline.status(name))
+
+
 @app.get("/internal/capabilities/search")
 async def internal_capability_search(request: Request, q: str = "", limit: int = 5):
     _tools_auth(request)
@@ -1219,6 +1243,24 @@ async def admin_library_delete(key: str, actor: str = admin):
         return {"deleted": await library.delete(key, actor)}
     except library.LibraryError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/admin/skills")
+async def admin_skills(_: str = admin):
+    return jsonable({"skills": await skills_pipeline.listing()})
+
+
+@app.post("/admin/skills/{name}/rollback")
+async def admin_skill_rollback(name: str, actor: str = admin):
+    try:
+        return await skills_pipeline.rollback(name, actor)
+    except skills_pipeline.SkillError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/admin/skills/{name}/retire")
+async def admin_skill_retire(name: str, actor: str = admin):
+    return {"retired": await skills_pipeline.retire(name, actor)}
 
 
 @app.get("/admin/goals")

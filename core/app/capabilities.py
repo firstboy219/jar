@@ -167,7 +167,8 @@ async def record(cap_id: str, ok: bool, cost_usd: float = 0.0, verified: bool = 
     """One use of a capability: success/failure, its cost; a verified success marks it tested."""
     done = await db.pool().execute(
         """UPDATE capabilities SET runs = runs + 1, success_n = success_n + $2, fail_n = fail_n + $3,
-                  cost_usd = cost_usd + $4, tested = tested OR $5, updated_at = now() WHERE id = $1""",
+                  cost_usd = cost_usd + $4, tested = CASE WHEN $2 = 0 THEN false ELSE tested OR $5 END,  -- a failure: validate again
+                  updated_at = now() WHERE id = $1""",
         cap_id, 1 if ok else 0, 0 if ok else 1, cost_usd, bool(ok and verified))
     return done.endswith(" 1")
 

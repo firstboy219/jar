@@ -56,7 +56,16 @@ async def _exec_task_budget(detail: dict) -> dict:
     return {"task": detail["task_id"], "added_usd": detail["add_usd"]}
 
 
+async def _exec_skill_publish(detail: dict) -> dict:
+    from . import reports, skills_pipeline
+    done = await skills_pipeline.publish(int(detail["draft_id"]), "owner-approval")
+    await reports._create(None, "system", f"Skill baru '{done['name']}' (v{done['version']}) sudah terbit setelah kamu setujui. "
+                          "Bisa dibatalkan di Lainnya → Skills & Belajar.")
+    return done
+
+
 EXECUTORS: dict[str, Executor] = {
+    "skill_publish": _exec_skill_publish,
     "task_budget": _exec_task_budget,
     "manual": _exec_manual,
     "code_change": _exec_code_change,

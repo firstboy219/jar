@@ -97,7 +97,7 @@ if PROFILE == "lean":
             entry["model"] = "jarvis-cepat"
     hidden = []
     for root, _, files in os.walk(skills_root):
-        if "SKILL.md" in files and os.path.relpath(root, skills_root).split(os.sep)[0] != "jarvis":
+        if "SKILL.md" in files and not os.path.relpath(root, skills_root).split(os.sep)[0].startswith("jarvis"):  # jarvis + jarvis-learned
             for line in open(os.path.join(root, "SKILL.md"), errors="replace").read().splitlines()[:15]:
                 if line.startswith("name:"):
                     hidden.append(line.split(":", 1)[1].strip().strip('"\''))

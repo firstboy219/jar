@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch for skills JARVIS wants tested in the sandbox
+
+[Path]
+PathExistsGlob=/home/ubuntu/my-project/infra/data/skills/requests/*.json
+
+[Install]
+WantedBy=multi-user.target

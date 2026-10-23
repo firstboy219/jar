@@ -305,6 +305,26 @@ async def memory_correct(memory_id: str, correct_text: str, evidence: str = "") 
 
 
 @mcp.tool()
+async def skill_submit(name: str, description: str, content: str, cases: list[dict], scripts: dict[str, str] | None = None) -> dict:
+    """Teach JARVIS a new skill (a PROCEDURE; facts go to memory_save with evidence). Do NOT write skills with skill_manage:
+    this is the path that tests them first. `content` = the skill body in Markdown with these '## ' sections: Kapan dipakai,
+    Input dan output, Langkah, Kriteria berhasil, Jika gagal, Izin yang dibutuhkan, Kasus uji. `cases` (2–8) =
+    [{"situation": "...", "expect": "..."}] — a different model checks that following the steps gives the expected
+    result. `scripts` (optional, max 3) = {"scripts/main.py": "…"} pure stdlib helpers (no network, no files, no eval);
+    then cases are [{"name", "args": [...], "expect": "text that must appear in the output"}] and they run in a sandbox,
+    and the owner must approve. Returns rejected+problems (fix and resubmit) or evaluating (poll skill_status)."""
+    return await _core("POST", "/internal/skills/submit",
+                       json={"name": name, "description": description, "content": content, "cases": cases, "scripts": scripts or {}})
+
+
+@mcp.tool()
+async def skill_status(name: str) -> dict:
+    """Where a submitted skill stands: rejected / evaluating / sandbox_testing / failed_tests / awaiting_approval /
+    published, with the problems or per-case results so you can revise it."""
+    return await _core("GET", f"/internal/skills/{name}")
+
+
+@mcp.tool()
 async def goals_list() -> list[dict]:
     """The owner's active long-term goals, most important first (for planning and prioritising)."""
     from . import goals

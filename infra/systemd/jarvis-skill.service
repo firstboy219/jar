@@ -1,0 +1,11 @@
+[Unit]
+Description=JARVIS skill sandbox (runs a learned skill's scripts in a throwaway container without network)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=900
+ExecStart=/home/ubuntu/my-project/infra/scripts/skill-sandbox.sh
+StandardOutput=append:/home/ubuntu/my-project/infra/data/skills/runner.log
+StandardError=append:/home/ubuntu/my-project/infra/data/skills/runner.log
