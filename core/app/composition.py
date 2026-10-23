@@ -270,6 +270,28 @@ def _price_text(m: dict | None) -> str:
     return "gratis" if m["free"] else f"${m['price_in']:g} masuk / ${m['price_out']:g} keluar per 1 juta token"
 
 
+async def _probe(model: str) -> str | None:
+    """One small REAL request to the model: the catalog lists models that OpenRouter then refuses (a ':free' one
+    "only for agentic harnesses" → HTTP 403 on every chat turn, which sent JARVIS to the slow local model).
+    Returns the reason when the model is refused outright, None when it works or cannot be judged (no credit,
+    rate limit, network)."""
+    import httpx
+    from .config import settings
+    if not settings.openrouter_api_key:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=45) as c:
+            r = await c.post("https://openrouter.ai/api/v1/chat/completions",
+                             headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                             json={"model": model, "messages": [{"role": "user", "content": "Balas satu kata: siap"}], "max_tokens": 200})
+        if r.status_code in (400, 403, 404, 422):
+            msg = str((r.json().get("error") or {}).get("message") or r.text)[:160]
+            return f"OpenRouter menolak model ini (HTTP {r.status_code}): {msg}"
+    except (httpx.HTTPError, ValueError):
+        pass
+    return None
+
+
 async def set_model(category: str, model: str, actor: str, *, provider: str = OR, role: str = "utama",
                     confirmed: bool = False) -> dict:
     """Make `model` the main (role 'utama') or a fallback ('cadangan') of one category; the rest of its chain stays.
@@ -298,6 +320,8 @@ async def set_model(category: str, model: str, actor: str, *, provider: str = OR
                         "say": f"{info['name']} mahal ({_price_text(info)}). Tetap pakai untuk {category}?"}
     elif provider not in await gateway.providers():
         raise CompositionError(f"penyedia tidak dikenal: {provider}")
+    if provider == OR and (problem := await _probe(model)):
+        raise CompositionError(problem)
     old = cats[category]["routes"] or []
     entry = {"provider": provider, "model": model}
     rest = [x for x in old if x != entry]

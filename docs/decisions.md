@@ -505,3 +505,11 @@ change settings on request ("dia bingung mengerjakan sesuatu yang belum pernah d
 - APK 0.13.0: Komposisi AI shows each category's chain with name and price, "Ganti model utama" / "+ Cadangan"
   open the full-screen picker (search, Gratis / Bisa alat / Bisa lihat gambar, sort by price/newest/context/name),
   "Cek OpenRouter", editable monthly budget.
+- **Addendum (2026-10-23): a dead pick must never mean the slow local model.** The owner picked
+  `thinkingmachines/inkling:free` for chat: OpenRouter lists it but answers HTTP 403 ("only available on agentic
+  harnesses"); with a one-route chain every message failed in 50 ms and then waited 2–7 min on the local CPU (web and
+  productivity also had a 404 model, vision a rate-limited one). Now: `composition.set_model` sends one real request
+  (`_probe`) and refuses a model OpenRouter rejects outright (400/403/404/422); the gateway skips such a model for
+  10 minutes (`gateway._mark_failed`); and when the chosen models fail, a cheap cloud safety net
+  (`gateway.SAFETY_MODEL`, setting `composition:safety_model`, never for /privat or vision) answers before the
+  local model. Chat replies went from minutes to 1.4–3.6 s.

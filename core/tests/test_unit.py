@@ -674,3 +674,11 @@ def test_openrouter_health_a_402_is_final_until_a_real_call_works():
     assert judge(None, None, stale_zero)["working"] is False and "HABIS" in judge(None, None, stale_zero)["text"]  # tiny probes prove nothing
     assert judge(None, None, {"credits": 10, "usage": 1, "remaining": 9})["working"] is True
     assert judge(None, None, None)["working"] is None
+
+
+def test_gateway_skips_models_the_provider_refuses_outright():
+    from app.gateway import refused_outright
+    assert refused_outright("openrouter/thinkingmachines/inkling:free: HTTP 403: {\"error\": …}")
+    assert refused_outright("openrouter/x/y: HTTP 404: Provider returned error")
+    assert not refused_outright("openrouter/x/y: HTTP 402: requires more credits")  # credit: not the model's fault
+    assert not refused_outright("openrouter/x/y: HTTP 429: rate limited") and not refused_outright("lokal/qwen: RemoteProtocolError")

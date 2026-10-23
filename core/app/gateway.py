@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -64,7 +65,28 @@ class Route:
         return {"provider": self.provider, "model": self.model, "cloud": self.cloud, "free": self.free}
 
 
-_cache: dict = {"at": 0.0, "providers": {}, "categories": {}}
+# When every model the owner chose for a category fails, a cheap cloud model answers BEFORE the slow local one
+# (a dead pick used to mean minutes on the CPU for every message). The owner can change it (composition:safety_model).
+SAFETY_MODEL = "deepseek/deepseek-v4-flash"
+BAD_FOR_S = 600  # a model OpenRouter refuses outright (400/403/404/422) is skipped for 10 minutes
+_bad: dict[tuple[str, str], float] = {}
+_cache: dict = {"at": 0.0, "providers": {}, "categories": {}, "safety": SAFETY_MODEL}
+
+
+def refused_outright(error_text: str) -> bool:
+    """HTTP 400/403/404/422 from a provider = this model will not work (not a passing hiccup like 402/429/5xx). Pure."""
+    m = re.match(r".*?HTTP (\d{3})", error_text or "")
+    return bool(m) and int(m.group(1)) in (400, 403, 404, 422)
+
+
+def _mark_failed(route: "Route", error_text: str) -> None:
+    if route.cloud and refused_outright(error_text):
+        _bad[(route.provider, route.model)] = time.monotonic() + BAD_FOR_S
+
+
+def _is_bad(route: "Route") -> bool:
+    until = _bad.get((route.provider, route.model))
+    return bool(until and until > time.monotonic())
 
 
 async def _load(force: bool = False) -> None:
@@ -72,7 +94,9 @@ async def _load(force: bool = False) -> None:
         return
     providers = {r["name"]: dict(r) for r in await db.pool().fetch("SELECT * FROM llm_providers")}
     categories = {r["name"]: dict(r) for r in await db.pool().fetch("SELECT * FROM llm_categories ORDER BY sort")}
-    _cache.update(at=time.monotonic(), providers=providers, categories=categories)
+    safety = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'composition:safety_model'")
+    _cache.update(at=time.monotonic(), providers=providers, categories=categories,
+                  safety=safety if isinstance(safety, str) and safety else SAFETY_MODEL)
 
 
 def invalidate() -> None:
@@ -97,6 +121,13 @@ def provider_key(provider: dict, caller: str = "") -> str:
         specific = CALLER_KEYS.get(caller, "OPENROUTER_KEY_LATAR")
         return os.getenv(specific, "").strip() or os.getenv(env, "").strip()
     return os.getenv(env, "").strip()
+
+
+def _safety_route(provs: dict, caller: str, category: str, private: bool) -> "Route | None":
+    p = provs.get("openrouter")
+    if private or category in ("privat", "penglihatan") or not p or not p["enabled"] or not provider_key(p, caller):
+        return None
+    return Route(p["name"], _cache.get("safety") or SAFETY_MODEL, p["base_url"].rstrip("/"), provider_key(p, caller), True, False)
 
 
 def has_key(provider: dict) -> bool:
@@ -126,8 +157,12 @@ async def plan(category: str, *, caller: str = "core", private: bool = False, wo
         route = Route(p["name"], str(r.get("model") or LOCAL_MODEL), p["base_url"].rstrip("/"), key, p["cloud"], p["vision"])
         if route.free and not cat.get("allow_free"):
             continue
-        if route not in routes:
+        if route not in routes and not _is_bad(route):
             routes.append(route)
+    net = _safety_route(provs, caller, category, private)
+    if net and net not in routes and not _is_bad(net):
+        first_local = next((i for i, r in enumerate(routes) if not r.cloud), len(routes))
+        routes.insert(first_local, net)
     routes = await budget.adjust(category, routes)
     # A local route the owner chose keeps its place; otherwise the matching local model is the last resort.
     if not any(not r.cloud for r in routes):
@@ -395,6 +430,7 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
             err = f"{route.label}: {e if isinstance(e, GatewayError) else type(e).__name__}"
             errors.append(err)
             log.warning("route failed, trying next: %s", err)
+            _mark_failed(route, err)
             if resp is not None:
                 await resp.aclose()
             await client.aclose()
@@ -468,6 +504,7 @@ async def _complete(category: str, body: dict, *, caller: str, session_id: str |
         except (httpx.HTTPError, GatewayError, ValueError) as e:
             err = f"{route.label}: {e if isinstance(e, GatewayError) else type(e).__name__}"
             errors.append(err)
+            _mark_failed(route, err)
             await _record(route, category, caller, {}, started, None, False, err, session_id)
             continue
         await _record(route, category, caller, data.get("usage") or {}, started, None, True, None, session_id)

@@ -33,6 +33,11 @@ async def pool(monkeypatch):
     async def no_catalog(force=False):  # tests never reach openrouter.ai: model ids are accepted unchecked unless a test opts in
         return None
     monkeypatch.setattr(openrouter, "catalog", no_catalog)
+    from app import composition as _composition
+
+    async def no_probe(model):  # the real one sends a request to openrouter.ai
+        return None
+    monkeypatch.setattr(_composition, "_probe", no_probe)
     from app import workers as _w
     _w._background_turn = None  # an asyncio.Lock belongs to one event loop (one per test)
     gateway.invalidate()
@@ -1368,3 +1373,31 @@ async def test_models_are_picked_from_the_catalog_and_changed_by_chat(pool, monk
 
 async def _async(value):
     return value
+
+
+async def test_dead_pick_is_refused_and_a_dead_route_falls_to_a_cloud_net_before_local(pool, monkeypatch):
+    from app import composition, gateway, openrouter
+    from tests.test_unit import CATALOG
+
+    async def catalog(force=False):
+        return CATALOG
+    monkeypatch.setattr(openrouter, "catalog", catalog)
+
+    async def refuse(model):
+        return "OpenRouter menolak model ini (HTTP 403): only available on agentic harnesses"
+    monkeypatch.setattr(composition, "_probe", refuse)
+    with pytest.raises(composition.CompositionError, match="menolak model ini"):
+        await composition.set_model("ngobrol", "deepseek/deepseek-v4-flash", "test")
+    # a route that is refused is skipped for a while; the safety net (cloud) comes before the local model
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    await pool.execute("UPDATE llm_categories SET routes = '[{\"provider\":\"openrouter\",\"model\":\"dead/model\"}]'::jsonb WHERE name = 'ngobrol'")
+    gateway.invalidate()
+    gateway._bad.clear()
+    before = [r.model for r in await gateway.plan("ngobrol")]
+    assert before[:2] == ["dead/model", gateway.SAFETY_MODEL] and before[-1] == "qwen-lokal"
+    gateway._mark_failed((await gateway.plan("ngobrol"))[0], "openrouter/dead/model: HTTP 403: nope")
+    after = [r.model for r in await gateway.plan("ngobrol")]
+    assert after[0] == gateway.SAFETY_MODEL and "dead/model" not in after and after[-1] == "qwen-lokal"
+    assert [r.model for r in await gateway.plan("ngobrol", private=True)] == ["qwen-lokal"]  # private never uses the cloud
+    assert all(r.model != gateway.SAFETY_MODEL for r in await gateway.plan("penglihatan"))
+    gateway._bad.clear()
