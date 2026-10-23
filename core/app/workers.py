@@ -10,7 +10,7 @@ import json
 import logging
 import re
 
-from . import approvals, audit, capabilities, db, gateway, hermes, hub, memory, modelrouter, quick, reports, writer
+from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, memory, modelrouter, quick, reports, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -84,7 +84,7 @@ async def _run(task_id: int, context: str) -> None:
     async with _sem_():
         row = await db.pool().fetchrow(
             "UPDATE tasks SET status = 'running', started_at = now(), phase = 'executing' WHERE id = $1 AND status = 'queued' "
-            "RETURNING id, title, instruction, session_id, kind, image, category, private", task_id)
+            "RETURNING id, title, instruction, session_id, kind, image, category, private, goal", task_id)
         if row is None:  # cancelled while queued
             return
         kind = row["kind"]
@@ -92,7 +92,9 @@ async def _run(task_id: int, context: str) -> None:
         # internal kinds carry their own instructions; the task number lets tools (ask_owner, documents) refer to it
         brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
         if kind == "owner":  # what JARVIS can already do for this, and how well it has worked (Blueprint §6.2 F: reuse first)
-            brief += await capabilities.brief_for(row["instruction"].split(quick.CONTEXT_MARK)[0])
+            asked = row["instruction"].split(quick.CONTEXT_MARK)[0]
+            brief += await capabilities.brief_for(asked)
+            brief += await episodes.brief_for(row["goal"] or asked)  # a repeated task starts from the last result
         if row["image"]:
             brief += ("Gambar terlampir adalah apa yang ditunjukkan pemilik (kamera/layar) saat memberi tugas ini.\n"
                       f"DESKRIPSI GAMBAR (oleh agen utama, karena model worker mungkin tidak bisa melihat): "
@@ -150,6 +152,7 @@ async def _run(task_id: int, context: str) -> None:
                 task_id, text, result.prompt_tokens, result.completion_tokens)
             await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "completed", "kind": kind})
             await _deliver(task_id, kind, row["title"], text, row["session_id"])
+            await _remember_episode(task_id)
         except asyncio.CancelledError:
             stopped = task_id in _stopping
             await db.pool().execute(
@@ -165,6 +168,7 @@ async def _run(task_id: int, context: str) -> None:
                 "UPDATE tasks SET status = 'failed', error = $2, finished_at = now() WHERE id = $1",
                 task_id, str(e)[:1000])
             await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "failed", "kind": kind})
+            await _remember_episode(task_id)  # the lesson of a failure is worth keeping too
             # Background understanding failing is not worth interrupting for; an empty balance is
             # reported once by billing.notify_exhausted instead of once per task.
             if kind in ("owner", "selfcheck") and "saldo OpenRouter habis" not in str(e):
@@ -280,6 +284,13 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
             from . import auditor
             await auditor.on_fix_done(task_id)
         await reports.from_task(task_id, title, result, session_id)
+
+
+async def _remember_episode(task_id: int) -> None:
+    try:
+        await episodes.record(task_id)
+    except Exception:
+        log.exception("episode for task %s not recorded", task_id)
 
 
 async def _verification_note(task_id: int) -> str:

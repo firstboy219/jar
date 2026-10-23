@@ -562,3 +562,16 @@ other than the author). Bug found by the tests: `openrouter/free` was counted as
   in front of the worker (`tasks.recovered`). Found by tests and live: jsonb values must be passed as Python objects
   (the db codec encodes them), and main.py used `assistant` without importing it (the sync failed and the
   self-improvement loop broke for a few minutes) — a static undefined-name test now guards every module.
+- **Sprint 3 (2026-10-23) — memory with provenance and a memory of experience.** Migration 019. `memories` gained
+  confidence, verified, evidence, superseded_by, last_used: a statement carries where it comes from and how far it is
+  trusted (assumptions 0.4, facts 0.7, preferences 0.8, verified ones rank higher; prompts mark assumptions and
+  unverified inferences). Near-identical text (≥0.95) is merged instead of stored twice. `memory.correct` saves the
+  corrected statement and marks the old one stale, pointing at its replacement (kept, so a correction can be undone);
+  the main agent has `memory_correct`, Hermes `memory_correct` / `memory_save(evidence, verified)`. Nightly upkeep (03:00
+  WIB, when the server is calm): merge duplicates, retire unused unverified assumptions after 60 days, delete replaced
+  unverified memories after 90 days; verified facts and preferences are never retired automatically. Secrets were already
+  refused by `sensitive.scan`. New episodic memory (`episodes`: goal, approach, result, success, cost, model, lesson,
+  with the goal's embedding): written when an owner task ends (a failure leaves its lesson); a task that resembles an
+  earlier one starts with "TUGAS SERUPA PERNAH DIKERJAKAN" (older than 30 days: marked possibly outdated); failures older
+  than 180 days are pruned. New `goals` (active/paused/done, priority 1–5, due date): the main agent tool `goal`, active
+  goals shown every turn, `/admin/goals`.

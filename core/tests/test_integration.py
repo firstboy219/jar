@@ -1700,3 +1700,66 @@ async def test_task_plan_verification_note_and_one_automatic_recovery(pool, monk
     # an empty balance is never "recovered" (it is reported once elsewhere); a second failure is final
     assert await workers._auto_recover(t2, {"title": "x"}, RuntimeError("saldo OpenRouter habis"), "") is False
     hub.reset()
+
+
+async def test_memory_merges_repeats_corrects_and_keeps_provenance(pool, monkeypatch):
+    from app import config, memory
+    monkeypatch.setattr(config.settings, "memory_collection", "test_memory_v2")
+    await pool.execute("TRUNCATE memories")
+    await memory.ensure_collection()
+    a = await memory.save("Kantor saya di NIPSEA Ancol, Jakarta Utara", "personal", "owner", "fact", verified=True, evidence="kata pemilik")
+    assert a["verified"] and a["evidence"] == "kata pemilik" and a["confidence"] == pytest.approx(0.7)
+    again = await memory.save("Kantor saya di NIPSEA Ancol, Jakarta Utara", "personal", "hermes", "fact", confidence=0.95)
+    assert again["deduped"] and str(again["id"]) == str(a["id"]) and again["confidence"] == pytest.approx(0.95) and again["verified"]
+    assert await pool.fetchval("SELECT count(*) FROM memories") == 1  # one memory, not two
+    guess = await memory.save("Pemilik mungkin suka rapat pagi hari", "personal", "hermes", "assumption")
+    assert guess["confidence"] == pytest.approx(0.4) and not guess["verified"]
+    # a correction: the new one is live, the old one stale and pointing at it, both kept
+    done = await memory.correct(str(a["id"]), "Kantor saya sekarang di Kuningan, Jakarta Selatan", "owner")
+    assert done["new"]["verified"] and done["new"]["confidence"] == pytest.approx(0.9)
+    old = await memory.get(str(a["id"]))
+    assert old["stale"] and str(old["superseded_by"]) == str(done["new"]["id"])
+    hits = await memory.search("di mana kantor saya?")
+    assert str(hits[0]["id"]) == str(done["new"]["id"]) and all(str(h["id"]) != str(a["id"]) for h in hits)
+    assert (await memory.best_match("kantor saya di mana"))["id"] == done["new"]["id"]
+    assert await pool.fetchval("SELECT last_used IS NOT NULL FROM memories WHERE id = $1", done["new"]["id"])
+    with pytest.raises(memory.MemoryError_):
+        await memory.correct("00000000-0000-0000-0000-000000000000", "x", "owner")
+    # upkeep: an unused old assumption is retired; a verified fact never is; an old replaced memory is deleted
+    await pool.execute("UPDATE memories SET created_at = now() - interval '70 days' WHERE id = $1", guess["id"])
+    await pool.execute("UPDATE memories SET updated_at = now() - interval '100 days' WHERE id = $1", a["id"])
+    r = await memory.maintain()
+    assert r["assumptions_retired"] == 1 and r["deleted"] == 0  # a was verified: never auto-deleted
+    assert (await memory.get(str(guess["id"])))["stale"] and not (await memory.get(str(done["new"]["id"])))["stale"]
+    assert await memory.get(str(a["id"])) is not None  # verified → kept even when replaced
+
+
+async def test_episodes_goals_and_repeated_tasks(pool, monkeypatch):
+    from app import config, episodes, goals, memory, workers
+    monkeypatch.setattr(config.settings, "memory_collection", "test_memory_v2")
+    await pool.execute("TRUNCATE episodes, goals")
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, goal, plan, result, cost_usd, model_used)
+                                 VALUES ('s', 'Harga emas', 'x', 'owner', 'web', 'completed', 'Cek harga emas Antam hari ini',
+                                         '["cari", "bandingkan"]', 'Antam Rp1.900.000/gram (logammulia.com)', 0.0012, 'qwen/qwen3.7-flash') RETURNING id""")
+    assert (await episodes.record(tid)) == {"task": tid, "success": True}
+    failed = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, goal, error)
+                                    VALUES ('s', 'x', 'y', 'owner', 'web', 'failed', 'Laporan tren produk TikTok', 'ReadTimeout (timeout)') RETURNING id""")
+    await episodes.record(failed)
+    assert await pool.fetchval("SELECT lesson FROM episodes WHERE task_id = $1", failed) == "timeout: ReadTimeout (timeout)"
+    similar = await episodes.similar("tolong cek lagi harga emas antam")
+    assert similar and similar[0]["task_id"] == tid and similar[0]["success"]
+    brief = await episodes.brief_for("cek lagi harga emas Antam")
+    assert "TUGAS SERUPA PERNAH DIKERJAKAN" in brief and "logammulia.com" in brief
+    assert await episodes.brief_for("resep rendang padang") == ""  # unrelated: nothing is offered
+    await pool.execute("UPDATE episodes SET created_at = now() - interval '200 days' WHERE task_id = $1", failed)
+    assert await episodes.prune() == 1
+    # goals: ordered by priority then due; the agent's situation block shows them
+    g1 = await goals.add("Selesaikan laporan Q4", "owner", 2, __import__("datetime").date(2026, 11, 5))
+    g2 = await goals.add("Belajar Blender", "owner", 4)
+    await goals.update(g2["id"], "owner", status="paused")
+    assert [g["text"] for g in await goals.list_("active")] == ["Selesaikan laporan Q4"]
+    assert "Selesaikan laporan Q4" in await goals.situation_block() and "Blender" not in await goals.situation_block()
+    with pytest.raises(goals.GoalError):
+        await goals.add("x", "owner", 9)
+    done = await goals.update(g1["id"], "owner", status="done")
+    assert done["status"] == "done" and await goals.situation_block() == ""

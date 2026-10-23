@@ -839,3 +839,27 @@ def test_no_module_uses_a_name_it_never_defines_or_imports():
                 bound.add(node.rest)
         problems += [f"{path.name}:{line} {name}" for name, line in loads.items() if name not in bound]
     assert not problems, problems
+
+
+def test_memory_ranking_labels_dedup_pairs_goal_lines_and_episode_briefs():
+    from datetime import date, datetime, timedelta, timezone
+    from app import episodes, goals, memory
+    base = {"text": "Kantor di Ancol", "score": 0.6, "kind": "fact", "verified": False, "confidence": 0.7}
+    verified = {**base, "verified": True, "confidence": 0.9}
+    weak = {**base, "confidence": 0.3}
+    assert memory.rank_of(verified) > memory.rank_of(base) > memory.rank_of(weak)
+    assert memory.label(base) == "Kantor di Ancol" and "belum terverifikasi" in memory.label(weak)
+    assert "asumsi" in memory.label({**base, "kind": "assumption"}) and "preferensi" in memory.label({**base, "kind": "preference"})
+    vecs = [[1, 0, 0], [0.99, 0.01, 0], [0, 1, 0], [1, 0, 0.001]]
+    assert memory.duplicate_pairs(["a", "b", "c", "d"], vecs) == [(0, 1), (0, 3)]  # the earlier (stronger) is kept
+    assert memory.DEFAULT_CONFIDENCE["assumption"] < memory.DEFAULT_CONFIDENCE["fact"] < memory.DEFAULT_CONFIDENCE["preference"]
+    today = date(2026, 10, 23)
+    assert goals.line({"id": 4, "priority": 1, "text": "Selesaikan laporan Q4", "due": date(2026, 10, 25)}, today) == "#4 [P1] Selesaikan laporan Q4, tenggat 25 Oct (2 hari lagi)"
+    assert "(LEWAT)" in goals.line({"id": 5, "priority": 2, "text": "x", "due": date(2026, 10, 20)}, today)
+    assert goals.line({"id": 6, "priority": 3, "text": "tanpa tenggat", "due": None}, today) == "#6 [P3] tanpa tenggat"
+    now = datetime(2026, 10, 23, tzinfo=timezone.utc)
+    eps = [{"created_at": now - timedelta(days=2), "success": True, "lesson": None, "approach": "cari; bandingkan", "result": "Emas Rp1,9 jt/gram"},
+           {"created_at": now - timedelta(days=45), "success": False, "lesson": "timeout", "approach": "", "result": ""}]
+    brief = episodes.format_brief(eps, now)
+    assert "2 hari lalu, berhasil" in brief and "Emas Rp1,9 jt/gram" in brief and "Cara: cari; bandingkan" in brief
+    assert "45 hari lalu, GAGAL (timeout); mungkin sudah usang" in brief and episodes.format_brief([]) == ""

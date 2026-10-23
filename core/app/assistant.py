@@ -10,12 +10,13 @@ import json
 import logging
 import re
 import time
+from datetime import date
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               modelrouter, self_model, stage, workers, writer)
+               chat_settings, goals, modelrouter, self_model, stage, workers, writer)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -75,7 +76,9 @@ list_settings/change_setting (jam tenang dll.). Kunci/password rahasia tidak lew
 Pengaturan server). Setelah mengubah, sebutkan modelnya dan harganya. Model mahal: tanya dulu (needs_confirmation). \
 Hanya Qdrant dan n8n yang permanen; model lain bebas dipilih.
 
-Fakta/preferensi yang pemilik minta diingat → remember. Jangan menyimpan rahasia/kata sandi.
+Fakta/preferensi yang pemilik minta diingat → remember. Pemilik bilang ingatanmu salah/usang → memory_correct \
+(jangan menumpuk fakta yang bertentangan). Tujuan jangka panjang ("target saya…", "tolong ingatkan saya terus soal …") \
+→ goal; tujuan aktif tampil di bagian TUJUAN AKTIF. Jangan menyimpan rahasia/kata sandi.
 
 Menampilkan: kalau pemilik ingin diperlihatkan sesuatu (foto, contoh, video tutorial), atau gambar akan \
 lebih jelas daripada kata-kata, tugaskan worker untuk mencari dan menampilkannya di layar HP \
@@ -184,6 +187,20 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "instruction": {"type": "string", "description": "apa yang ditulis, untuk siapa, maksudnya, nama pemilik"}},
             "required": ["instruction"]}}},
+    {"type": "function", "function": {
+        "name": "memory_correct",
+        "description": "Koreksi ingatan yang salah/usang: simpan versi yang benar dan tandai yang lama usang.",
+        "parameters": {"type": "object", "properties": {
+            "about": {"type": "string", "description": "kata kunci ingatan yang salah, mis. 'kantor'"},
+            "correct_text": {"type": "string", "description": "isi yang benar, kalimat lengkap"}}, "required": ["about", "correct_text"]}}},
+    {"type": "function", "function": {
+        "name": "goal",
+        "description": "Tujuan jangka panjang pemilik: tambah, lihat, selesai, jeda, lanjut, hapus.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["add", "list", "done", "pause", "resume"]},
+            "text": {"type": "string"}, "goal_id": {"type": "integer"},
+            "priority": {"type": "integer", "description": "1 terpenting … 5"}, "due": {"type": "string", "description": "YYYY-MM-DD"}},
+            "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "play_music",
         "description": "Cari lagu/musik berlisensi bebas lalu putar di HP pemilik.",
@@ -298,7 +315,9 @@ async def _situation(text: str, location: Location | None, compact: bool = False
     except Exception:
         hits = []
     if hits:
-        parts.append("YANG KAMU INGAT (memori, bisa usang):\n" + "\n".join(f"- {m['text']}" for m in hits))
+        parts.append("YANG KAMU INGAT (memori, bisa usang):\n" + "\n".join(f"- {memory.label(m)}" for m in hits))
+    if goals_text := await goals.situation_block():
+        parts.append(goals_text)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -345,8 +364,31 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps({"relayed": ok})
             case "close_stage":
                 return json.dumps(await stage.close())
+            case "memory_correct":
+                if (refused := await chat_settings.guard("memory_correct", device_id, stt, bool(screen_text or attachments))):
+                    return json.dumps({"error": refused})
+                match = await memory.best_match(str(a.get("about") or ""))
+                if not match:
+                    return json.dumps({"error": "tidak ada ingatan yang cocok — sebut kata kunci lain"})
+                done = await memory.correct(str(match["id"]), str(a.get("correct_text") or ""), actor)
+                return json.dumps({"diganti": done["old"]["text"], "menjadi": done["new"]["text"]}, ensure_ascii=False)
+            case "goal":
+                act = str(a.get("action") or "list")
+                if act != "list" and (refused := await chat_settings.guard("goal", device_id, stt, bool(screen_text or attachments))):
+                    return json.dumps({"error": refused})
+                try:
+                    due = date.fromisoformat(str(a["due"])) if a.get("due") else None
+                    if act == "add":
+                        g = await goals.add(str(a.get("text") or ""), actor, int(a.get("priority") or 3), due)
+                        return json.dumps({"ditambah": goals.line(g)}, ensure_ascii=False)
+                    if act in ("done", "pause", "resume"):
+                        g = await goals.update(int(a.get("goal_id") or 0), actor,
+                                               status={"done": "done", "pause": "paused", "resume": "active"}[act])
+                        return json.dumps({"diperbarui": goals.line(g), "status": g["status"]}, ensure_ascii=False)
+                    return json.dumps({"tujuan": [goals.line(g) for g in await goals.list_("active")]}, ensure_ascii=False)
+                except (goals.GoalError, ValueError) as e:
+                    return json.dumps({"error": str(e)})
             case "find_models" | "ai_settings":
-                from . import chat_settings
                 if call.name == "find_models":
                     result = await chat_settings.find_models(a)
                 else:

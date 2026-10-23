@@ -63,15 +63,17 @@ async def memory_search(query: str, limit: int = 5) -> list[dict]:
 
 
 @mcp.tool()
-async def memory_save(text: str, category: str = "personal", kind: str = "fact") -> dict:
+async def memory_save(text: str, category: str = "personal", kind: str = "fact", evidence: str = "", verified: bool = False) -> dict:
     """Save one durable, self-contained statement to long-term memory.
     category: personal | project | knowledge | experience | operational. kind: fact | assumption | preference.
-    Do not save secrets, credentials, or one-off chit-chat."""
+    evidence: where it comes from (a URL, "kata pemilik", a document); verified: you checked it against that source.
+    An inference is kind=assumption. Do not save secrets, credentials, or one-off chit-chat. A near-identical memory
+    is merged, not duplicated; if an old memory is wrong, use memory_correct instead."""
     try:
-        m = await memory.save(text, category, source=ACTOR, kind=kind)
+        m = await memory.save(text, category, source=ACTOR, kind=kind, evidence=evidence or None, verified=verified)
     except memory.MemoryError_ as e:
         return {"saved": False, "reason": str(e)}
-    return {"saved": True, "id": str(m["id"])}
+    return {"saved": True, "id": str(m["id"]), "merged_with_existing": bool(m.get("deduped"))}
 
 
 @mcp.tool()
@@ -288,6 +290,26 @@ async def _core(method: str, path: str, **kw) -> dict:
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.request(method, f"http://jarvis-core:8000{path}", headers={"X-Internal-Token": settings.mcp_token}, **kw)
     return r.json() if r.status_code == 200 else {"error": f"core HTTP {r.status_code}: {r.text[:200]}"}
+
+
+@mcp.tool()
+async def memory_correct(memory_id: str, correct_text: str, evidence: str = "") -> dict:
+    """A memory is wrong or outdated: save the corrected version (with `evidence`, e.g. a URL or "kata pemilik") and mark
+    the old one stale. Do not pile up contradicting facts — correct the old one."""
+    from . import memory
+    try:
+        done = await memory.correct(memory_id, correct_text, ACTOR, evidence=evidence or None)
+    except memory.MemoryError_ as e:
+        return {"error": str(e)}
+    return {"replaced": done["old"]["text"], "with": done["new"]["text"]}
+
+
+@mcp.tool()
+async def goals_list() -> list[dict]:
+    """The owner's active long-term goals, most important first (for planning and prioritising)."""
+    from . import goals
+    return [{"id": g["id"], "goal": g["text"], "priority": g["priority"], "due": str(g["due"]) if g["due"] else None}
+            for g in await goals.list_("active")]
 
 
 @mcp.tool()

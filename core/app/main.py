@@ -19,13 +19,14 @@ import json
 import re
 import logging
 import time
+from datetime import datetime
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, attachments, audit, auditor, awareness, capabilities, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, capabilities, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -100,7 +101,7 @@ async def lifespan(app: FastAPI):
 
     async def self_improvement():
         # Performance self-improvement (ADR-026): runner results, recurring-error repairs, weekly review.
-        last_review, last_sync = None, 0.0
+        last_review, last_sync, last_maintained = None, 0.0, None
         while True:
             try:
                 if time.monotonic() - last_sync > 3600:  # skills Hermes wrote itself show up in the registry within the hour
@@ -110,6 +111,9 @@ async def lifespan(app: FastAPI):
                     except Exception:
                         log.exception("capability sync failed")  # never at the expense of the rest of this loop
                 await ops.tick()  # CPU reading, worker-model CPU limit, orphan watchdog
+                if datetime.now(awareness.WIB).hour == 3 and last_maintained != datetime.now(awareness.WIB).date() and (await ops.background_ok())[0]:
+                    last_maintained = datetime.now(awareness.WIB).date()  # memory upkeep once a night (ADR-040)
+                    log.info("memory upkeep: %s, old failed episodes pruned: %s", await memory.maintain(), await episodes.prune())
                 await dev.poll()
                 await perf.watch_recurring_errors()
                 if (await ops.background_ok())[0] and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
@@ -1215,6 +1219,61 @@ async def admin_library_delete(key: str, actor: str = admin):
         return {"deleted": await library.delete(key, actor)}
     except library.LibraryError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/admin/goals")
+async def admin_goals(status: str = "active", _: str = admin):
+    return jsonable({"goals": await goals.list_(status if status in goals.STATUSES else "")})
+
+
+class GoalIn(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    priority: int = Field(default=3, ge=1, le=5)
+    due: str | None = None
+
+
+@app.post("/admin/goals")
+async def admin_goal_add(g: GoalIn, actor: str = admin):
+    from datetime import date as _date
+    try:
+        return jsonable(await goals.add(g.text, actor, g.priority, _date.fromisoformat(g.due) if g.due else None))
+    except (goals.GoalError, ValueError) as e:
+        raise HTTPException(422, str(e))
+
+
+class GoalPatch(BaseModel):
+    status: str | None = None
+    priority: int | None = Field(default=None, ge=1, le=5)
+
+
+@app.patch("/admin/goals/{goal_id}")
+async def admin_goal_update(goal_id: int, g: GoalPatch, actor: str = admin):
+    try:
+        return jsonable(await goals.update(goal_id, actor, status=g.status, priority=g.priority))
+    except goals.GoalError as e:
+        raise HTTPException(422, str(e))
+
+
+class CorrectIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    evidence: str = Field(default="", max_length=300)
+
+
+@app.post("/admin/memory/{mem_id}/correct")
+async def admin_memory_correct(mem_id: str, c: CorrectIn, actor: str = admin):
+    try:
+        done = await memory.correct(mem_id, c.text, actor, evidence=c.evidence or None)
+    except memory.MemoryError_ as e:
+        raise HTTPException(422, str(e))
+    return jsonable({"old": done["old"]["id"], "new": done["new"]})
+
+
+@app.get("/admin/episodes")
+async def admin_episodes(limit: int = 30, _: str = admin):
+    rows = await db.pool().fetch(
+        "SELECT id, task_id, goal, approach, result, success, cost_usd::float AS cost_usd, model, lesson, created_at "
+        "FROM episodes ORDER BY id DESC LIMIT $1", max(1, min(limit, 100)))
+    return jsonable({"episodes": [dict(r) for r in rows]})
 
 
 @app.get("/admin/capabilities")
