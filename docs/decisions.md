@@ -591,3 +591,15 @@ other than the author). Bug found by the tests: `openrouter/free` was counted as
   version is kept (`capability_versions`, with cases/results/scripts); `rollback` restores the previous one as a new version,
   `retire` removes the folder. A failed use marks a capability untested again. Limits: 12 submissions a day. Hermes' lean profile
   now treats every folder starting with `jarvis` as its own. Main agent tool `skill_manage` (list/rollback/retire), `/admin/skills`.
+- **Hardening found by running it for real (2026-10-23).** (1) Hermes does not send its session id to the gateway, so per-task
+  cost and budget never worked for its calls: a call is now tied to its task by the `[tugas #N]` marker in the first
+  user message (`modelrouter.task_id_from_body`); a real task now shows its cost and model. (2) A cancel arriving after a
+  task finished (report delivery, shutdown) no longer overwrites `completed` with `cancelled`. (3) After a core restart the old
+  Hermes runs kept going while the tasks were started again — every deploy doubled the runs until Hermes refused ("max 10"):
+  `resume_after_restart` now stops the old run first, and a full Hermes is waited for instead of failing the task.
+  (4) `capabilities.record`: a failed use marks a capability untested. Acceptance: `core/tests/test_acceptance.py` (Blueprint §15,
+  one test per criterion + the hardening above) and `/admin/kpi` (task success, evidence-checked results, recovery, skill reuse,
+  cost, manual interventions, latency). Real run: the same gold-price task took 112 s and, repeated, 37 s starting from the
+  earlier episode ("masih sama dengan pengecekan sebelumnya"). Not done this round (owner's decision): Sprints 5–7 (image
+  generation, Local Agent/Blender, app screens for Skills & Learning / task phase+cost, proactive n8n). The `blueprint` preset
+  exists but is not applied; the owner's current composition already matches most of it.

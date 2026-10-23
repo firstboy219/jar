@@ -41,6 +41,22 @@ def task_id_of(session_id: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
+_TASK_MARK = re.compile(r"\[tugas #(\d+)\]")
+
+
+def task_id_from_body(body: dict) -> int | None:
+    """Hermes does not send its session id to the gateway, but the worker brief starts with "[tugas #N]" in the first user
+    message, which stays in every request of that run — so a call can be tied to its task. Pure; unit-tested."""
+    for m in body.get("messages") or []:
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        text = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c if isinstance(p, dict)) if isinstance(c, list) else ""
+        found = _TASK_MARK.search(text[:6000])
+        return int(found.group(1)) if found else None
+    return None
+
+
 def diagnose(error_text: str) -> str:
     """credit | refused | rate | transient | other — what a failure means for the next step. Pure; unit-tested."""
     from .gateway import refused_outright
@@ -139,8 +155,8 @@ class Attempts:
     begun: set = field(default_factory=set)
 
     @classmethod
-    async def start(cls, category: dict | None, session_id: str | None) -> "Attempts":
-        task_id = task_id_of(session_id)
+    async def start(cls, category: dict | None, session_id: str | None, body: dict | None = None) -> "Attempts":
+        task_id = task_id_of(session_id) or (task_id_from_body(body) if body else None)
         a = cls(task_id, int((category or {}).get("max_retries", 1)), int((category or {}).get("paid_attempt_limit", 1)))
         if task_id and await task_over_budget(task_id):
             a.over_budget = True

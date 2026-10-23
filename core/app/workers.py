@@ -137,7 +137,8 @@ async def _run(task_id: int, context: str) -> None:
                     break
                 except hermes.HermesError as e:
                     # Hermes restarting (deploy, crash): wait for it instead of failing the owner's task
-                    if started or "tidak dapat dihubungi" not in str(e) or attempt == HERMES_RETRIES:
+                    busy = "Too many concurrent runs" in str(e)  # Hermes is full (max 10 runs): wait for a slot, do not fail
+                    if started or not ("tidak dapat dihubungi" in str(e) or busy) or attempt == HERMES_RETRIES:
                         raise
                     log.warning("worker %s: Hermes unreachable, retry %s", task_id, attempt + 1)
                     await asyncio.sleep(HERMES_RETRY_S)
@@ -155,8 +156,9 @@ async def _run(task_id: int, context: str) -> None:
             await _remember_episode(task_id)
         except asyncio.CancelledError:
             stopped = task_id in _stopping
-            await db.pool().execute(
-                "UPDATE tasks SET status = $2, finished_at = now(), progress = coalesce($3, progress) WHERE id = $1",
+            await db.pool().execute(  # only a task still in flight: a cancel during report delivery must not undo "completed"
+                "UPDATE tasks SET status = $2, finished_at = now(), progress = coalesce($3, progress) "
+                "WHERE id = $1 AND status IN ('queued', 'running')",
                 task_id, "stopped" if stopped else "cancelled", progress_text(task_id) if stopped else None)
             await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "stopped" if stopped else "cancelled"})
             raise
@@ -476,8 +478,14 @@ async def resume_after_restart() -> int:
     await db.pool().execute(  # the flow watcher runs inside core, not as a Hermes session: just close it
         "UPDATE tasks SET status = 'failed', error = 'dihentikan oleh restart', finished_at = now() "
         "WHERE kind = 'flowcheck' AND status IN ('queued', 'running')")
+    stale = await db.pool().fetch("SELECT hermes_run FROM tasks WHERE status IN ('queued', 'running') AND hermes_run IS NOT NULL")
+    for r in stale:  # the old Hermes run keeps going after a core restart: stop it, or every deploy doubles the runs (cap: 10)
+        try:
+            await hermes.stop(r["hermes_run"])
+        except Exception as e:
+            log.warning("could not stop Hermes run %s: %s", r["hermes_run"], e)
     rows = await db.pool().fetch(
-        "UPDATE tasks SET status = 'queued', started_at = NULL WHERE status IN ('queued', 'running') RETURNING id")
+        "UPDATE tasks SET status = 'queued', started_at = NULL, hermes_run = NULL WHERE status IN ('queued', 'running') RETURNING id")
     for r in rows:
         _start(r["id"])
     return len(rows)

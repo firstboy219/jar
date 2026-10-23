@@ -429,7 +429,7 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
     """Yield OpenAI `chat.completion.chunk` dicts from the first route that starts answering."""
     body = {**body, "stream": True}
     errors: list[str] = []
-    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id)
+    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller == "hermes" else None)
     queue = list(await plan(category, caller=caller, private=private, worker=worker))
     while queue:
         route = queue.pop(0)
@@ -522,7 +522,7 @@ async def _complete(category: str, body: dict, *, caller: str, session_id: str |
     """Non-streaming call with the same routing and failover; returns the OpenAI response JSON."""
     body = {**body, "stream": False}
     errors: list[str] = []
-    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id)
+    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller == "hermes" else None)
     queue = list(await plan(category, caller=caller, private=private, worker=worker))
     while queue:
         route = queue.pop(0)

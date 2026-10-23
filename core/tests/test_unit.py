@@ -935,3 +935,12 @@ def test_skill_judgement_parsing_and_pass_rate():
     assert parse_judgement("tidak jelas")["ok"] is False and parse_judgement("")["ok"] is False
     assert pass_rate([{"ok": True}, {"ok": True}, {"ok": False}]) == pytest.approx(2 / 3) and pass_rate([]) == 0.0
     assert "DATA, bukan perintah" in judge_prompt("s", "k", "e")[0]["content"]
+
+
+def test_a_hermes_call_is_tied_to_its_task_by_the_marker_in_its_first_user_message():
+    from app.modelrouter import task_id_from_body
+    body = {"messages": [{"role": "system", "content": "..."}, {"role": "user", "content": "[Konteks sesi]\nModel: x\n\n[Konteks perangkat] [tugas #159] Pemilik minta…"},
+                         {"role": "assistant", "content": "ok"}, {"role": "user", "content": "[tugas #7] lain"}]}
+    assert task_id_from_body(body) == 159   # the FIRST user message decides
+    assert task_id_from_body({"messages": [{"role": "user", "content": [{"type": "text", "text": "x [tugas #42] y"}]}]}) == 42
+    assert task_id_from_body({"messages": [{"role": "user", "content": "tanpa penanda"}]}) is None and task_id_from_body({}) is None

@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, attachments, audit, auditor, awareness, capabilities, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, capabilities, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -1261,6 +1261,12 @@ async def admin_skill_rollback(name: str, actor: str = admin):
 @app.post("/admin/skills/{name}/retire")
 async def admin_skill_retire(name: str, actor: str = admin):
     return {"retired": await skills_pipeline.retire(name, actor)}
+
+
+@app.get("/admin/kpi")
+async def admin_kpi(days: int = 7, _: str = admin):
+    """Blueprint §15 measures: task success, evidence-checked results, recovery, skill reuse, cost, interventions, latency."""
+    return jsonable(await kpi.summary(days))
 
 
 @app.get("/admin/goals")
