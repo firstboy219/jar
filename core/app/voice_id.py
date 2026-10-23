@@ -15,9 +15,21 @@ import numpy as np
 from . import audit, db
 from .config import settings
 
-THRESHOLD = 0.6
+THRESHOLD = 0.6            # default, used by name_speakers()
+THRESHOLD_KEY = "voiceprint:threshold"  # dynamic override in settings_kv
 KEY = "voiceprint:owner"
 MIN_SAMPLES = 5
+
+
+async def _threshold() -> float:
+    """Cosine-similarity threshold from settings_kv, fallback 0.6."""
+    v = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", THRESHOLD_KEY)
+    if v is not None:
+        try:
+            return float(v if isinstance(v, (int, float)) else json.loads(str(v)))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            pass
+    return THRESHOLD
 
 
 async def _embed(pcm: bytes) -> list[float]:
@@ -73,7 +85,8 @@ async def check(pcm: bytes) -> dict:
         sim = similarity(await _embed(pcm), v["vector"])
     except (httpx.HTTPError, ValueError, KeyError):
         return {}
-    return {"owner_voice": round(sim, 3), "is_owner": sim >= THRESHOLD}
+    thr = await _threshold()
+    return {"owner_voice": round(sim, 3), "is_owner": sim >= thr}
 
 
 def name_speakers(voices: dict[str, list[float]], owner: list[float] | None, ids: list[str] | None = None) -> dict[str, str]:
