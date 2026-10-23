@@ -534,3 +534,19 @@ Owner: "pilih model secara advance … tahu kelebihan dan kekurangan, mana yang 
   against the catalog (preferring models JARVIS already uses, never `:batch`/alias variants, free only when asked) and
   the answer is built from the data. An unknown name falls through to the chat model. The prompt now also forbids
   quoting model numbers from memory, and spawn_task is for research, not for settings questions.
+
+## ADR-040 — Blueprint v2: free-first model router with diagnosis, per-task budget, richer tasks (2026-10-23)
+The owner's blueprint (self-learning, multi-model, free-first) is adopted on top of the running system, not as a
+rewrite (see docs/blueprint-gap.md). Decisions: the app stays native Kotlin; Local Agent/Blender wait for a PC; free-first
+is measured; this round is Sprints 0–4. Roles: the main agent (`assistant.py`) talks to the owner, Hermes plans and works
+behind the Task Manager.
+Sprint 1 — `modelrouter.py` around the gateway: requirements (tool calling), measured health (a model failing in
+practice goes behind healthy ones; `model_bench` tool checks count), verified free alternatives (proven free models,
+then `openrouter/free`) when the owner's first choice is free, diagnosis before paying (a 5xx/network failure is retried
+once; 429/403/404 go to the next free option; only `paid_attempt_limit` paid models are tried after a free one failed;
+402 ends the paid path), a per-task budget (default $0.50; over it → no paid calls, phase `waiting_approval`, an approval
+`task_budget` adds budget) and an optional daily cap. Free endpoints may log prompts, so attachments/screen text and
+drafts never reach them (`NO_FREE`). Every `llm_usage` row now carries `task_id`, `retry`, `fallback_reason`; `tasks` carries
+goal, criteria, plan, phase, budget, cost, artifacts, retries, model_used. `core/config/model_registry.yaml` is a template
+(preset `blueprint`, ids validated, a missing id is dropped), not the source of truth. New category `review` (a reviewer
+other than the author). Bug found by the tests: `openrouter/free` was counted as a paid model.

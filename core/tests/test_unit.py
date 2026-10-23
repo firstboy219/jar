@@ -741,3 +741,49 @@ def test_model_questions_are_recognised_and_names_resolved():
     assert ma.pick_best(cands, ["v4", "free"], set())["id"] == "d/v4-flash:free"
     assert ma.pick_best(cands, ["v4"], {"~d/v4-flash-latest"})["id"] == "~d/v4-flash-latest"  # the one JARVIS already uses
     assert ma.pick_best([], ["x"], set()) is None
+
+
+def test_model_router_diagnosis_ordering_and_attempt_rules():
+    from app import modelrouter as mr
+    from app.gateway import Route
+    assert mr.task_id_of("task-42") == 42 and mr.task_id_of("sess-1") is None and mr.task_id_of(None) is None
+    assert mr.diagnose("openrouter/x: HTTP 402: requires more credits") == "credit"
+    assert mr.diagnose("openrouter/x: HTTP 403: nope") == "refused" and mr.diagnose("a: HTTP 404: gone") == "refused"
+    assert mr.diagnose("openrouter/x: HTTP 429: limit") == "rate"
+    assert mr.diagnose("openrouter/x: HTTP 503: busy") == "transient" and mr.diagnose("lokal/q: ReadTimeout") == "transient"
+    assert mr.diagnose("something odd") == "other"
+
+    def R(model, provider="openrouter", cloud=True):
+        return Route(provider, model, "https://x", "k", cloud, False)
+    free1, free2, paid, local = R("a/one:free"), R("a/two:free"), R("b/paid"), R("qwen-lokal", "lokal", False)
+    health = {"a/one:free": {"calls": 20, "ok_pct": 20.0}, "a/two:free": {"calls": 30, "ok_pct": 97.0, "p50_ms": 900},
+              "a/three:free": {"calls": 12, "ok_pct": 95.0, "p50_ms": 500}, "a/four:free": {"calls": 3, "ok_pct": 100.0},
+              "a/five:free": {"calls": 40, "ok_pct": 99.0, "tools_ok": False}}
+    assert mr.unhealthy("a/one:free", health) and not mr.unhealthy("a/two:free", health) and mr.unhealthy("a/five:free", health)
+    assert not mr.unhealthy("never/seen", health)  # no data: innocent
+    assert mr.proven_free(health, {"a/two:free"}) == ["a/three:free"]  # reliable + enough calls + tools ok; fastest first
+    alt = [R("a/three:free"), R("openrouter/free")]
+    out = mr.order([free1, free2, paid, local], health, no_free=False, free_first=True, alternatives=alt)
+    assert [r.model for r in out] == ["a/two:free", "a/three:free", "openrouter/free", "b/paid", "a/one:free", "qwen-lokal"]  # sick last
+    assert [r.model for r in mr.order([free1, free2, paid, local], health, no_free=True, free_first=True, alternatives=alt)] == ["b/paid", "qwen-lokal"]
+    # attempts: a transient failure is retried once; a paid model after a failed free one is limited
+    a = mr.Attempts(None, max_retries=1, paid_limit=1)
+    assert a.skip(paid) is None and a.skip(free1) is None and a.skip(local) is None
+    assert a.failed(free1, "x: HTTP 503: busy") is True and a.failed(free1, "x: HTTP 503: busy") is False  # once per route
+    assert a.failed(free2, "x: HTTP 429: limit") is False and a.free_failed and a.reason == "kena batas permintaan (429)"
+    a.begin(paid)
+    assert a.skip(R("c/paid2")) == "batas percobaan berbayar" and a.skip(local) is None
+    assert mr.Attempts(None, 1, 1, over_budget=True).skip(paid) == "anggaran tugas habis"
+    assert mr.Attempts(None, 1, 1, over_budget=True).skip(free1) is None
+
+
+def test_the_blueprint_registry_template_is_valid():
+    from app import composition
+    p = composition.registry_preset()
+    assert p is not None and p["routes"]["analisis"][0] == {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"}
+    assert p["routes"]["ngobrol"][0]["model"] == "qwen/qwen3.7-flash"      # owner's decision: chat stays on the proven fast model
+    assert p["routes"]["ngobrol"][-1]["provider"] == "lokal" and p["routes"]["coding"][-1]["provider"] == "lokal-kerja"
+    assert p["limits"]["cepat"]["paid_attempt_limit"] == 0 and p["limits"]["coding"]["paid_attempt_limit"] == 1
+    assert set(p["new_categories"]) == {"review"} and "privat" not in p["routes"]
+    assert "laguna" not in str(p["routes"]) and p["free_fallback"] == "openrouter/free"   # an expiring experiment is never a dependency
+    assert composition.PRESETS["blueprint"]["title"].startswith("Blueprint")

@@ -49,7 +49,15 @@ async def _exec_code_change(detail: dict) -> dict:
     return await dev.on_approved(detail)
 
 
+async def _exec_task_budget(detail: dict) -> dict:
+    await db.pool().execute(
+        "UPDATE tasks SET budget_usd = coalesce(budget_usd, 0) + $2, phase = 'executing' WHERE id = $1",
+        int(detail["task_id"]), float(detail["add_usd"]))
+    return {"task": detail["task_id"], "added_usd": detail["add_usd"]}
+
+
 EXECUTORS: dict[str, Executor] = {
+    "task_budget": _exec_task_budget,
     "manual": _exec_manual,
     "code_change": _exec_code_change,
     "hermes_command": _exec_hermes_command,

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               self_model, stage, workers, writer)
+               modelrouter, self_model, stage, workers, writer)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -132,7 +132,8 @@ TOOLS = [
                                                  "create_category", "delete_category", "check_openrouter", "list_settings",
                                                  "change_setting"]},
             "category": {"type": "string", "description": "ngobrol, cepat, penglihatan, balas-pesan, web, coding, produktivitas, "
-                                                          "analisis, rapat, latar-belakang, atau buatan pemilik; 'total' untuk anggaran"},
+                                                          "analisis, rapat, latar-belakang, review, atau buatan pemilik; untuk set_budget: "
+                                                          "'total' (bulanan), 'harian', 'tugas' (default per tugas) atau nama kategori"},
             "model": {"type": "string", "description": "id model OpenRouter dari find_models, mis. deepseek/deepseek-v4-flash"},
             "role": {"type": "string", "enum": ["utama", "cadangan"]},
             "value": {"description": "nilai: dolar (set_budget), whisper|groq|deepgram, true/false, nama preset, atau isi pengaturan"},
@@ -450,6 +451,8 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await emit(ev)
 
     started = time.monotonic()
+    # attachments / screen text are the owner's own documents: free endpoints may log prompts, so they never get them
+    modelrouter.NO_FREE.set(bool(files or screen_text or attachments))
     if _owner_clear(stt) and (draft := router.parse_action(text)) and draft.name == "write_draft":
         await start_draft(text, session_id, actor, device_id, location, private, screen_text, attachments)
         reply = ("Oke, kutuliskan drafnya dari " + ("lampiran dan " if attachments or screen_text else "") + "obrolan kita. "

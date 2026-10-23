@@ -12,6 +12,7 @@ ARG EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
 RUN python -c "from fastembed import TextEmbedding as T; T('${EMBED_MODEL}', cache_dir='/srv/models')" \
  && chmod -R a+rX /srv/models
 COPY app ./app
+COPY config ./config
 COPY tests ./tests
 COPY pytest.ini ./
 USER 1000:1000

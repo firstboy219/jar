@@ -51,6 +51,8 @@ def markdown(d: dict) -> str:
 
 async def produce(task_id: int, instruction: str, private: bool = False) -> str:
     """Write the draft, show it and save the .docx. Returns the short result the owner is told."""
+    from . import modelrouter
+    modelrouter.NO_FREE.set(True)  # an email and its attachments: not for endpoints that may log prompts
     request = instruction.removeprefix(MARK).strip()  # the owner's words + the email/attachments + the conversation
     try:
         about = [m["text"] for m in await memory.search("nama pemilik gaya menulis email", limit=3) if m["score"] >= 0.35]

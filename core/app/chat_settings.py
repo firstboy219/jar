@@ -104,6 +104,10 @@ async def ai_settings(args: dict, actor: str) -> dict:
                                                    confirmed=bool(args.get("confirmed")))
             case "set_budget":
                 value = args.get("value")
+                if category == "harian":
+                    return {"anggaran_harian_usd": await composition.set_daily_budget(value, actor)}
+                if category == "tugas":
+                    return {"anggaran_per_tugas_usd": await composition.set_task_budget(value, actor)}
                 if category and category != "total":
                     await composition.update({"categories": {category: {"budget_usd": value}}}, actor)
                     return {"category": category, "budget_usd": value}

@@ -1,0 +1,54 @@
+# Model registry template (Blueprint v2 §4.5, ADR-040).
+# This is the starting point the owner can apply as the preset "blueprint" (Komposisi AI → Preset); it is NOT the
+# source of truth — the live composition lives in the database and is edited from the app or by chat.
+# Every model id is validated against OpenRouter's catalog and probed with a real request when applied; ids that
+# no longer exist are dropped, never written. Prices are read from the catalog at run time, not stored here.
+# Free endpoints (":free") may log prompts: they never receive sensitive content, attachments or screen text.
+free_fallback: "openrouter/free"          # last free alternative when the verified free models are all unavailable
+categories:
+  analisis:                               # blueprint: planner / research synthesis / skill authoring
+    primary: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    fallback: ["deepseek/deepseek-v4.1-flash"]
+    paid_attempt_limit: 1
+  ngobrol:                                # blueprint: general conversation. Owner's decision: the fast cheap model that is proven
+    primary: "qwen/qwen3.7-flash"
+    fallback: ["deepseek/deepseek-v4.1-flash"]
+    paid_attempt_limit: 1
+  cepat:                                  # blueprint: classifier
+    primary: "nvidia/nemotron-3.5-lightning:free"
+    fallback: []
+    paid_attempt_limit: 0
+  coding:
+    primary: "cohere/north-mini-code:free"
+    fallback: ["deepseek/deepseek-v4.1-flash"]
+    paid_attempt_limit: 1
+  penglihatan:                            # blueprint: vision_public_data (sensitive images go to the local vision model)
+    primary: "nvidia/nemotron-3.5-super-vl:free"
+    fallback: ["nvidia/nemotron-3.5-super-vl"]
+    paid_attempt_limit: 1
+  web:
+    primary: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    fallback: ["deepseek/deepseek-v4.1-flash"]
+    paid_attempt_limit: 1
+  produktivitas:
+    primary: "nvidia/nemotron-3-ultra-550b-a55b:free"
+    fallback: ["deepseek/deepseek-v4.1-flash"]
+    paid_attempt_limit: 1
+  latar-belakang:
+    primary: "nvidia/nemotron-3.5-lightning:free"
+    fallback: ["nvidia/nemotron-3-ultra-550b-a55b:free"]
+    paid_attempt_limit: 0
+  review:                                 # blueprint: a reviewer that is NOT the model that wrote the code
+    primary: "z-ai/glm-5.3-flash"
+    fallback: ["deepseek/deepseek-v4.1-flash"]
+    paid_attempt_limit: 1
+    title: "Peninjau (model berbeda)"
+    description: "Memeriksa kode, skill dan hasil kerja model lain."
+experiments:
+  coding_experiment:                      # free endpoint ends 2026-10-31: experiment only, never a dependency
+    model: "poolside/laguna-s-2.1:free"
+    enabled: false
+    remove_after: "2026-10-31"
+not_yet:
+  gambar:                                 # image generation needs an image-output model (none is free); Sprint 5
+    require_actual_image_model: true

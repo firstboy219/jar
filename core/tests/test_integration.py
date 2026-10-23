@@ -1479,3 +1479,131 @@ async def test_model_questions_are_answered_from_data_not_invented(pool, monkeyp
     # a name the catalog does not know is not invented: the sentence falls through to the chat model (which here refuses)
     from app import model_answers
     assert await model_answers.compare("kelebihan modelxyz dibanding fantasi") is None
+
+
+async def test_router_diagnoses_before_paying_retries_and_records(pool, monkeypatch):
+    import asyncio
+    import httpx
+    from app import gateway, modelrouter
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(modelrouter, "RETRY_DELAY_S", 0)
+    gateway._bad.clear()
+    modelrouter.forget_health()
+    await pool.execute("TRUNCATE llm_usage")
+    # a proven free model JARVIS already uses reliably
+    for _ in range(8):
+        await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, ok, latency_ms) VALUES ('web','hermes','openrouter','p/proven:free',true,800)")
+    await pool.execute("""UPDATE llm_categories SET allow_free = true, routes = '[{"provider":"openrouter","model":"f/first:free"},
+                          {"provider":"openrouter","model":"b/paid"}]' WHERE name = 'web'""")
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+        model = _j.loads(req.content)["model"]
+        seen.append(model)
+        if model == "f/first:free":
+            return httpx.Response(429, text='{"error":{"message":"rate limited"}}')
+        return httpx.Response(200, content=_sse("Selesai."), headers={"content-type": "text/event-stream"})
+
+    _fake_providers(monkeypatch, handler)
+    # 1. free first model rate-limited → the proven FREE model answers; nothing paid is touched
+    assert await _collect("web", caller="hermes", session_id="task-7") == "Selesai."
+    assert seen == ["f/first:free", "p/proven:free"]
+    row = await pool.fetchrow("SELECT ok, task_id, fallback_reason FROM llm_usage WHERE ok AND model = 'p/proven:free' ORDER BY id DESC LIMIT 1")
+    assert row["task_id"] == 7 and row["fallback_reason"] == "kena batas permintaan (429)"
+    # 2. a 503 is retried once on the same model before moving on
+    gateway.invalidate()
+    seen.clear()
+    calls = {"n": 0}
+
+    def flaky(req: httpx.Request) -> httpx.Response:
+        import json as _j
+        model = _j.loads(req.content)["model"]
+        seen.append(model)
+        if model == "f/first:free" and calls["n"] == 0:
+            calls["n"] += 1
+            return httpx.Response(503, text="busy")
+        return httpx.Response(200, content=_sse("Berhasil."), headers={"content-type": "text/event-stream"})
+    _fake_providers(monkeypatch, flaky)
+    assert await _collect("web", caller="hermes", session_id="task-7") == "Berhasil."
+    assert seen == ["f/first:free", "f/first:free"]
+    assert await pool.fetchval("SELECT retry FROM llm_usage WHERE ok AND model = 'f/first:free' ORDER BY id DESC LIMIT 1") == 1
+    # 3. content for the owner's own documents never reaches a free model
+    seen.clear()
+    modelrouter.NO_FREE.set(True)
+    gateway.invalidate()
+    _fake_providers(monkeypatch, lambda req: httpx.Response(200, content=_sse("Privat aman."), headers={"content-type": "text/event-stream"}))
+    plan = [r.model for r in await gateway.plan("web", caller="hermes")]
+    modelrouter.NO_FREE.set(False)
+    assert plan[0] == "b/paid" and not any(m.endswith(":free") or m == "openrouter/free" for m in plan)
+    await asyncio.sleep(0)
+
+
+async def test_paid_attempts_after_a_free_failure_are_limited_and_task_budget_asks_the_owner(pool, monkeypatch):
+    import httpx
+    from app import approvals, gateway, modelrouter
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(modelrouter, "RETRY_DELAY_S", 0)
+    gateway._bad.clear()
+    modelrouter.forget_health()
+    await pool.execute("TRUNCATE llm_usage")
+    await pool.execute("""UPDATE llm_categories SET allow_free = true, paid_attempt_limit = 1, routes = '[{"provider":"openrouter","model":"f/dead:free"},
+                          {"provider":"openrouter","model":"p/one"},{"provider":"openrouter","model":"p/two"}]' WHERE name = 'coding'""")
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        import json as _j
+        model = _j.loads(req.content)["model"]
+        seen.append(model)
+        if model in ("f/dead:free", "openrouter/free", "p/one"):
+            return httpx.Response(500 if model == "p/one" else 403 if model == "f/dead:free" else 429, text="no")
+        return httpx.Response(200, content=_sse("ok"), headers={"content-type": "text/event-stream"})
+    _fake_providers(monkeypatch, handler)
+    assert [r.model for r in await gateway.plan("coding", caller="chat")][:4] == ["f/dead:free", "openrouter/free", "p/one", "p/two"]
+    out = await _collect("coding", caller="chat")  # free 403 → one paid attempt (p/one 500, retried once) → the second paid model is held back
+    assert seen[:3] == ["f/dead:free", "openrouter/free", "p/one"]  # the free options first, in order, then ONE paid model
+    assert "p/two" not in seen and seen.count("p/one") == 2
+    assert seen[-1] == "qwen-lokal" and out == "ok"  # held back from p/two: the local model answered
+    # task budget: a task over its budget gets no paid calls and an approval request; approving adds budget
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, budget_usd, status)
+                                 VALUES ('s', 'Riset', 'x', 'owner', 'coding', 0.10, 'running') RETURNING id""")
+    await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, ok, cost_usd, task_id) VALUES ('coding','hermes','openrouter','p/two',true,0.12,$1)", tid)
+    await pool.execute("""UPDATE llm_categories SET routes = '[{"provider":"openrouter","model":"p/one"},{"provider":"openrouter","model":"p/two"}]' WHERE name = 'coding'""")
+    gateway.invalidate()
+    seen.clear()
+    await _collect("coding", caller="hermes", session_id=f"task-{tid}")
+    assert "p/one" not in seen and "p/two" not in seen  # held back: only the local model could answer
+    assert await pool.fetchval("SELECT phase FROM tasks WHERE id = $1", tid) == "waiting_approval"
+    ap = await pool.fetchrow("SELECT id, kind, status FROM approvals WHERE kind = 'task_budget'")
+    assert ap and ap["status"] == "awaiting_approval"
+    await approvals.decide(ap["id"], True, "test")
+    assert float(await pool.fetchval("SELECT budget_usd FROM tasks WHERE id = $1", tid)) == 0.6   # 0.10 + max(0.5, 0.10)
+    assert await pool.fetchval("SELECT phase FROM tasks WHERE id = $1", tid) == "executing"
+
+
+async def test_blueprint_preset_creates_review_sets_limits_and_drops_unknown_models(pool, monkeypatch):
+    from app import composition, gateway, openrouter
+    ids = ["nvidia/nemotron-3-ultra-550b-a55b:free", "deepseek/deepseek-v4.1-flash", "qwen/qwen3.7-flash", "cohere/north-mini-code:free",
+           "nvidia/nemotron-3.5-lightning:free", "nvidia/nemotron-3.5-super-vl:free", "z-ai/glm-5.3-flash"]  # super-vl (paid) is missing
+    catalog = [dict(CATALOG_BASE, id=i, name=i) for i in ids]
+
+    async def fake_catalog(force=False):
+        return catalog
+    monkeypatch.setattr(openrouter, "catalog", fake_catalog)
+    await composition.apply_preset("blueprint", "test")
+    cats = await gateway.categories()
+    assert [r["model"] for r in cats["analisis"]["routes"]][:2] == ["nvidia/nemotron-3-ultra-550b-a55b:free", "deepseek/deepseek-v4.1-flash"]
+    assert cats["cepat"]["paid_attempt_limit"] == 0 and cats["coding"]["paid_attempt_limit"] == 1
+    assert "review" in cats and cats["review"]["routes"][0]["model"] == "z-ai/glm-5.3-flash" and not cats["review"]["worker"]
+    vision = [r["model"] for r in cats["penglihatan"]["routes"]]
+    assert vision == ["nvidia/nemotron-3.5-super-vl:free", "qwen-lokal"]  # the paid id OpenRouter does not list was never written
+    assert cats["privat"]["routes"] == [{"provider": "lokal-kerja", "model": "qwen-lokal"}]
+    c = await composition.update({"categories": {"coding": {"paid_attempt_limit": 2, "max_retries": 0}}}, "test")
+    assert next(x for x in c["categories"] if x["name"] == "coding")["paid_attempt_limit"] == 2
+    import pytest
+    with pytest.raises(composition.CompositionError):
+        await composition.update({"categories": {"coding": {"max_retries": 99}}}, "test")
+
+
+CATALOG_BASE = {"context": 1_000_000, "price_in": 0.0, "price_out": 0.0, "free": False, "tools": True, "vision": True, "audio": False,
+                "created": 1, "description": "", "reasoning": False, "reasoning_forced": False, "expires": None}

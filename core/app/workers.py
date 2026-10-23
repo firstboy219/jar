@@ -7,8 +7,9 @@ result becomes a spoken report (see reports.py).
 
 import asyncio
 import logging
+import re
 
-from . import approvals, audit, db, gateway, hermes, hub, memory, quick, reports, writer
+from . import approvals, audit, db, gateway, hermes, hub, memory, modelrouter, quick, reports, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -52,11 +53,12 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
     if private:
         category = "privat"
     row = await db.pool().fetchrow(
-        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING id, title, status, kind, category, created_at""",
         session_id, device_id, title.strip()[:120] or "Tugas", instruction.strip()[:12000], kind, image,
-        category, private)
+        category, private, re.sub(r"\s+", " ", instruction.split(quick.CONTEXT_MARK)[0]).strip()[:500],
+        await modelrouter.default_task_budget())
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
     await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
@@ -76,7 +78,7 @@ def _start(task_id: int, context: str = "") -> None:
 async def _run(task_id: int, context: str) -> None:
     async with _sem_():
         row = await db.pool().fetchrow(
-            "UPDATE tasks SET status = 'running', started_at = now() WHERE id = $1 AND status = 'queued' "
+            "UPDATE tasks SET status = 'running', started_at = now(), phase = 'executing' WHERE id = $1 AND status = 'queued' "
             "RETURNING id, title, instruction, session_id, kind, image, category, private", task_id)
         if row is None:  # cancelled while queued
             return
@@ -372,14 +374,16 @@ async def stopped() -> list[dict]:
 
 async def active() -> list[dict]:
     rows = await db.pool().fetch(
-        "SELECT id, title, status, kind, category, created_at, started_at FROM tasks WHERE status IN ('queued', 'running') ORDER BY id")
+        """SELECT id, title, status, kind, category, created_at, started_at, phase, cost_usd::float AS cost_usd,
+                  budget_usd::float AS budget_usd, model_used, retries FROM tasks WHERE status IN ('queued', 'running') ORDER BY id""")
     return [dict(r) for r in rows]
 
 
 async def recent(limit: int = 50) -> list[dict]:
     rows = await db.pool().fetch(
         """SELECT id, title, status, kind, category, private, instruction, result, error, created_at, started_at,
-                  finished_at, prompt_tokens, completion_tokens FROM tasks ORDER BY id DESC LIMIT $1""", limit)
+                  finished_at, prompt_tokens, completion_tokens, goal, criteria, plan, phase, cost_usd::float AS cost_usd,
+                  budget_usd::float AS budget_usd, artifacts, retries, model_used FROM tasks ORDER BY id DESC LIMIT $1""", limit)
     return [dict(r) for r in rows]
 
 

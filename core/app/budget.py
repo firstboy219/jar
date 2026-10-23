@@ -53,6 +53,10 @@ async def state(force: bool = False) -> dict:
     global _total_override
     saved = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'budget:total'")
     _total_override = float(saved) if isinstance(saved, (int, float)) and saved > 0 else None
+    daily = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'budget:daily'")
+    daily = float(daily) if isinstance(daily, (int, float)) and daily > 0 else None  # optional daily cap (blueprint §5)
+    today = float(await db.pool().fetchval(
+        "SELECT coalesce(sum(cost_usd), 0) FROM llm_usage WHERE at >= $1", datetime.now(WIB).replace(hour=0, minute=0, second=0, microsecond=0)))
     rows = await db.pool().fetch(
         "SELECT category, coalesce(sum(cost_usd), 0)::float AS spent FROM llm_usage WHERE at >= $1 GROUP BY category",
         month_start())
@@ -63,7 +67,8 @@ async def state(force: bool = False) -> dict:
     cap = total_budget()
     value = {
         "month": month_start().strftime("%Y-%m"), "spent_usd": round(total, 4), "budget_usd": cap,
-        "pct": round(total / cap * 100, 1) if cap else 0, "level": _level(total, cap),
+        "pct": round(total / cap * 100, 1) if cap else 0, "level": max(_level(total, cap), 100 if daily and today >= daily else 0),
+        "daily_usd": daily, "today_usd": round(today, 4),
         "categories": {name: {"spent_usd": round(spent.get(name, 0.0), 4), "budget_usd": c,
                               "level": _level(spent.get(name, 0.0), c)} for name, c in caps.items()},
     }

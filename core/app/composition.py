@@ -7,6 +7,7 @@ vision, drafts, minutes — is the owner's pick from OpenRouter's live catalog (
 
 import logging
 import re
+from pathlib import Path
 
 from . import audit, db, gateway, openrouter
 
@@ -18,7 +19,7 @@ STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whispe
 LOCKED = {"privat"}  # always local, not editable
 BUILTIN = {"ngobrol", "cepat", "penglihatan", "balas-pesan", "web", "coding", "produktivitas", "analisis", "rapat",
            "latar-belakang", "privat"}
-NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang"}  # tool calling: chat agent, Hermes
+NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "review"}  # tool calling: chat agent, Hermes
 NEEDS_VISION = {"penglihatan"}
 EXPENSIVE_OUT_USD = 15.0  # per 1M output tokens: above this the owner confirms first
 
@@ -91,8 +92,37 @@ PRESETS: dict[str, dict] = {
 }
 
 
+REGISTRY_FILE = Path(__file__).resolve().parent.parent / "config" / "model_registry.yaml"
+
+
+def registry_preset(path: Path = REGISTRY_FILE) -> dict | None:
+    """config/model_registry.yaml (Blueprint v2 §4.5) as a preset the owner can apply. Pure apart from reading the
+    file; None when the file is missing/unreadable (the other presets still work)."""
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text())
+    except (OSError, ImportError, ValueError):
+        return None
+    local_for = {"ngobrol", "cepat", "penglihatan", "balas-pesan"}
+    routes, limits, new = {}, {}, {}
+    for cat, spec in (data.get("categories") or {}).items():
+        chain = [r(OR, m) for m in [spec["primary"], *(spec.get("fallback") or [])] if m]
+        routes[cat] = chain + [L if cat in local_for else LK]
+        limits[cat] = {"paid_attempt_limit": int(spec.get("paid_attempt_limit", 1))}
+        if cat not in BUILTIN:
+            new[cat] = {"title": spec.get("title") or cat, "description": spec.get("description") or ""}
+    return {"title": "Blueprint v2 (free-first terukur)", "stt": None,
+            "summary": "Templat blueprint: model gratis dulu untuk kerja latar belakang/riset/coding, berbayar hanya setelah diagnosis; "
+                       "ngobrol tetap model cepat yang terbukti. Id model divalidasi ke katalog OpenRouter saat diterapkan.",
+            "routes": routes, "limits": limits, "new_categories": new, "free_fallback": data.get("free_fallback")}
+
+
 class CompositionError(ValueError):
     pass
+
+
+if (_blueprint := registry_preset()) is not None:
+    PRESETS["blueprint"] = _blueprint
 
 
 async def _kv(key: str, default=None):
@@ -141,6 +171,7 @@ async def get() -> dict:
         "categories": [{"name": c["name"], "title": c["title"], "description": c["description"],
                         "routes": [label(x) for x in c["routes"]], "builtin": c["name"] in BUILTIN, "budget_usd": float(c["budget_usd"]) if c["budget_usd"] is not None else None,
                         "allow_free": c["allow_free"], "confirm_cloud": c["confirm_cloud"], "worker": c["worker"],
+                        "paid_attempt_limit": c["paid_attempt_limit"], "max_retries": c["max_retries"],
                         "locked": c["name"] in LOCKED, "spent_usd": st["categories"].get(c["name"], {}).get("spent_usd", 0)}
                        for c in cats.values()],
         "budget": {k: st[k] for k in ("month", "spent_usd", "budget_usd", "pct", "level")},
@@ -176,6 +207,13 @@ async def apply_preset(name: str, actor: str) -> dict:
         raise CompositionError(f"preset tidak dikenal: {name}")
     models = await openrouter.catalog()
     async with db.pool().acquire() as conn, conn.transaction():
+        for new, spec in (preset.get("new_categories") or {}).items():  # e.g. "review": a reviewer other than the author
+            await conn.execute(
+                """INSERT INTO llm_categories (name, title, description, routes, allow_free, confirm_cloud, worker, sort)
+                   VALUES ($1, $2, $3, '[]'::jsonb, true, false, false, 150) ON CONFLICT (name) DO NOTHING""",
+                new, spec["title"][:60], spec["description"][:200])
+        for cat, lim in (preset.get("limits") or {}).items():
+            await conn.execute("UPDATE llm_categories SET paid_attempt_limit = $2 WHERE name = $1", cat, lim["paid_attempt_limit"])
         for cat, routes in preset["routes"].items():
             if models is not None:  # a preset must never write a model OpenRouter does not have
                 routes = [x for x in routes if x["provider"] != OR or openrouter.get(models, x["model"])] or [L]
@@ -183,7 +221,8 @@ async def apply_preset(name: str, actor: str) -> dict:
         for cat, cap in (preset.get("budgets") or {}).items():
             await conn.execute("UPDATE llm_categories SET budget_usd = $2 WHERE name = $1", cat, cap)
     await _set_kv("composition:preset", name)
-    await _set_kv("composition:stt", preset["stt"])
+    if preset.get("stt"):
+        await _set_kv("composition:stt", preset["stt"])
     gateway.invalidate()
     await audit.record(actor, "composition.preset", None, preset=name)
     await sync_hermes_profile(actor)
@@ -208,6 +247,11 @@ async def update(changes: dict, actor: str) -> dict:
         if "routes" in c:
             await db.pool().execute("UPDATE llm_categories SET routes = $2 WHERE name = $1",
                                     name, await _validate_routes(c["routes"]))
+        for knob, top in (("paid_attempt_limit", 5), ("max_retries", 5)):
+            if knob in c:
+                if not isinstance(c[knob], int) or not 0 <= c[knob] <= top:
+                    raise CompositionError(f"{knob} harus bilangan bulat 0–{top}")
+                await db.pool().execute(f"UPDATE llm_categories SET {knob} = $2 WHERE name = $1", name, c[knob])
         if "budget_usd" in c:
             cap = c["budget_usd"]
             if cap is not None and not (isinstance(cap, (int, float)) and 0 <= cap <= 100):
@@ -338,6 +382,26 @@ async def set_total_budget(usd: float, actor: str) -> float:
     from . import budget
     budget.forget()
     await audit.record(actor, "composition.budget", None, total=float(usd))
+    return float(usd)
+
+
+async def set_daily_budget(usd: float | None, actor: str) -> float | None:
+    """Optional daily cap; when today's spend reaches it, paid models stop until tomorrow (None removes it)."""
+    if usd is not None and (not isinstance(usd, (int, float)) or not 0 < usd <= 1000):
+        raise CompositionError("anggaran harian harus antara $0 dan $1000 (kosong = tanpa batas harian)")
+    await _set_kv("budget:daily", float(usd) if usd else 0)
+    from . import budget
+    budget.forget()
+    await audit.record(actor, "composition.budget_daily", None, daily=usd)
+    return float(usd) if usd else None
+
+
+async def set_task_budget(usd: float, actor: str) -> float:
+    """Default budget each new task starts with (per-task cap, blueprint §5)."""
+    if not isinstance(usd, (int, float)) or not 0 < usd <= 100:
+        raise CompositionError("anggaran per tugas harus antara $0 dan $100")
+    await _set_kv("budget:task_default", float(usd))
+    await audit.record(actor, "composition.budget_task", None, task=float(usd))
     return float(usd)
 
 

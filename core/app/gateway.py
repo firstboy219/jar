@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from . import db
+from . import db, modelrouter
 
 log = logging.getLogger("jarvis-core.gateway")
 
@@ -55,7 +55,7 @@ class Route:
 
     @property
     def free(self) -> bool:
-        return self.model.endswith(":free")
+        return self.model.endswith(":free") or self.model == "openrouter/free"  # the free router never bills
 
     @property
     def label(self) -> str:
@@ -123,6 +123,17 @@ def provider_key(provider: dict, caller: str = "") -> str:
     return os.getenv(env, "").strip()
 
 
+async def _arrange(category: str, routes: list, cat: dict, provs: dict, caller: str) -> list:
+    """modelrouter: no free model for sensitive content, sick models last, proven free alternatives (ADR-040)."""
+    p = provs.get("openrouter")
+
+    def make(model: str):
+        key = provider_key(p, caller) if p and p["enabled"] else ""
+        return Route(p["name"], model, p["base_url"].rstrip("/"), key, True, p["vision"]) if key else None
+    return await modelrouter.arrange(routes, make=make, needs_tools=category in modelrouter.NEEDS_TOOLS,
+                                     allow_free=bool(cat.get("allow_free")), no_free=modelrouter.NO_FREE.get())
+
+
 def _safety_route(provs: dict, caller: str, category: str, private: bool) -> "Route | None":
     p = provs.get("openrouter")
     if private or category in ("privat", "penglihatan") or not p or not p["enabled"] or not provider_key(p, caller):
@@ -159,6 +170,8 @@ async def plan(category: str, *, caller: str = "core", private: bool = False, wo
             continue
         if route not in routes and not _is_bad(route):
             routes.append(route)
+    if not private:
+        routes = await _arrange(category, routes, cat, provs, caller)
     net = _safety_route(provs, caller, category, private)
     if net and net not in routes and not _is_bad(net):
         first_local = next((i for i, r in enumerate(routes) if not r.cloud), len(routes))
@@ -268,16 +281,26 @@ async def cost_of(route: Route, usage: dict) -> float:
 
 
 async def _record(route: Route, category: str, caller: str, usage: dict, started: float,
-                  first_ms: int | None, ok: bool, error: str | None, session_id: str | None) -> None:
+                  first_ms: int | None, ok: bool, error: str | None, session_id: str | None,
+                  extra: dict | None = None) -> None:
+    extra = extra or {}
     try:
+        cost = await cost_of(route, usage) if ok else 0.0
         await db.pool().execute(
             """INSERT INTO llm_usage (category, caller, provider, model, prompt_tokens, cached_tokens,
-                   completion_tokens, cost_usd, latency_ms, first_token_ms, ok, error, session_id)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)""",
+                   completion_tokens, cost_usd, latency_ms, first_token_ms, ok, error, session_id,
+                   task_id, retry, fallback_reason)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)""",
             category, caller, route.provider, route.model, usage.get("prompt_tokens"),
             (usage.get("prompt_tokens_details") or {}).get("cached_tokens"), usage.get("completion_tokens"),
-            await cost_of(route, usage) if ok else 0.0, int((time.monotonic() - started) * 1000), first_ms,
-            ok, (error or "")[:300] or None, (session_id or "")[:128] or None)
+            cost, int((time.monotonic() - started) * 1000), first_ms,
+            ok, (error or "")[:300] or None, (session_id or "")[:128] or None,
+            extra.get("task_id"), extra.get("retry") or 0, (extra.get("fallback_reason") if ok else None))
+        if extra.get("task_id"):  # the task manager's live picture: what it cost, which model did the work
+            await db.pool().execute(
+                """UPDATE tasks SET cost_usd = cost_usd + $2, model_used = CASE WHEN $3 THEN $4 ELSE model_used END,
+                          retries = greatest(retries, $5) WHERE id = $1""",
+                extra["task_id"], cost, ok, route.model, extra.get("retry") or 0)
     except Exception:
         log.exception("usage not recorded")
 
@@ -406,7 +429,15 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
     """Yield OpenAI `chat.completion.chunk` dicts from the first route that starts answering."""
     body = {**body, "stream": True}
     errors: list[str] = []
-    for route in await plan(category, caller=caller, private=private, worker=worker):
+    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id)
+    queue = list(await plan(category, caller=caller, private=private, worker=worker))
+    while queue:
+        route = queue.pop(0)
+        if why := att.skip(route):
+            errors.append(f"{route.label}: dilewati ({why})")
+            att.note(why)
+            continue
+        att.begin(route)
         if _key in _inflight:
             _inflight[_key]["provider"] = route.provider
         b, headers = _prepare(body, route, session_id)
@@ -434,7 +465,11 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
             if resp is not None:
                 await resp.aclose()
             await client.aclose()
-            await _record(route, category, caller, {}, started, None, False, err, session_id)
+            retry = att.failed(route, err)
+            await _record(route, category, caller, {}, started, None, False, err, session_id, att.extra())
+            if retry:
+                await asyncio.sleep(modelrouter.RETRY_DELAY_S)
+                queue.insert(0, route)
             continue
         # Committed: from here on the stream is passed through as is.
         first_ms = int((time.monotonic() - started) * 1000)
@@ -461,7 +496,7 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
         finally:
             await resp.aclose()
             await client.aclose()
-            await _record(route, category, caller, usage, started, first_ms, ok, err, session_id)
+            await _record(route, category, caller, usage, started, first_ms, ok, err, session_id, att.extra())
             if ok and route.provider == LOCAL_WORKER and caller == "hermes" and (usage.get("prompt_tokens") or 0) >= SLOT_MIN_TOKENS:
                 # only Hermes' own long prompt is worth keeping on disk: a small call saved here once replaced
                 # the 22k-token Hermes prefix with 279 tokens, and every restore then forced a full re-read
@@ -487,7 +522,15 @@ async def _complete(category: str, body: dict, *, caller: str, session_id: str |
     """Non-streaming call with the same routing and failover; returns the OpenAI response JSON."""
     body = {**body, "stream": False}
     errors: list[str] = []
-    for route in await plan(category, caller=caller, private=private, worker=worker):
+    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id)
+    queue = list(await plan(category, caller=caller, private=private, worker=worker))
+    while queue:
+        route = queue.pop(0)
+        if why := att.skip(route):
+            errors.append(f"{route.label}: dilewati ({why})")
+            att.note(why)
+            continue
+        att.begin(route)
         if _key in _inflight:
             _inflight[_key]["provider"] = route.provider
         b, headers = _prepare(body, route, session_id)
@@ -505,9 +548,13 @@ async def _complete(category: str, body: dict, *, caller: str, session_id: str |
             err = f"{route.label}: {e if isinstance(e, GatewayError) else type(e).__name__}"
             errors.append(err)
             _mark_failed(route, err)
-            await _record(route, category, caller, {}, started, None, False, err, session_id)
+            retry = att.failed(route, err)
+            await _record(route, category, caller, {}, started, None, False, err, session_id, att.extra())
+            if retry:  # a passing hiccup (5xx/network): the same model once more before moving on
+                await asyncio.sleep(modelrouter.RETRY_DELAY_S)
+                queue.insert(0, route)
             continue
-        await _record(route, category, caller, data.get("usage") or {}, started, None, True, None, session_id)
+        await _record(route, category, caller, data.get("usage") or {}, started, None, True, None, session_id, att.extra())
         data["jarvis_route"] = route.public()
         return data
     raise GatewayError("semua model gagal: " + " | ".join(errors))
