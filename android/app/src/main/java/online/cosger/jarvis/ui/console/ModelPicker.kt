@@ -100,15 +100,16 @@ fun ModelPickerDialog(vm: JarvisViewModel, category: String, title: String, role
     var vision by remember { mutableStateOf(Models.needsVision(category)) }
     var sort by remember { mutableStateOf("termurah") }
     var confirm by remember { mutableStateOf<Pair<JsonObject, String>?>(null) }
+    var detail by remember { mutableStateOf<JsonObject?>(null) }
     val list = rememberLoad(query, free, tools, vision, sort) {
         delay(300) // typing: only the last keystroke asks the server
         vm.console.get(Models.query(query, free, tools, vision, sort)).obj()
     }
-    fun pick(m: JsonObject, confirmed: Boolean) = gate("Pakai ${m.s("name")} untuk $title") {
+    fun pick(m: JsonObject, confirmed: Boolean, asRole: String = role) = gate("Pakai ${m.s("name")} untuk $title") {
         scope.launch {
             runCatching {
                 vm.console.put("/api/v1/composition/model", buildJsonObject {
-                    put("category", category); put("model", m.s("id")); put("role", role); put("confirmed", confirmed)
+                    put("category", category); put("model", m.s("id")); put("role", asRole); put("confirmed", confirmed)
                 }).obj()
             }.onSuccess { r ->
                 if (r.b("needs_confirmation")) confirm = m to r.s("say")
@@ -121,7 +122,7 @@ fun ModelPickerDialog(vm: JarvisViewModel, category: String, title: String, role
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Pilih model — $title (${if (role == "cadangan") "cadangan" else "utama"})", color = JarvisColors.Text,
                     fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                Small("Daftar langsung dari OpenRouter. Ketuk satu model untuk memakainya.")
+                Small("Daftar langsung dari OpenRouter. Ketuk satu model untuk melihat kelebihan, kekurangan, kecepatan dan error-nya, lalu pakai.")
                 OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), singleLine = true,
                     label = { Text("Cari (mis. deepseek, claude, qwen)") })
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -140,17 +141,24 @@ fun ModelPickerDialog(vm: JarvisViewModel, category: String, title: String, role
                         if (Models.needsTools(category)) " · kategori ini butuh model yang bisa memakai alat" else "")
                     if (models.isEmpty()) Small("Tidak ada yang cocok — longgarkan filter.")
                     models.forEach { m ->
-                        Card(Modifier.clickable { pick(m, false) }) {
+                        val jv = m["jarvis"].obj()
+                        val level = ModelStats.level(jv.d("ok_pct"), jv.i("calls") ?: 0)
+                        Card(Modifier.clickable { detail = m }) {
                             Body(m.s("name"), size = 14)
                             Small(m.s("id"))
                             Small("${Models.price(m.b("free"), m.d("price_in"), m.d("price_out"))} · konteks ${Models.context(m.i("context") ?: 0)}" +
                                 Models.tags(m).joinToString("") { " · $it" }, JarvisColors.Cyan)
+                            ModelStats.badge(jv.i("calls"), jv.d("ok_pct"), jv.i("p50_ms"))?.let { Small("● $it", ModelStats.levelColor(level)) }
+                                ?: Small("belum pernah dipakai JARVIS")
                         }
                     }
                 }
                 Action("Tutup", JarvisColors.Muted, onClick = onDismiss)
             }
         }
+    }
+    detail?.let { m ->
+        ModelDetailDialog(vm, m.s("id"), category, onPick = { r -> detail = null; pick(m, false, r) }) { detail = null }
     }
     confirm?.let { (m, say) ->
         AlertDialog(

@@ -513,3 +513,24 @@ change settings on request ("dia bingung mengerjakan sesuatu yang belum pernah d
   10 minutes (`gateway._mark_failed`); and when the chosen models fail, a cheap cloud safety net
   (`gateway.SAFETY_MODEL`, setting `composition:safety_model`, never for /privat or vision) answers before the
   local model. Chat replies went from minutes to 1.4–3.6 s.
+
+## ADR-039 — Choosing a model with the facts: pros, cons, failure rate and speed per model (2026-10-23)
+Owner: "pilih model secara advance … tahu kelebihan dan kekurangan, mana yang sering error, berapa kecepatan response".
+- `modelinsight.py` joins four sources, kept apart in the UI: the catalog (price, context, abilities), OpenRouter's
+  public per-provider stats (`/models/{id}/endpoints`: uptime, latency p50/p90, throughput, quantization), JARVIS' own
+  calls (`llm_usage`, real traffic only: success rate, median/p95 time, first token, cost per call, errors by cause)
+  and the owner's live check (`model_bench`, migration 015: first token, tokens/s, does it call a tool).
+  Failures from missing credit (402) are the account's fault and are left out of a model's success rate.
+- `assess()` turns the numbers into pros / cons / "good for", each with its figure. It measures price, speed,
+  reliability and abilities — not how smart the answers are, and the app says so. A model that fails in practice is
+  not "good for" anything.
+- Endpoints `/admin/models/{id}/insight`, `/admin/models/stats`, `POST /admin/models/bench` (two requests ≈ $0.0001),
+  and the picker's list carries a per-model badge of JARVIS' own results.
+- APK 0.14.0: tapping a model in the picker opens its detail (pros/cons, OpenRouter numbers, JARVIS numbers, "Uji
+  sekarang", "Pakai sebagai utama/cadangan"); Lainnya → Statistik model lists every model used, by usage, error rate or speed.
+- Questions about models are answered by code, not by the chat model (`model_answers.py`, router intents
+  `openrouter_check`, `model_stats`, `model_compare`): asked to compare two models the chat model invented prices,
+  context sizes and abilities, and for "cek saldo" it only promised. The router recognises them, resolves the names
+  against the catalog (preferring models JARVIS already uses, never `:batch`/alias variants, free only when asked) and
+  the answer is built from the data. An unknown name falls through to the chat model. The prompt now also forbids
+  quoting model numbers from memory, and spawn_task is for research, not for settings questions.

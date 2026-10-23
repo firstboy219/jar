@@ -40,6 +40,9 @@ def normalize(raw: dict) -> dict:
         "tools": "tools" in (raw.get("supported_parameters") or []),
         "vision": "image" in inputs, "audio": "audio" in inputs,
         "created": int(raw.get("created") or 0),
+        "reasoning": "reasoning" in (raw.get("supported_parameters") or []),
+        "reasoning_forced": bool((raw.get("reasoning") or {}).get("mandatory")),
+        "expires": str(raw.get("expiration_date") or "")[:10] or None,
         "description": " ".join(str(raw.get("description") or "").split())[:200],
     }
 

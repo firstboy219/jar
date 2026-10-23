@@ -1401,3 +1401,81 @@ async def test_dead_pick_is_refused_and_a_dead_route_falls_to_a_cloud_net_before
     assert [r.model for r in await gateway.plan("ngobrol", private=True)] == ["qwen-lokal"]  # private never uses the cloud
     assert all(r.model != gateway.SAFETY_MODEL for r in await gateway.plan("penglihatan"))
     gateway._bad.clear()
+
+
+async def test_model_statistics_come_from_real_traffic_not_tests(pool, monkeypatch):
+    from app import modelinsight, openrouter
+    from tests.test_unit import CATALOG
+    await pool.execute("TRUNCATE llm_usage, model_bench")
+
+    async def put(model, ok, latency, error=None, caller="chat", provider="openrouter", cost=0.001, ft=None):
+        await pool.execute("""INSERT INTO llm_usage (category, caller, provider, model, ok, latency_ms, first_token_ms, error, cost_usd)
+                              VALUES ('ngobrol', $1, $2, $3, $4, $5, $6, $7, $8)""", caller, provider, model, ok, latency, ft, error, cost)
+    for ms in (1000, 2000, 3000, 4000):
+        await put("deepseek/deepseek-v4-flash", True, ms, ft=500)
+    await put("deepseek/deepseek-v4-flash", False, 50, "openrouter/deepseek/deepseek-v4-flash: HTTP 429: limit")
+    for _ in range(3):
+        await put("thinkingmachines/inkling:free", False, 50, "openrouter/thinkingmachines/inkling:free: HTTP 403: only agentic", cost=0)
+    await put("deepseek/deepseek-v4-flash", True, 9, caller="test")  # tests are not real traffic
+    await put("qwen-lokal", True, 120000, provider="lokal", cost=0)
+    for _ in range(3):
+        await put("qwen/credit-hit", False, 50, "openrouter/qwen/credit-hit: HTTP 402: requires more credits")
+    await put("qwen/credit-hit", True, 500)
+    stats = await modelinsight.usage(7)
+    flash = stats["deepseek/deepseek-v4-flash"]
+    assert flash["calls"] == 5 and flash["ok_calls"] == 4 and flash["ok_pct"] == 80.0 and flash["p50_ms"] == 2500
+    assert flash["first_token_ms"] == 500 and flash["errors"] == {"kena batas permintaan (429)": 1}
+    assert stats["thinkingmachines/inkling:free"]["errors"] == {"ditolak OpenRouter (403)": 3}
+    assert stats["qwen/credit-hit"]["ok_pct"] == 100.0 and stats["qwen/credit-hit"]["credit_fails"] == 3  # no credit ≠ model's fault
+    assert stats["lokal"]["p50_ms"] == 120000  # local models are listed by their provider
+    # a benchmark row is stored, trimmed to the last 20, and read back
+    for i in range(23):
+        await pool.execute("INSERT INTO model_bench (model, ok, first_ms, tools_ok) VALUES ('a/b', true, $1, true)", i)
+    await pool.execute("DELETE FROM model_bench WHERE model = 'a/b' AND id NOT IN (SELECT id FROM model_bench WHERE model = 'a/b' ORDER BY at DESC, id DESC LIMIT 20)")
+    assert (await pool.fetchval("SELECT count(*) FROM model_bench WHERE model = 'a/b'")) == 20
+    assert (await modelinsight.latest_bench("a/b"))["tools_ok"] is True
+
+    async def catalog(force=False):
+        return CATALOG
+
+    async def no_market(model_id):
+        return None
+    monkeypatch.setattr(openrouter, "catalog", catalog)
+    monkeypatch.setattr(modelinsight, "market", no_market)
+    full = await modelinsight.insight("deepseek/deepseek-v4-flash", "ngobrol")
+    assert full["jarvis"]["calls"] == 5 and full["untuk_kategori"]["kategori"] == "ngobrol" and full["kelebihan"]
+    assert "tidak ada di katalog" in (await modelinsight.insight("nope/none"))["error"]
+
+
+async def test_model_questions_are_answered_from_data_not_invented(pool, monkeypatch):
+    from app import assistant, chat, composition, modelinsight, openrouter
+    from tests.test_unit import CATALOG
+    await pool.execute("TRUNCATE llm_usage")
+
+    async def catalog(force=False):
+        return CATALOG
+
+    async def no_market(model_id):
+        return None
+    monkeypatch.setattr(openrouter, "catalog", catalog)
+    monkeypatch.setattr(modelinsight, "market", no_market)
+    for ms in (900, 1100, 1300, 1500, 1700):
+        await pool.execute("""INSERT INTO llm_usage (category, caller, provider, model, ok, latency_ms, cost_usd)
+                              VALUES ('ngobrol', 'chat', 'openrouter', 'deepseek/deepseek-v4-flash', true, $1, 0.0004)""", ms)
+    for _ in range(4):
+        await pool.execute("""INSERT INTO llm_usage (category, caller, provider, model, ok, latency_ms, error, cost_usd)
+                              VALUES ('ngobrol', 'chat', 'openrouter', 'google/gemma-4-31b-it:free', false, 40, 'openrouter/google/gemma: HTTP 429: limit', 0)""")
+
+    async def never(*a, **k):
+        raise AssertionError("the chat model must not be asked: these answers come from data")
+    monkeypatch.setattr(assistant.llm, "stream_chat", never, raising=False)
+    monkeypatch.setattr(assistant.llm, "chat", never, raising=False)
+    t = await chat.handle("apa kelebihan dan kekurangan deepseek v4 flash dibanding deepseek v4 pro?", "s300", actor="test")
+    assert "DeepSeek: V4 Flash" in t.reply and "DeepSeek: V4 Pro" in t.reply and "$0.091 masuk / $0.182 keluar" in t.reply
+    assert "5 panggilan, 100.0% berhasil" in t.reply and "Kelebihan" in t.reply and "tidak bisa diukur otomatis" in t.reply
+    t = await chat.handle("model mana yang paling sering error 3 hari terakhir?", "s300", actor="test")
+    assert "Paling sering gagal — 3 hari" in t.reply and t.reply.index("gemma") < t.reply.index("deepseek-v4-flash")
+    assert "kena batas permintaan (429) ×4" in t.reply and "0.0% berhasil" in t.reply or "0% berhasil" in t.reply
+    # a name the catalog does not know is not invented: the sentence falls through to the chat model (which here refuses)
+    from app import model_answers
+    assert await model_answers.compare("kelebihan modelxyz dibanding fantasi") is None

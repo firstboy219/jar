@@ -24,7 +24,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, attachments, audit, auditor, awareness, library, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -1217,7 +1217,42 @@ async def admin_openrouter_models(q: str = "", free: bool = False, vision: bool 
         raise HTTPException(503, "daftar model OpenRouter belum bisa diambil")
     found = openrouter.search(models, q[:80], free=True if free else None, vision=True if vision else None,
                               tools=True if tools else None, sort=sort if sort in openrouter.SORTS else "termurah", limit=limit)
-    return {"total": len(models), "models": found}
+    own = await modelinsight.usage(14)  # a badge per model JARVIS already used: how often it worked, how fast
+    return jsonable({"total": len(models), "models": [
+        m | ({"jarvis": {k: own[m["id"]][k] for k in ("calls", "ok_pct", "p50_ms")}} if m["id"] in own else {}) for m in found]})
+
+
+@app.get("/admin/models/stats")
+async def admin_models_stats(days: int = 7, _: str = admin):
+    """Every model JARVIS called: how many calls, how often they failed and why, how fast (the app's "Statistik model")."""
+    stats = await modelinsight.usage(days)
+    return jsonable({"days": max(1, min(days, 90)),
+                     "models": sorted(stats.values(), key=lambda s: -s["calls"])})
+
+
+@app.get("/admin/models/{model_id:path}/insight")
+async def admin_model_insight(model_id: str, category: str = "", _: str = admin):
+    """Pros, cons, failures and speed of one model, from four sources (modelinsight.py)."""
+    return jsonable(await modelinsight.insight(model_id, category))
+
+
+class BenchIn(BaseModel):
+    model: str = Field(min_length=1, max_length=120)
+
+
+_bench_lock = asyncio.Lock()
+
+
+@app.post("/admin/models/bench")
+async def admin_model_bench(b: BenchIn, actor: str = admin):
+    """"Uji sekarang": two small real requests to this model (≈ $0.0001): speed of a short answer + tool calling."""
+    if _bench_lock.locked():
+        raise HTTPException(429, "Masih ada uji yang berjalan — tunggu sebentar.")
+    models = await openrouter.catalog()
+    if models is not None and not openrouter.get(models, b.model):
+        raise HTTPException(422, f"model {b.model} tidak ada di OpenRouter")
+    async with _bench_lock:
+        return jsonable(await modelinsight.run_bench(b.model, actor))
 
 
 @app.post("/admin/openrouter/check")

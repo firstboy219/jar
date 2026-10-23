@@ -62,11 +62,15 @@ draft_reply (TEKS LAYAR ikut di pesannya). Jika hasilnya needs_confirmation, tan
 akan diproses model cloud, boleh?" lalu panggil lagi dengan confirmed=true bila ia setuju. Kamu TIDAK \
 PERNAH mengirim pesan; pemilik yang memilih dan mengirim draf dari layarnya. Minta dibuatkan/dibalaskan email, surat, atau pesan dari BERKAS TERLAMPIR, obrolan, atau sekadar arahan (tanpa layar dibagikan) → write_draft; hasilnya tampil di layar (bisa disalin) dan jadi file .docx yang bisa diunduh. Jangan hanya berjanji membuatkannya.
 
-Pengaturan AI: pemilik BOLEH minta apa saja soal model/anggaran/pengaturan lewat obrolan dan kamu yang \
-mengerjakannya — jangan pernah bilang "tidak bisa dari obrolan" atau "belum pernah diset". Cari id model dengan \
+Angka model AI (harga, konteks, kecepatan, error, kelebihan/kekurangan) HANYA dari find_models/ai_settings — \
+jangan pernah mengarang atau mengingat-ingat; kalau belum dicek, cek dulu. Pengaturan & info model AI: KERJAKAN SENDIRI dengan find_models / ai_settings (hasilnya datang dalam detik) — \
+JANGAN spawn_task untuk ini, jangan bilang "nanti kukabari". Pemilik BOLEH minta apa saja soal \
+model/anggaran/pengaturan lewat obrolan dan kamu yang mengerjakannya — jangan pernah bilang "tidak bisa dari obrolan" atau "belum pernah diset". Cari id model dengan \
 find_models ("pakai deepseek flash" → cari dulu), lalu ai_settings: set_model (category, model), set_budget, \
 set_stt, set_strong_mode, apply_preset, create_category (jenis pekerjaan baru dengan modelnya sendiri), \
 check_openrouter ("cek saldo/koneksi openrouter" → tes nyata, jangan menebak), show ("kamu pakai model apa?"), \
+model_info (kelebihan/kekurangan/kecepatan/error satu model), model_stats ("model mana yang sering error?"), \
+benchmark ("uji kecepatan model X"), \
 list_settings/change_setting (jam tenang dll.). Kunci/password rahasia tidak lewat obrolan (Lainnya → \
 Pengaturan server). Setelah mengubah, sebutkan modelnya dan harganya. Model mahal: tanya dulu (needs_confirmation). \
 Hanya Qdrant dan n8n yang permanen; model lain bebas dipilih.
@@ -100,7 +104,8 @@ Memahami ucapan (penting — mic mendengar terus, jadi bisa ada suara lain):
 TOOLS = [
     {"type": "function", "function": {
         "name": "spawn_task",
-        "description": "Tugaskan worker untuk mengerjakan satu pekerjaan di latar belakang.",
+        "description": "Tugaskan worker untuk mengerjakan satu pekerjaan di latar belakang (riset web, dokumen, kode). "
+                       "BUKAN untuk pertanyaan/pengaturan soal model AI, statistik, anggaran, saldo — itu langsung dengan ai_settings/find_models.",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "judul singkat, mis. 'Cek harga emas Antam'"},
             "instruction": {"type": "string", "description": "instruksi lengkap & mandiri untuk worker"},
@@ -123,7 +128,7 @@ TOOLS = [
         "description": "Lihat/ubah pengaturan AI atas permintaan pemilik: model tiap kategori, anggaran, mesin suara, mode kuat, "
                        "kategori baru, cek OpenRouter, pengaturan lain (jam tenang dll).",
         "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["show", "set_model", "set_budget", "set_stt", "set_strong_mode", "apply_preset",
+            "action": {"type": "string", "enum": ["show", "model_info", "model_stats", "benchmark", "set_model", "set_budget", "set_stt", "set_strong_mode", "apply_preset",
                                                  "create_category", "delete_category", "check_openrouter", "list_settings",
                                                  "change_setting"]},
             "category": {"type": "string", "description": "ngobrol, cepat, penglihatan, balas-pesan, web, coding, produktivitas, "
@@ -453,8 +458,8 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await send({"type": "say", "text": reply})
         return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
-    if action := _direct_action(text, stt, screen, screen_text or files):
-        reply = await _act(action, session_id, actor, device_id, location, private)
+    if (action := _direct_action(text, stt, screen, screen_text or files)) and (
+            reply := await _act(action, session_id, actor, device_id, location, private)) is not None:
         if speak_live:
             await send({"type": "say", "text": reply})
         ms = int((time.monotonic() - started) * 1000)
@@ -577,10 +582,17 @@ async def start_draft(request: str, session_id: str, actor: str, device_id, loca
     return {"task_id": t["id"], "status": "queued", "say": "Draf sedang ditulis (±2–3 menit), nanti muncul di layar + file .docx."}
 
 
-async def _act(action, session_id: str, actor: str, device_id, location, private: bool) -> str:
-    from . import media_tools, perf
+async def _act(action, session_id: str, actor: str, device_id, location, private: bool) -> str | None:
+    """None = not something to do directly after all (e.g. no model name recognised): the chat model answers."""
+    from . import media_tools, model_answers, perf
     a = action.args
     match action.name:
+        case "openrouter_check":
+            return await model_answers.openrouter_check(actor)
+        case "model_stats":
+            return await model_answers.stats(a["text"])
+        case "model_compare":
+            return await model_answers.compare(a["text"])
         case "play_music":
             r = await media_tools.play(a["query"])
             if r.get("playing") and r.get("source") == "YouTube":

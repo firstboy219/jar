@@ -15,11 +15,11 @@ import logging
 
 import httpx
 
-from . import audit, composition, db, gateway, openrouter
+from . import audit, composition, db, gateway, modelinsight, openrouter
 from .config import settings
 
 log = logging.getLogger("jarvis-core.chat_settings")
-READ_ONLY = {"show", "check_openrouter", "list_settings"}
+READ_ONLY = {"show", "check_openrouter", "list_settings", "model_info", "model_stats"}
 # Settings the chat may not touch: managed by JARVIS itself or covered by a dedicated action.
 SETTING_BLOCKED = {"HERMES_PROFILE", "JARVIS_BUDGET_USD"}
 ADMIN_URL = "http://jarvis-admin:8000"
@@ -72,6 +72,31 @@ async def ai_settings(args: dict, actor: str) -> dict:
                 return await composition.summary()
             case "check_openrouter":
                 return await composition.check_openrouter(actor)
+            case "model_info":
+                if not model:
+                    return {"error": "sebutkan model (cari idnya dulu dengan find_models)"}
+                r = await modelinsight.insight(model, category)
+                if "error" in r:
+                    return r
+                mk, own, bench = r["pasar"] or {}, r["jarvis"] or {}, r["uji"] or {}
+                return {"model": r["model"]["name"], "kelebihan": r["kelebihan"], "kekurangan": r["kekurangan"],
+                        "cocok_untuk": [g["nama"] for g in r["cocok_untuk"]],
+                        "openrouter": {"median_mulai_ms": mk.get("latency_p50_ms"), "token_per_detik": mk.get("throughput_p50"),
+                                       "aktif_sehari_pct": mk.get("uptime_1d_avg"), "penyedia": mk.get("providers")},
+                        "di_jarvis": {"panggilan": own.get("calls"), "berhasil_pct": own.get("ok_pct"), "median_ms": own.get("p50_ms"),
+                                      "error": own.get("errors")} if own else "belum pernah dipakai",
+                        "uji_terakhir": {"mulai_ms": bench.get("first_ms"), "token_per_detik": bench.get("tok_s"),
+                                         "bisa_alat": bench.get("tools_ok")} if bench else "belum pernah diuji",
+                        "catatan": r["catatan"]}
+            case "model_stats":
+                days = int(args.get("value") or 7) if str(args.get("value") or "7").isdigit() else 7
+                stats = sorted((await modelinsight.usage(days)).values(), key=lambda s: -s["calls"])[:12]
+                return {"hari": days, "model": [{"model": s["model"], "penyedia": s["provider"], "panggilan": s["calls"],
+                                                 "berhasil_pct": s["ok_pct"], "median_ms": s["p50_ms"], "error": s["errors"]} for s in stats]}
+            case "benchmark":
+                if not model:
+                    return {"error": "sebutkan model yang diuji"}
+                return await modelinsight.run_bench(model, actor)
             case "set_model":
                 if not (category and model):
                     return {"error": "sebutkan category dan model (cari idnya dulu dengan find_models)"}

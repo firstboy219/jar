@@ -73,8 +73,20 @@ _SHORT_NEWS = re.compile(r"^(?:\w+\s+)?" + _NEWS_WORD + r"\s*(?P<topic>(?:\w+\s*
 _NO_TOPIC = re.compile(r"^(hari ini|terkini|terbaru|sekarang|apa|apa saja|apa aja|hari ini apa|pagi ini|malam ini)?$")
 
 
+_OR_CHECK = re.compile(r"\b(cek|periksa|tes|test|coba)\b.*\b(saldo|koneksi|kredit|openrouter)\b|\b(saldo|kredit) openrouter\b")
+_MODEL_STATS = re.compile(r"\bstatistik model\b|\b(model|ai)\b.*\b(sering error|paling error|error|gagal|bermasalah|tercepat|paling cepat|termurah|paling murah)\b")
+_MODEL_COMPARE = re.compile(r"\b(kelebihan|kekurangan|bandingkan|banding|dibanding|lebih (?:bagus|baik)|beda|perbedaan|vs|versus)\b")
+_MODEL_NAMES = re.compile(r"\b(model|deepseek|qwen\S*|claude|gpt\S*|gemini|gemma|llama|mistral|nemotron|grok|kimi|glm|haiku|sonnet|opus|minimax|cohere|inkling)\b")
+
+
 def parse_action(text: str) -> Intent | None:
     lowered = " ".join(text.strip().lower().split())
+    if _OR_CHECK.search(lowered):
+        return Intent("openrouter_check", {})
+    if _MODEL_STATS.search(lowered):
+        return Intent("model_stats", {"text": lowered})
+    if _MODEL_COMPARE.search(lowered) and _MODEL_NAMES.search(lowered):
+        return Intent("model_compare", {"text": lowered})
     # charts and playlists first: "carikan lagu RnB top 10 dan masukkan ke playlist saya", "putar playlist saya"
     if m := _PLAY_PLAYLIST.match(lowered):
         name = (m["name"] or "").strip()

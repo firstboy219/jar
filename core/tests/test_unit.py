@@ -682,3 +682,62 @@ def test_gateway_skips_models_the_provider_refuses_outright():
     assert refused_outright("openrouter/x/y: HTTP 404: Provider returned error")
     assert not refused_outright("openrouter/x/y: HTTP 402: requires more credits")  # credit: not the model's fault
     assert not refused_outright("openrouter/x/y: HTTP 429: rate limited") and not refused_outright("lokal/qwen: RemoteProtocolError")
+
+
+def test_model_assessment_says_what_the_numbers_say():
+    from app.modelinsight import assess, classify_error, fmt_ms, summarize_endpoints
+    eps = [{"uptime_last_1d": 100, "uptime_last_30m": 100, "latency_last_30m": {"p50": 425, "p90": 988}, "throughput_last_30m": {"p50": 99},
+            "quantization": "fp4", "max_completion_tokens": 1000},
+           {"uptime_last_1d": 96.7, "uptime_last_30m": 100, "latency_last_30m": {"p50": 4483, "p90": 7338}, "throughput_last_30m": {"p50": 19},
+            "quantization": "fp8"},
+           {"uptime_last_1d": 100, "latency_last_30m": {"p50": 1100}, "throughput_last_30m": {"p50": 35}, "quantization": "unknown"}]
+    s = summarize_endpoints(eps)
+    assert s["providers"] == 3 and s["latency_p50_ms"] == 1100 and s["latency_best_ms"] == 425 and s["throughput_best"] == 99
+    assert s["uptime_1d_min"] == 96.7 and s["quantization"] == ["fp4", "fp8"]
+    flash = {"id": "deepseek/deepseek-v4-flash", "name": "F", "context": 1_048_576, "price_in": 0.09, "price_out": 0.18, "free": False,
+             "tools": True, "vision": False, "reasoning": True, "reasoning_forced": False, "expires": None}
+    market = {"providers": 8, "uptime_1d_avg": 100, "uptime_1d_min": 96, "latency_p50_ms": 700, "throughput_p50": 70, "quantization": ["fp4"]}
+    a = assess(flash, market, {"calls": 40, "ok_calls": 40, "errors": {}}, {"tools_ok": True, "ok": True, "first_ms": 600})
+    pros, cons = " | ".join(a["kelebihan"]), " | ".join(a["kekurangan"])
+    assert "Sangat murah" in pros and "1 juta token" in pros and "Menulis cepat" in pros and "Terbukti memanggil alat" in pros
+    assert "Andal di JARVIS: 100%" in pros and "fp4" in cons
+    assert {g["kategori"] for g in a["cocok_untuk"]} >= {"ngobrol", "coding", "analisis", "web"}
+    # a free model that cannot use tools and fails a lot in JARVIS
+    bad = {"id": "x/inkling:free", "name": "I", "context": 20_000, "price_in": 0, "price_out": 0, "free": True, "tools": False,
+           "vision": False, "reasoning": False, "reasoning_forced": True, "expires": "2026-12-31"}
+    b = assess(bad, {"providers": 1, "uptime_1d_avg": 90, "uptime_1d_min": 90, "latency_p50_ms": 4000, "throughput_p50": 10, "quantization": []},
+               {"calls": 20, "ok_calls": 2, "errors": {"ditolak OpenRouter (403)": 18}}, {"ok": False, "error": "HTTP 403: nope"})
+    cons = " | ".join(b["kekurangan"])
+    for expected in ("Gratis dibatasi kuota", "Tidak bisa memakai alat", "Konteks kecil", "Selalu berpikir dulu", "Lambat memulai",
+                     "Menulis lambat", "Sering turun", "Hanya satu penyedia", "Sering gagal di JARVIS: hanya 10%", "ditolak OpenRouter (403)",
+                     "dihentikan OpenRouter pada 2026-12-31", "Uji terakhir gagal"):
+        assert expected in cons, expected
+    assert b["cocok_untuk"] == [] and "pintar" in b["catatan"]
+    c = assess(flash, market, {"calls": 30, "counted_calls": 20, "ok_calls": 20, "credit_fails": 10, "errors": {"kredit tidak cukup (402)": 10}}, None)
+    assert "Andal di JARVIS: 100% berhasil dari 20" in " | ".join(c["kelebihan"])
+    assert "10 panggilan gagal karena kredit akun habis" in " | ".join(c["kekurangan"])
+    assert classify_error("openrouter/x: HTTP 402: requires more credits") == "kredit tidak cukup (402)"
+    assert classify_error("lokal: ReadTimeout (timeout)") == "timeout" and classify_error("dihentikan (CancelledError)") == "dibatalkan"
+    assert fmt_ms(425) == "425 ms" and fmt_ms(1612) == "1,6 dtk" and fmt_ms(None) == "?"
+
+
+def test_model_questions_are_recognised_and_names_resolved():
+    from app import model_answers as ma
+    from app.router import parse_action
+    assert parse_action("cek saldo openrouter").name == "openrouter_check"
+    assert parse_action("tolong cek koneksi openrouter sekarang").name == "openrouter_check"
+    assert parse_action("model mana yang paling sering error 3 hari terakhir?").name == "model_stats"
+    assert parse_action("statistik model").name == "model_stats"
+    assert parse_action("apa kelebihan dan kekurangan deepseek v4 flash dibanding qwen3.7 flash?").name == "model_compare"
+    assert parse_action("bandingkan claude haiku vs gemini flash").name == "model_compare"
+    for chat in ("halo", "jam berapa sekarang", "kelebihan tinggal di apartemen", "putar lagu rnb"):
+        a = parse_action(chat)
+        assert a is None or a.name not in ("model_compare", "model_stats", "openrouter_check"), chat
+    assert ma.split_names("apa kelebihan dan kekurangan deepseek v4 flash dibanding qwen3.7 flash?") == [["deepseek", "v4", "flash"], ["qwen3.7", "flash"]]
+    assert ma.split_names("bandingkan claude haiku vs gemini flash vs gpt luna") == [["claude", "haiku"], ["gemini", "flash"], ["gpt", "luna"]]
+    cands = [{"id": "d/v4-flash:batch", "free": False}, {"id": "~d/v4-flash-latest", "free": False}, {"id": "d/v4-flash", "free": False},
+             {"id": "d/v4-flash:free", "free": True}]
+    assert ma.pick_best(cands, ["v4"], set())["id"] == "d/v4-flash"
+    assert ma.pick_best(cands, ["v4", "free"], set())["id"] == "d/v4-flash:free"
+    assert ma.pick_best(cands, ["v4"], {"~d/v4-flash-latest"})["id"] == "~d/v4-flash-latest"  # the one JARVIS already uses
+    assert ma.pick_best([], ["x"], set()) is None
