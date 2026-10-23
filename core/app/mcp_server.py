@@ -284,6 +284,35 @@ async def playlist_show(playlist: str = "") -> list[dict]:
     return [{k: v for k, v in s.items() if k in ("title", "artist", "source")} for s in await playlists.items(playlist or None)]
 
 
+async def _core(method: str, path: str, **kw) -> dict:
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.request(method, f"http://jarvis-core:8000{path}", headers={"X-Internal-Token": settings.mcp_token}, **kw)
+    return r.json() if r.status_code == 200 else {"error": f"core HTTP {r.status_code}: {r.text[:200]}"}
+
+
+@mcp.tool()
+async def capability_search(query: str, limit: int = 5) -> dict:
+    """What JARVIS can already do for this (skills, workers, tools), found by meaning, with how often each worked.
+    Use a tested skill before researching from scratch."""
+    return await _core("GET", "/internal/capabilities/search", params={"q": query, "limit": limit})
+
+
+@mcp.tool()
+async def task_plan(task_id: int, criteria: list[str], steps: list[str], goal: str = "") -> dict:
+    """Save your plan for task #task_id BEFORE working: `criteria` = what must be true for the task to count as done
+    (1–8 checkable statements), `steps` = the steps you will take (1–12), `goal` = the aim in one sentence."""
+    return await _core("POST", f"/internal/tasks/{task_id}/plan", json={"goal": goal, "criteria": criteria, "steps": steps})
+
+
+@mcp.tool()
+async def task_verify(task_id: int, ok: bool, evidence: str, capabilities_used: list[str] | None = None) -> dict:
+    """Check your result against the criteria and record it. `evidence` = the proof (numbers, sources, file names, what
+    you opened and saw) — never just "done". `ok` false when a criterion is not met. `capabilities_used` = ids from
+    capability_search (e.g. skill:riset-bersumber) so their track record is kept."""
+    return await _core("POST", f"/internal/tasks/{task_id}/verify",
+                       json={"ok": ok, "evidence": evidence, "capabilities_used": capabilities_used or []})
+
+
 @mcp.tool()
 async def saved_items(query: str = "", kind: str = "") -> list[dict]:
     """Simpanan: things JARVIS made or showed the owner before (songs, playlists, documents, drafts, pictures, videos,

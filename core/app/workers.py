@@ -6,10 +6,11 @@ result becomes a spoken report (see reports.py).
 """
 
 import asyncio
+import json
 import logging
 import re
 
-from . import approvals, audit, db, gateway, hermes, hub, memory, modelrouter, quick, reports, writer
+from . import approvals, audit, capabilities, db, gateway, hermes, hub, memory, modelrouter, quick, reports, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -27,7 +28,11 @@ WORKER_BRIEF = (
     "Pemilik (lewat agen utama JARVIS yang sedang mengobrol dengannya) memintamu mengerjakan ini; ia tidak "
     "menunggu di chat ini. Kalau butuh jawabannya untuk melanjutkan, tanya lewat ask_owner. Hasil akhirmu "
     "akan diringkas dan diucapkan ke pemilik, jadi akhiri dengan HASIL: fakta/angka penting, sumber, dan "
-    "langkah berikutnya bila ada.\n\n"
+    "langkah berikutnya bila ada.\n"
+    "Cara kerja: (1) pakai kemampuan yang sudah ada (capability_search bila perlu) sebelum meriset ulang; "
+    "(2) sebelum mulai simpan rencana + kriteria selesai dengan task_plan; (3) kerjakan; (4) periksa hasil "
+    "terhadap kriteria dan catat dengan task_verify — evidence = bukti nyata (angka, sumber, file), bukan klaim; "
+    "isi capabilities_used dengan id kemampuan yang kamu pakai.\n\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",
@@ -86,6 +91,8 @@ async def _run(task_id: int, context: str) -> None:
         await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "running", "kind": kind})
         # internal kinds carry their own instructions; the task number lets tools (ask_owner, documents) refer to it
         brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
+        if kind == "owner":  # what JARVIS can already do for this, and how well it has worked (Blueprint §6.2 F: reuse first)
+            brief += await capabilities.brief_for(row["instruction"].split(quick.CONTEXT_MARK)[0])
         if row["image"]:
             brief += ("Gambar terlampir adalah apa yang ditunjukkan pemilik (kamera/layar) saat memberi tugas ini.\n"
                       f"DESKRIPSI GAMBAR (oleh agen utama, karena model worker mungkin tidak bisa melihat): "
@@ -136,12 +143,13 @@ async def _run(task_id: int, context: str) -> None:
             if billing.is_exhausted(result.text):  # Hermes reports a 402 as its "answer": it is a failure
                 await billing.notify_exhausted()
                 raise RuntimeError("saldo OpenRouter habis")
+            text = result.text + (await _verification_note(task_id) if kind == "owner" else "")
             await db.pool().execute(
                 """UPDATE tasks SET status = 'completed', result = $2, finished_at = now(),
                    prompt_tokens = $3, completion_tokens = $4 WHERE id = $1""",
-                task_id, result.text, result.prompt_tokens, result.completion_tokens)
+                task_id, text, result.prompt_tokens, result.completion_tokens)
             await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "completed", "kind": kind})
-            await _deliver(task_id, kind, row["title"], result.text, row["session_id"])
+            await _deliver(task_id, kind, row["title"], text, row["session_id"])
         except asyncio.CancelledError:
             stopped = task_id in _stopping
             await db.pool().execute(
@@ -151,6 +159,8 @@ async def _run(task_id: int, context: str) -> None:
             raise
         except Exception as e:
             log.exception("worker %s failed", task_id)
+            if kind == "owner" and await _auto_recover(task_id, row, e, context):
+                return  # one more attempt, a different way: the owner hears about it only if that fails too
             await db.pool().execute(
                 "UPDATE tasks SET status = 'failed', error = $2, finished_at = now() WHERE id = $1",
                 task_id, str(e)[:1000])
@@ -270,6 +280,68 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
             from . import auditor
             await auditor.on_fix_done(task_id)
         await reports.from_task(task_id, title, result, session_id)
+
+
+async def _verification_note(task_id: int) -> str:
+    """No claim of success without evidence: tell the owner when a planned task was not checked against its criteria
+    (or the check failed). Tasks without a plan (quick look-ups, drafts) get no note."""
+    row = await db.pool().fetchrow("SELECT plan, artifacts FROM tasks WHERE id = $1", task_id)
+    if not row or not row["plan"]:
+        return ""
+    checks = [a for a in (json.loads(row["artifacts"]) if isinstance(row["artifacts"], str) else row["artifacts"] or [])
+              if isinstance(a, dict) and a.get("type") == "verification"]
+    if not checks:
+        return "\n\n(Catatan: hasil ini belum diperiksa terhadap kriteria keberhasilannya.)"
+    if not checks[-1].get("ok"):
+        return f"\n\n(Catatan: pemeriksaan terhadap kriteria TIDAK lolos: {str(checks[-1].get('evidence'))[:300]})"
+    return ""
+
+
+async def _auto_recover(task_id: int, row, error: Exception, context: str) -> bool:
+    """A failed owner task gets ONE automatic second attempt with the diagnosis in front of the worker (Blueprint §6:
+    "task gagal → penyebab dan langkah pemulihan dicatat"). Not for an empty balance or Hermes being down (handled
+    elsewhere), and never twice."""
+    text = str(error)
+    if "saldo OpenRouter habis" in text or "tidak dapat dihubungi" in text:
+        return False
+    from . import modelinsight
+    cause = modelinsight.classify_error(text)
+    again = await db.pool().fetchval(
+        """UPDATE tasks SET recovered = 1, status = 'queued', error = NULL, started_at = NULL, phase = NULL,
+                  instruction = instruction || $2 WHERE id = $1 AND recovered = 0 RETURNING id""",
+        task_id, f"\n\n---PERCOBAAN KEDUA---\nPercobaan pertama gagal ({cause}: {text[:200]}). Pakai pendekatan yang berbeda; "
+                 "jangan ulangi langkah yang sama.")
+    if not again:
+        return False
+    await audit.record("jarvis-core", "task.recovering", f"task:{task_id}", cause=cause)
+    await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "queued", "kind": "owner"})
+    _start(task_id, context)
+    return True
+
+
+async def set_plan(task_id: int, goal: str, criteria: list[str], steps: list[str]) -> bool:
+    """Hermes' own plan for the task and what "done" means; the phase moves on to executing (Blueprint §10)."""
+    done = await db.pool().execute(
+        """UPDATE tasks SET goal = coalesce(nullif($2, ''), goal), criteria = $3, plan = $4, phase = 'executing'
+           WHERE id = $1 AND status = 'running'""", task_id, goal, criteria, steps)  # the jsonb codec (db.py) encodes the Python lists
+    if done.endswith(" 1"):
+        await hub.broadcast({"type": "task_phase", "id": task_id, "phase": "executing", "criteria": criteria, "plan": steps})
+    return done.endswith(" 1")
+
+
+async def verify(task_id: int, ok: bool, evidence: str, capabilities_used: list[str]) -> bool:
+    """The worker's check of its result against the criteria, WITH evidence; scores the capabilities it used."""
+    from . import capabilities
+    row = await db.pool().fetchrow("SELECT cost_usd::float AS cost FROM tasks WHERE id = $1 AND status = 'running'", task_id)
+    if not row:
+        return False
+    entry = {"type": "verification", "ok": ok, "evidence": evidence[:2000]}
+    await db.pool().execute(
+        "UPDATE tasks SET phase = 'testing', artifacts = artifacts || $2::jsonb WHERE id = $1", task_id, [entry])
+    for cap in capabilities_used:
+        await capabilities.record(cap, ok, row["cost"] / max(len(capabilities_used), 1), verified=True)
+    await hub.broadcast({"type": "task_phase", "id": task_id, "phase": "testing", "verified": ok})
+    return True
 
 
 async def cancel(task_id: int, actor: str) -> bool:

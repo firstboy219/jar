@@ -1607,3 +1607,96 @@ async def test_blueprint_preset_creates_review_sets_limits_and_drops_unknown_mod
 
 CATALOG_BASE = {"context": 1_000_000, "price_in": 0.0, "price_out": 0.0, "free": False, "tools": True, "vision": True, "audio": False,
                 "created": 1, "description": "", "reasoning": False, "reasoning_forced": False, "expires": None}
+
+
+def _fake_embed(monkeypatch):
+    """A deterministic stand-in for the local embedding model: a bag of words over a small shared vocabulary."""
+    from app import capabilities, memory
+    vocab = {}
+
+    async def embed(texts):
+        out = []
+        for t in texts:
+            vec = [0.0] * 1024
+            for w in __import__("re").findall(r"\w{3,}", t.lower()):
+                vocab.setdefault(w, len(vocab))
+                vec[vocab[w]] += 1.0
+            out.append(vec)
+        return out
+    monkeypatch.setattr(memory, "embed", embed)
+    capabilities._vectors.clear()
+
+
+async def test_registry_finds_skills_by_meaning_versions_changes_and_keeps_score(pool, monkeypatch, tmp_path):
+    from app import capabilities
+    _fake_embed(monkeypatch)
+    await pool.execute("TRUNCATE capabilities CASCADE")
+    skill = tmp_path / "jarvis" / "riset-bersumber"  # ours; the bundled folder below is ignored
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text('---\nname: riset-bersumber\ndescription: "riset web sumber terpercaya tanggal kutipan"\nversion: 1.0.0\n---\n# v1')
+    other = tmp_path / "jarvis" / "keuangan"
+    other.mkdir()
+    (other / "SKILL.md").write_text('---\nname: keuangan-pribadi\ndescription: "catat pengeluaran anggaran bulanan tabungan"\nversion: 1.0.0\n---\n# k')
+    (tmp_path / "bundled").mkdir()
+    (tmp_path / "bundled" / "SKILL.md").write_text('---\nname: ignored\ndescription: "x"\n---\n')
+    tools = [{"type": "function", "function": {"name": "play_music", "description": "putar lagu musik"}}]
+    r = await capabilities.sync(tools, root=tmp_path)
+    assert r["skills"] == 2 and r["total"] == 2 + 1 + len(capabilities.WORKERS)
+    assert await capabilities.sync(tools, root=tmp_path) == r  # idempotent
+    found = await capabilities.search("tolong riset sumber terpercaya tentang harga emas")
+    assert found and found[0]["id"] == "skill:riset-bersumber" and "skill:keuangan-pribadi" not in [c["id"] for c in found][:1]
+    assert await capabilities.search("zzzz qqqq xxxx") == []
+    # a verified success marks it tested; the brief carries the record
+    assert await capabilities.record("skill:riset-bersumber", True, 0.002, verified=True)
+    await capabilities.record("skill:riset-bersumber", False, 0.001)
+    row = await pool.fetchrow("SELECT tested, success_n, fail_n, runs FROM capabilities WHERE id = 'skill:riset-bersumber'")
+    assert (row["tested"], row["success_n"], row["fail_n"], row["runs"]) == (True, 1, 1, 2)
+    assert "berhasil 1 dari 2" in await capabilities.brief_for("riset sumber terpercaya")
+    # the skill changes → version 2, untested again, the old text stays
+    (skill / "SKILL.md").write_text('---\nname: riset-bersumber\ndescription: "riset web sumber terpercaya tanggal kutipan"\nversion: 1.1.0\n---\n# v2 baru')
+    await capabilities.sync(tools, root=tmp_path)
+    row = await pool.fetchrow("SELECT version, tested FROM capabilities WHERE id = 'skill:riset-bersumber'")
+    assert row["version"] == 2 and row["tested"] is False
+    assert await pool.fetchval("SELECT count(*) FROM capability_versions WHERE capability_id = 'skill:riset-bersumber'") == 2
+
+
+async def test_task_plan_verification_note_and_one_automatic_recovery(pool, monkeypatch):
+    import asyncio
+    from app import capabilities, hermes, hub, memory, workers
+    hub.reset()
+    _fake_embed(monkeypatch)
+    monkeypatch.setattr(memory, "search", _no_memory)
+    await pool.execute("TRUNCATE capabilities CASCADE")
+    await capabilities._upsert("skill:riset-bersumber", "skill", "riset-bersumber", "cari harga emas antam sumber terpercaya")
+    prompts = []
+
+    async def hermes_flow(text, session_id, image=None, **kw):
+        prompts.append(text)
+        tid = int(session_id.split("-")[1])
+        if len(prompts) == 1:
+            raise RuntimeError("HTTP 500: upstream broke")  # first attempt fails
+        assert await workers.set_plan(tid, "Cari harga emas", ["ada harga", "ada sumber"], ["cari", "bandingkan"])
+        yield {"type": "done", "reply": hermes.HermesReply("Emas Rp1.900.000/gram", 10, 10, 1)}
+    monkeypatch.setattr(hermes, "stream", hermes_flow)
+    t = await workers.spawn("Cek emas", "Cari harga emas Antam sumber terpercaya", "s-recover", "test")
+    for _ in range(100):
+        row = await pool.fetchrow("SELECT status, recovered FROM tasks WHERE id = $1", t["id"])
+        if row["status"] == "completed":
+            break
+        await asyncio.sleep(0.05)
+    row = await pool.fetchrow("SELECT status, recovered, result, plan, criteria, phase FROM tasks WHERE id = $1", t["id"])
+    assert row["status"] == "completed" and row["recovered"] == 1  # failed once, recovered by itself
+    assert "PERCOBAAN KEDUA" in prompts[1] and "pendekatan yang berbeda" in prompts[1]
+    assert "KEMAMPUAN YANG SUDAH ADA" in prompts[0] and "skill:riset-bersumber" in prompts[0]  # reuse offered first
+    assert "belum diperiksa terhadap kriteria" in row["result"]  # planned but never verified: said so
+    # a recorded check with evidence scores the capability and removes the note
+    t2 = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, plan, budget_usd)
+                                VALUES ('s', 'x', 'y', 'owner', 'web', 'running', '["a"]', 0.5) RETURNING id""")
+    assert await workers.verify(t2, True, "dua sumber: logammulia.com, antam.com", ["skill:riset-bersumber"])
+    assert await workers._verification_note(t2) == ""
+    assert await pool.fetchval("SELECT tested FROM capabilities WHERE id = 'skill:riset-bersumber'") is True
+    assert await workers.verify(t2, False, "harga tidak ditemukan", [])
+    assert "TIDAK lolos: harga tidak ditemukan" in await workers._verification_note(t2)
+    # an empty balance is never "recovered" (it is reported once elsewhere); a second failure is final
+    assert await workers._auto_recover(t2, {"title": "x"}, RuntimeError("saldo OpenRouter habis"), "") is False
+    hub.reset()

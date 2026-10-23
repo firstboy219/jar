@@ -24,7 +24,8 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, W
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import (approvals, attachments, audit, auditor, awareness, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import assistant
+from . import (approvals, attachments, audit, auditor, awareness, capabilities, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -45,6 +46,10 @@ async def lifespan(app: FastAPI):
         await memory.ensure_collection()
     except Exception as e:  # Qdrant down must not keep chat from starting
         log.warning("memory collection not ready: %s", e)
+    try:
+        log.info("capabilities: %s", await capabilities.sync(assistant.TOOLS))
+    except Exception as e:  # the registry is a convenience: JARVIS starts without it
+        log.warning("capability sync failed: %s", e)
     applied = await overrides.load_all()
     if applied:
         log.info("setting overrides: %s", applied)
@@ -95,9 +100,15 @@ async def lifespan(app: FastAPI):
 
     async def self_improvement():
         # Performance self-improvement (ADR-026): runner results, recurring-error repairs, weekly review.
-        last_review = None
+        last_review, last_sync = None, 0.0
         while True:
             try:
+                if time.monotonic() - last_sync > 3600:  # skills Hermes wrote itself show up in the registry within the hour
+                    last_sync = time.monotonic()
+                    try:
+                        await capabilities.sync(assistant.TOOLS)
+                    except Exception:
+                        log.exception("capability sync failed")  # never at the expense of the rest of this loop
                 await ops.tick()  # CPU reading, worker-model CPU limit, orphan watchdog
                 await dev.poll()
                 await perf.watch_recurring_errors()
@@ -693,6 +704,41 @@ async def internal_attachment_see(attachment_id: str, body: SeeIn, request: Requ
         raise HTTPException(404, str(e))
 
 
+@app.get("/internal/capabilities/search")
+async def internal_capability_search(request: Request, q: str = "", limit: int = 5):
+    _tools_auth(request)
+    return {"capabilities": [{k: c[k] for k in ("id", "kind", "name", "description", "status", "tested", "runs", "success_pct", "score")}
+                             for c in await capabilities.search(q[:300], limit=max(1, min(limit, 10)))]}
+
+
+class PlanIn(BaseModel):
+    goal: str = Field(default="", max_length=500)
+    criteria: list[str] = Field(min_length=1, max_length=8)
+    steps: list[str] = Field(min_length=1, max_length=12)
+
+
+@app.post("/internal/tasks/{task_id}/plan")
+async def internal_task_plan(task_id: int, body: PlanIn, request: Request):
+    _tools_auth(request)
+    if not await workers.set_plan(task_id, body.goal, [c[:200] for c in body.criteria], [s[:200] for s in body.steps]):
+        raise HTTPException(409, "tugas itu tidak sedang berjalan")
+    return {"saved": True, "phase": "executing"}
+
+
+class VerifyIn(BaseModel):
+    ok: bool
+    evidence: str = Field(min_length=1, max_length=2000)
+    capabilities_used: list[str] = Field(default_factory=list, max_length=8)
+
+
+@app.post("/internal/tasks/{task_id}/verify")
+async def internal_task_verify(task_id: int, body: VerifyIn, request: Request):
+    _tools_auth(request)
+    if not await workers.verify(task_id, body.ok, body.evidence, body.capabilities_used):
+        raise HTTPException(409, "tugas itu tidak sedang berjalan")
+    return {"recorded": True}
+
+
 @app.get("/internal/self")
 async def internal_self(request: Request):
     _tools_auth(request)
@@ -1169,6 +1215,11 @@ async def admin_library_delete(key: str, actor: str = admin):
         return {"deleted": await library.delete(key, actor)}
     except library.LibraryError as e:
         raise HTTPException(422, str(e))
+
+
+@app.get("/admin/capabilities")
+async def admin_capabilities(kind: str = "", q: str = "", _: str = admin):
+    return jsonable({"capabilities": await capabilities.listing(kind, q[:100])})
 
 
 @app.get("/admin/flow-issues")

@@ -550,3 +550,15 @@ drafts never reach them (`NO_FREE`). Every `llm_usage` row now carries `task_id`
 goal, criteria, plan, phase, budget, cost, artifacts, retries, model_used. `core/config/model_registry.yaml` is a template
 (preset `blueprint`, ids validated, a missing id is dropped), not the source of truth. New category `review` (a reviewer
 other than the author). Bug found by the tests: `openrouter/free` was counted as a paid model.
+- **Sprint 2 (2026-10-23) — capability registry and a planning worker.** `capabilities.py` + migrations 017/018: a
+  searchable catalog (by meaning, local embeddings, + keywords) of skills (every `SKILL.md` under Hermes' skills folder),
+  tools (assistant.TOOLS) and the built-in workers, each with status, tested flag, runs/successes/failures, cost and
+  version (a changed skill gets a new version, the old text kept, `tested` reset). Filled automatically at startup
+  and hourly; JARVIS' own (`skills/jarvis*`, workers, tools) rank above third-party skills (which need a ≥0.65 match).
+  Before an owner task starts, the worker is shown the relevant capabilities with their record ("teruji, berhasil 8 dari
+  9") — reuse before research. Hermes got three MCP tools: `capability_search`, `task_plan` (criteria + steps, phase →
+  executing) and `task_verify` (evidence, scores the capabilities it used; verified success marks one tested). A planned
+  task never verified gets a note in its report; a failed owner task gets ONE automatic second attempt with the diagnosis
+  in front of the worker (`tasks.recovered`). Found by tests and live: jsonb values must be passed as Python objects
+  (the db codec encodes them), and main.py used `assistant` without importing it (the sync failed and the
+  self-improvement loop broke for a few minutes) — a static undefined-name test now guards every module.

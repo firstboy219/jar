@@ -787,3 +787,55 @@ def test_the_blueprint_registry_template_is_valid():
     assert set(p["new_categories"]) == {"review"} and "privat" not in p["routes"]
     assert "laguna" not in str(p["routes"]) and p["free_fallback"] == "openrouter/free"   # an expiring experiment is never a dependency
     assert composition.PRESETS["blueprint"]["title"].startswith("Blueprint")
+
+
+def test_capability_helpers_read_skills_and_say_how_well_they_worked():
+    from app import capabilities as c
+    md = '---\nname: riset-bersumber\ndescription: "Riset web yang dapat dipercaya: beberapa sumber."\nversion: 2.1.0\nmetadata:\n  hermes:\n    tags: [A]\n---\n# Isi'
+    assert c.parse_skill(md) == {"name": "riset-bersumber", "description": "Riset web yang dapat dipercaya: beberapa sumber.", "version": 2}
+    assert c.parse_skill("# no front matter") is None and c.parse_skill("---\ndescription: x\n---\n") is None
+    assert c.cosine([1, 0], [1, 0]) == 1 and c.cosine([1, 0], [0, 1]) == 0 and c.cosine([0, 0], [1, 1]) == 0
+    assert c.rate(8, 1) == 88.9 and c.rate(0, 0) is None
+    assert c.track_record({"tested": True, "success_n": 8, "fail_n": 1}) == "teruji, berhasil 8 dari 9"
+    assert c.track_record({"tested": False, "success_n": 0, "fail_n": 0}) == "belum teruji, belum pernah dipakai"
+    brief = c.format_brief([{"id": "skill:riset-bersumber", "description": "Riset web", "tested": True, "success_n": 3, "fail_n": 0}])
+    assert "skill:riset-bersumber" in brief and "teruji, berhasil 3 dari 3" in brief and brief.startswith("KEMAMPUAN YANG SUDAH ADA")
+    assert c.format_brief([]) == ""
+
+
+def test_no_module_uses_a_name_it_never_defines_or_imports():
+    """A forgotten import (main.py used `assistant` without importing it) only fails at run time, deep inside a
+    background loop. Over-approximate static check: every name read anywhere must be bound somewhere in its module."""
+    import ast
+    import builtins
+    from pathlib import Path
+    problems = []
+    for path in sorted(Path(__file__).resolve().parent.parent.glob("app/*.py")):
+        tree = ast.parse(path.read_text())
+        bound = set(dir(builtins)) | {"__file__", "__name__", "__doc__"}
+        loads = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                (bound.add(node.id) if isinstance(node.ctx, (ast.Store, ast.Del)) else loads.setdefault(node.id, node.lineno))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bound.add(node.name)
+                if not isinstance(node, ast.ClassDef):
+                    a = node.args
+                    bound.update(x.arg for x in a.args + a.kwonlyargs + a.posonlyargs + [v for v in (a.vararg, a.kwarg) if v])
+            elif isinstance(node, ast.Lambda):
+                a = node.args
+                bound.update(x.arg for x in a.args + a.kwonlyargs + a.posonlyargs + [v for v in (a.vararg, a.kwarg) if v])
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                bound.update((al.asname or al.name).split(".")[0] for al in node.names)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                bound.update(node.names)
+            elif isinstance(node, ast.MatchAs) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, ast.MatchStar) and node.name:
+                bound.add(node.name)
+            elif isinstance(node, ast.MatchMapping) and node.rest:
+                bound.add(node.rest)
+        problems += [f"{path.name}:{line} {name}" for name, line in loads.items() if name not in bound]
+    assert not problems, problems
