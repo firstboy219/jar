@@ -491,17 +491,31 @@ async def show_route(destination: str, origin: str = "", mode: str = "driving") 
 # ---------- making JARVIS itself more efficient (owner-approved) ----------
 
 @mcp.tool()
-async def propose_code_change(branch: str, title: str, why: str, task_id: int | None = None) -> dict:
+async def propose_code_change(branch: str, title: str, why: str, task_id: int | None = None, design_id: int | None = None) -> dict:
     """Submit a change to JARVIS' own code: PERFORMANCE (faster, cheaper, fewer failed tasks) or a MINOR missing
     ability (e.g. a new music source) — nothing bigger. Commit it first on branch `jarvis/<topic>` in
     /opt/data/workspace/jar (branched from origin/main). `why` must state the problem, the expected gain, and
     any legal/terms-of-service risk; new packages go in core/requirements.txt pinned as name==version. The server runs the full test suite in
     throwaway containers (3–10 min); if it passes the owner is asked to approve on the phone; once approved it
     is merged, deployed, health-checked and rolled back automatically on failure. Poll with check_code_change.
-    Changes to security, permissions, approvals, secrets, the composition or the runner are refused."""
+    Changes to security, permissions, approvals, secrets, the composition or the runner are refused (T3).
+    T2 (Android code or more than 1500 changed lines) needs `design_id` of a design the owner approved
+    (propose_design); display changes are locked for now. The owner approves at the admin page."""
     from . import dev
     try:
-        return json.loads(json.dumps(await dev.propose(branch, title, why, task_id), default=str))
+        return json.loads(json.dumps(await dev.propose(branch, title, why, task_id, design_id), default=str))
+    except dev.DevError as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def propose_design(title: str, plan: str, scope: list[str], task_id: int | None = None) -> dict:
+    """T2 only (Android code, a larger rebuild): BEFORE writing code, describe the change — problem, change per part,
+    risks, how it is tested, how it is undone — and list the files/areas (`scope`). The owner approves the design at the
+    admin page; then make the branch and call propose_code_change with the design_id."""
+    from . import dev
+    try:
+        return await dev.propose_design(title, plan, scope, task_id)
     except dev.DevError as e:
         return {"error": str(e)}
 

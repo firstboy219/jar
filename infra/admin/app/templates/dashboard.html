@@ -16,7 +16,19 @@
 <div class="item">
   <div class="row"><strong>#{{ a.id }} {{ a.title }}</strong><span class="pill {{ a.status }}">{{ a.status }}</span></div>
   <small>{{ a.kind }} · risiko {{ a.risk }} · oleh {{ a.requested_by }} · {{ a.created_at[:16]|replace('T',' ') }}</small>
-  {% if a.detail %}<pre>{{ a.detail | tojson(indent=2) }}</pre>{% endif %}
+  {% if a.kind in ('code_change', 'code_design') and a.detail %}
+  <div class="hint">Ringkasan di bawah dibuat penjalan di server dari diff nyata, bukan dari tulisan JARVIS.</div>
+  <table class="kv">
+    {% if a.detail.tingkat %}<tr><th>Tingkat</th><td>{{ a.detail.tingkat }}{% if a.detail.baris_berubah %} · {{ a.detail.baris_berubah }} baris{% endif %}</td></tr>{% endif %}
+    {% if a.detail.hasil_tes_dari_penjalan %}<tr><th>Tes</th><td>{{ a.detail.hasil_tes_dari_penjalan }}</td></tr>{% endif %}
+    {% if a.detail.file_dari_diff_nyata %}<tr><th>File</th><td>{{ a.detail.file_dari_diff_nyata | join(', ') }}</td></tr>{% endif %}
+    {% if a.detail.new_packages %}<tr><th>Pustaka baru</th><td>{{ a.detail.new_packages | join(', ') }}</td></tr>{% endif %}
+    {% if a.detail.scope %}<tr><th>Cakupan rancangan</th><td>{{ a.detail.scope | join(', ') }}</td></tr>{% endif %}
+  </table>
+  {% if a.detail.plan %}<details open><summary>Rancangan</summary><pre>{{ a.detail.plan }}</pre></details>{% endif %}
+  {% if a.detail.diffstat %}<details><summary>diffstat</summary><pre>{{ a.detail.diffstat }}</pre></details>{% endif %}
+  {% if a.detail.alasan_dari_jarvis_tidak_diverifikasi %}<details><summary>Alasan dari JARVIS (tidak diverifikasi)</summary><pre>{{ a.detail.alasan_dari_jarvis_tidak_diverifikasi }}</pre></details>{% endif %}
+  {% elif a.detail %}<pre>{{ a.detail | tojson(indent=2) }}</pre>{% endif %}
   {% if a.error %}<p class="alert error">{{ a.error }}</p>{% endif %}
   {% if a.status == 'awaiting_approval' %}
   <form method="post" action="/approvals/{{ a.id }}" class="inline">
@@ -176,11 +188,27 @@
 <section class="card">
   <div class="row"><h2>Pengembangan diri (kode)</h2>
     <form method="post" action="/efficiency-review"><button type="submit">Tinjauan efisiensi sekarang</button></form></div>
-  <p class="hint">Perubahan kode buatan JARVIS sendiri (performa &amp; fitur minor): diuji otomatis, dipasang hanya setelah kamu setujui.</p>
+  <p class="hint">Perubahan kode buatan JARVIS sendiri: diuji otomatis, dipasang hanya setelah kamu setujui DI HALAMAN INI
+    (dari aplikasi hanya bisa ditolak). Halaman admin ini sendiri tidak bisa diubah JARVIS.</p>
+  {% if selfdev %}
+  <div class="row">
+    <form method="post" action="/selfdev/control" class="inline">
+      <input type="hidden" name="field" value="paused"><input type="hidden" name="value" value="{{ 'off' if selfdev.paused else 'on' }}">
+      <button type="submit" class="{{ '' if selfdev.paused else 'danger' }}">{{ 'Lanjutkan perubahan diri' if selfdev.paused else 'Jeda semua perubahan diri' }}</button>
+    </form>
+    <form method="post" action="/selfdev/control" class="inline">
+      <input type="hidden" name="field" value="t2_enabled"><input type="hidden" name="value" value="{{ 'off' if selfdev.t2_enabled else 'on' }}">
+      <button type="submit">{{ 'Tutup tingkat T2' if selfdev.t2_enabled else 'Buka tingkat T2 (APK & modul besar, dua kali persetujuan)' }}</button>
+    </form>
+  </div>
+  <p class="hint">Status: {{ 'DIJEDA' if selfdev.paused else 'berjalan' }} · T2 {{ 'terbuka' if selfdev.t2_enabled else 'tertutup' }}{% if selfdev.by %} · terakhir diubah {{ selfdev.by }} {{ (selfdev.at or '')[:16]|replace('T',' ') }}{% endif %}.
+    Tangga: T0 skill/alur/jadwal · T1 performa &amp; kemampuan kecil backend · T2 APK &amp; modul besar (rancangan disetujui dulu; tampilan terkunci sampai ada tangkapan layar) · T3 zona terlindungi, hanya manusia.</p>
+  {% endif %}
   {% for c in dev_changes or [] %}
   <div class="item"><span class="pill {{ 'completed' if c.status == 'deployed' else ('awaiting_approval' if c.status in ('awaiting_approval','testing','deploying') else 'rejected') }}">{{ c.status }}</span>
     <strong>#{{ c.id }} {{ c.title }}</strong><br><small>{{ c.branch }} · {{ c.updated_at[:16]|replace('T',' ') }}</small>
     {% if c.why %}<br><small>{{ c.why[:300] }}</small>{% endif %}
+    {% if c.tier %}<br><small>T{{ c.tier }}{% if c.tests %} · {{ c.tests }}{% endif %}</small>{% endif %}
     {% if c.diffstat %}<details><summary>perubahan</summary><pre>{{ c.diffstat }}</pre></details>{% endif %}</div>
   {% else %}<p class="hint">Belum ada.</p>{% endfor %}
 </section>

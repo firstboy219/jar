@@ -22,9 +22,10 @@ MIRROR=$INFRA/data/dev-mirror/upstream.git   # root-owned, mounted read-only int
 OWNER=$(stat -c %U "$REPO")
 # root reads the owner's repo (and the mirror fetches from it): trust exactly that repo, nothing else (never the workspace)
 export GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=$REPO GIT_CONFIG_KEY_1=safe.directory GIT_CONFIG_VALUE_1=$REPO/.git
-MAX_CHANGED_LINES=1500
-# Out of scope for self-improvement (security, permissions, secrets, money guards, build/supply chain, itself)
-FORBIDDEN='^(infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|infra/admin/app/(auth|main)\.py|infra/admin/Dockerfile|infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements-dev|core/app/(main|approvals|devices|vault|sensitive|dev|perf|auditor|ops|composition|budget|errors|config|db)\.py|android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|\.github/|\.claude/|BRD\.docx)'
+# What may change is decided by core/app/selfdev_policy.py AS IT IS ON MAIN (Blueprint v4 §3, ADR-047): the protected
+# zone (T3: the admin page, these runners, secrets, security/money guards, the build chain), the T1/T2 ladder, the
+# display lock and "tests are never weakened". The branch's own copy of the policy is never consulted.
+POLICY=$REPO/core/app/selfdev_policy.py
 
 mkdir -p "$DEV/requests" "$DEV/results" "$DEV/done"
 as_owner() { runuser -u "$OWNER" -- "$@"; }
@@ -48,6 +49,11 @@ for k in ("files", "deps"):
         data[k] = [f for f in data[k].splitlines() if f]
 if "id" in data:
     data["id"] = int(data["id"])
+if "verdict" in data:  # the policy's judgement of the real diff (tier, lines, files, reasons)
+    try:
+        data["verdict"] = json.loads(data["verdict"] or "{}")
+    except ValueError:
+        data["verdict"] = {}
 tmp = out + ".tmp"
 json.dump(data, open(tmp, "w"))
 import os; os.rename(tmp, out)
@@ -75,18 +81,30 @@ ensure_workspace() {
   as_owner git -C "$WS" config user.email "jarvis@vis1.cosger.online"
 }
 
-test_steps() { # uses id branch wt; sets commit files diffstat deps
+test_steps() { # uses id branch wt max_tier; sets commit files diffstat deps verdict testsum
     [[ $branch =~ ^jarvis/[a-z0-9][a-z0-9-]{2,60}$ ]] || { echo "nama cabang tidak valid"; return 1; }
     as_owner git -C "$REPO" fetch -q --no-tags "$WS" "+refs/heads/$branch:refs/jarvis/$id" || { echo "cabang $branch tidak ada di workspace"; return 1; }
     commit=$(git -C "$REPO" rev-parse "refs/jarvis/$id")
     files=$(git -C "$REPO" diff --name-only "main...refs/jarvis/$id")
     diffstat=$(git -C "$REPO" diff --stat "main...refs/jarvis/$id" | tail -40)
     [[ -n $files ]] || { echo "tidak ada perubahan"; return 1; }
-    if bad=$(grep -E "$FORBIDDEN" <<<"$files"); then echo "DITOLAK — di luar batas perbaikan performa:"; echo "$bad"; return 1; fi
     if edited=$(git -C "$REPO" diff --name-only --diff-filter=MDR "main...refs/jarvis/$id" -- core/app/migrations); [[ -n $edited ]]; then
       echo "DITOLAK — migrasi lama tidak boleh diubah: $edited"; return 1; fi
-    changed=$(git -C "$REPO" diff --numstat "main...refs/jarvis/$id" | awk '{a+=$1; d+=$2} END {print a+d}')
-    (( changed <= MAX_CHANGED_LINES )) || { echo "DITOLAK — perubahan terlalu besar ($changed baris > $MAX_CHANGED_LINES)"; return 1; }
+    verdict=$(python3 - "$REPO" "$id" "$max_tier" "$POLICY" <<'PY'
+import json, subprocess, sys
+repo, cid, max_tier, policy = sys.argv[1:5]
+rng = f"main...refs/jarvis/{cid}"
+git = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True).stdout
+req = {"numstat": git("diff", "--numstat", rng), "diff": git("diff", "--unified=0", rng)[:4_000_000],
+       "deleted": git("diff", "--name-only", "--diff-filter=D", rng).split(), "max_tier": int(max_tier or 1)}
+out = subprocess.run(["python3", "-I", policy], input=json.dumps(req), capture_output=True, text=True)
+print(out.stdout.strip() or json.dumps({"ok": False, "reasons": ["pemeriksa kebijakan gagal: " + out.stderr[-300:]]}))
+PY
+)
+    echo "== kebijakan: $verdict"
+    if [[ $(python3 -c 'import json,sys;print(json.loads(sys.argv[1]).get("ok"))' "$verdict") != True ]]; then
+      echo "DITOLAK — $(python3 -c 'import json,sys;print(" | ".join(json.loads(sys.argv[1])["reasons"]))' "$verdict")"; return 1; fi
+    changed=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["changed_lines"])' "$verdict")
     if grep -qx 'core/requirements.txt' <<<"$files"; then  # new packages: pinned exactly, shown to the owner
       deps=$(git -C "$REPO" diff "main...refs/jarvis/$id" -- core/requirements.txt | grep '^+[^+]' | cut -c2- | grep -v '^[[:space:]]*$')
       if [[ -n $deps ]] && bad=$(grep -vE '^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[0-9][A-Za-z0-9.+!-]*$' <<<"$deps"); then
@@ -99,8 +117,11 @@ test_steps() { # uses id branch wt; sets commit files diffstat deps
     as_owner git -C "$wt" -c user.name=runner -c user.email=runner@local merge -q --no-edit "refs/jarvis/$id" \
       || { echo "KONFLIK dengan main — di workspace jalankan: git fetch origin main && git rebase origin/main, lalu ajukan lagi"; return 1; }
     echo "== tes server"
-    CORE_DIR="$wt/core" "$INFRA/scripts/test-core.sh" -q 2>&1 | tail -40
-    [[ ${PIPESTATUS[0]} -eq 0 ]] || { echo "TES SERVER GAGAL"; return 1; }
+    CORE_DIR="$wt/core" "$INFRA/scripts/test-core.sh" -q > "$wt.pytest" 2>&1; rc=$?
+    tail -40 "$wt.pytest"
+    testsum="server: $(grep -Eo '[0-9]+ (passed|failed|error)[^=]*' "$wt.pytest" | tail -1)"
+    rm -f "$wt.pytest"
+    [[ $rc -eq 0 ]] || { echo "TES SERVER GAGAL"; return 1; }
     for f in $(grep -E '\.py$' <<<"$files"); do
       [[ -f $wt/$f ]] && { python3 -m py_compile "$wt/$f" || { echo "sintaks Python salah: $f"; return 1; }; }
     done
@@ -110,18 +131,19 @@ test_steps() { # uses id branch wt; sets commit files diffstat deps
         -v "$INFRA/data/android/gradle-cache:/cache/gradle" jarvis-android-builder:1 \
         ./gradlew --no-daemon -q testReleaseUnitTest verifyPaparazziDebug 2>&1 | tail -40
       [[ ${PIPESTATUS[0]} -eq 0 ]] || { echo "TES ANDROID GAGAL"; return 1; }
+      testsum+="; Android: lulus"
     fi
 }
 
-do_test() { # id branch
-  local id=$1 branch=$2 L=$DEV/results/$1-test.log wt=/tmp/jarvis-dev-$1 status=failed commit="" files="" diffstat="" deps=""
+do_test() { # id branch max_tier
+  local id=$1 branch=$2 max_tier=${3:-1} L=$DEV/results/$1-test.log wt=/tmp/jarvis-dev-$1 status=failed commit="" files="" diffstat="" deps="" verdict="{}" testsum=""
   : > "$L"
   test_steps >>"$L" 2>&1 && status=passed
   as_owner git -C "$REPO" worktree remove --force "$wt" >/dev/null 2>&1; rm -rf "$wt"
   [[ $status == passed ]] && echo "== SEMUA TES LULUS" >>"$L"
   printf '%s\n' "$files" > "$L.files"; printf '%s\n' "$deps" > "$L.deps"
   result "$DEV/results/$id-test.json" id="$id" action=test status="$status" commit="$commit" files="@$L.files" \
-    deps="@$L.deps" diffstat="$diffstat" log="@$L"
+    deps="@$L.deps" diffstat="$diffstat" verdict="$verdict" tests="$testsum" log="@$L"
   rm -f "$L.files" "$L.deps"
 }
 
@@ -184,11 +206,11 @@ do_deploy() { # id commit
 ensure_workspace
 refresh_mirror
 for req in $(ls -1 "$DEV/requests"/*.json 2>/dev/null | sort -V); do
-  read -r id action branch commit < <(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('id',''),d.get('action',''),d.get('branch','-'),d.get('commit','-'))" "$req")
+  read -r id action branch commit max_tier < <(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('id',''),d.get('action',''),d.get('branch','-'),d.get('commit','-'),int(d.get('max_tier') or 1))" "$req")
   mv "$req" "$DEV/done/$(basename "$req")"
   log "request #$id $action $branch"
   case $action in
-    test) do_test "$id" "$branch" ;;
+    test) do_test "$id" "$branch" "$max_tier" ;;
     deploy) do_deploy "$id" "$commit" ;;
   esac
 done

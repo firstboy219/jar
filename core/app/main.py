@@ -1076,11 +1076,37 @@ class Decision(BaseModel):
 
 
 @app.post("/admin/approvals/{approval_id}")
-async def admin_decide(approval_id: int, d: Decision, actor: str = admin):
+async def admin_decide(approval_id: int, d: Decision, request: Request, actor: str = admin):
+    # the same handler serves the admin page and (under /api/v1/console) the app; only the former is the control point
+    channel = "device" if request.url.path.startswith(CONSOLE + "/") else "admin"
     try:
-        return await approvals.decide(approval_id, d.approve, actor)
+        return await approvals.decide(approval_id, d.approve, actor, channel=channel)
+    except approvals.AdminOnly as e:
+        raise HTTPException(403, str(e))
     except approvals.ApprovalError as e:
         raise HTTPException(409, str(e))
+
+
+def admin_page_only(request: Request) -> None:
+    """Some switches belong to the admin page alone (the control point JARVIS cannot change): never the app console."""
+    if request.url.path.startswith(CONSOLE + "/"):
+        raise HTTPException(403, "hanya bisa diubah di halaman admin")
+
+
+@app.get("/admin/selfdev/control")
+async def admin_selfdev_control(_: str = admin):
+    return await dev.control()
+
+
+class SelfdevControlIn(BaseModel):
+    paused: bool | None = None
+    t2_enabled: bool | None = None
+
+
+@app.post("/admin/selfdev/control")
+async def admin_selfdev_set(c: SelfdevControlIn, request: Request, actor: str = admin):
+    admin_page_only(request)
+    return await dev.set_control(actor, paused=c.paused, t2_enabled=c.t2_enabled)
 
 
 @app.get("/admin/memories")

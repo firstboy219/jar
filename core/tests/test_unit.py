@@ -944,3 +944,43 @@ def test_a_hermes_call_is_tied_to_its_task_by_the_marker_in_its_first_user_messa
     assert task_id_from_body(body) == 159   # the FIRST user message decides
     assert task_id_from_body({"messages": [{"role": "user", "content": [{"type": "text", "text": "x [tugas #42] y"}]}]}) == 42
     assert task_id_from_body({"messages": [{"role": "user", "content": "tanpa penanda"}]}) is None and task_id_from_body({}) is None
+
+
+def test_selfdev_policy_protects_the_control_point_and_judges_the_real_diff():
+    from app.selfdev_policy import FORBIDDEN, judge, parse_numstat, weakened_tests
+    for p in ("infra/admin/app/templates/dashboard.html", "infra/admin/app/envfile.py", "infra/admin/app/main.py",
+              "infra/scripts/self-dev.sh", "core/app/selfdev_policy.py", "core/app/approvals.py", "core/app/modelrouter.py",
+              "core/app/skills_pipeline.py", "core/config/model_registry.yaml", "android/app/src/main/AndroidManifest.xml",
+              "infra/hermes/SOUL.md", "infra/docker-compose.yml"):
+        assert FORBIDDEN.match(p), p
+    for p in ("core/app/media_tools.py", "core/app/charts.py", "core/tests/test_unit.py", "infra/hermes/skills/x/SKILL.md"):
+        assert not FORBIDDEN.match(p), p
+    ok = judge(parse_numstat("10\t2\tcore/app/charts.py\n5\t0\tcore/tests/test_unit.py"), "", [], 1)
+    assert ok == {**ok, "ok": True, "tier": 1, "changed_lines": 17}
+    admin = judge(parse_numstat("1\t1\tinfra/admin/app/templates/dashboard.html"), "", [], 2)
+    assert not admin["ok"] and "zona terlindungi" in admin["reasons"][0]
+    apk = judge(parse_numstat("30\t3\tandroid/app/src/main/java/online/cosger/jarvis/net/CoreApi.kt"), "", [], 1)
+    assert not apk["ok"] and apk["tier"] == 2 and "rancangan yang disetujui" in " ".join(apk["reasons"])
+    assert judge(parse_numstat("30\t3\tandroid/app/src/main/java/online/cosger/jarvis/net/CoreApi.kt"), "", [], 2)["ok"]
+    ui = judge(parse_numstat("30\t3\tandroid/app/src/main/java/online/cosger/jarvis/ui/screens/TalkScreen.kt"), "", [], 2)
+    assert not ui["ok"] and "tangkapan layar" in " ".join(ui["reasons"])
+    big = judge(parse_numstat("1600\t0\tcore/app/charts.py"), "", [], 1)
+    assert big["tier"] == 2 and not big["ok"]
+    diff = ("diff --git a/core/tests/test_unit.py b/core/tests/test_unit.py\n--- a/core/tests/test_unit.py\n+++ b/core/tests/test_unit.py\n"
+            "@@ -10,2 +10,2 @@\n-    assert total == 3\n+    assert total >= 0\n")
+    assert weakened_tests(diff, []) and "baris tes" in weakened_tests(diff, [])[0]
+    assert weakened_tests("", ["core/tests/test_acceptance.py"]) == ["berkas tes dihapus: core/tests/test_acceptance.py"]
+    added_only = "diff --git a/core/tests/t.py b/core/tests/t.py\n--- a/core/tests/t.py\n+++ b/core/tests/t.py\n@@ -1 +1,2 @@\n+def test_new():\n"
+    assert weakened_tests(added_only, []) == []          # adding tests is always fine
+    weak = judge(parse_numstat("1\t1\tcore/tests/test_unit.py"), diff, [], 1)
+    assert not weak["ok"] and "tes tidak boleh dilemahkan" in weak["reasons"][0]
+
+
+def test_approval_request_comes_from_the_runner_and_labels_jarvis_text():
+    from app.dev import approval_detail
+    d = approval_detail(7, {"branch": "jarvis/x", "why": "lebih cepat 3x", "design_id": None},
+                        {"commit": "abc", "files": ["core/app/charts.py"], "tests": "server: 160 passed", "diffstat": "1 file"},
+                        {"tier": 1, "changed_lines": 12})
+    assert d["file_dari_diff_nyata"] == ["core/app/charts.py"] and d["hasil_tes_dari_penjalan"] == "server: 160 passed"
+    assert d["tingkat"] == "T1" and d["baris_berubah"] == 12
+    assert d["alasan_dari_jarvis_tidak_diverifikasi"] == "lebih cepat 3x" and "why" not in d

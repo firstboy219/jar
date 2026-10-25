@@ -159,7 +159,8 @@ async def _tab_data(tab: str, request: Request) -> dict:
     if tab == "self":
         return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors"),
                                                     "flow_issues": await core("GET", "/admin/flow-issues"),
-                                                    "dev_changes": await core("GET", "/admin/dev-changes")}
+                                                    "dev_changes": await core("GET", "/admin/dev-changes"),
+                                                    "selfdev": await core("GET", "/admin/selfdev/control")}
     if tab == "password":
         return {"vault": await core("GET", "/admin/vault")}
     if tab == "ai":
@@ -328,6 +329,21 @@ async def efficiency_review(request: Request):
     except CoreError as e:
         return await render(request, "self", errors=[str(e)])
     return await render(request, "self", notice=f"Tinjauan efisiensi dimulai (tugas #{t['task_id']}).")
+
+
+@app.post("/selfdev/control", response_class=HTMLResponse)
+async def selfdev_control(request: Request, field: str = Form(...), value: str = Form(...)):
+    """The control point (Blueprint v4 §3.3): pause every self-change at once, or open/close tier T2."""
+    if r := guard(request):
+        return r
+    if field not in ("paused", "t2_enabled"):
+        return await render(request, "self", errors=["sakelar tidak dikenal"])
+    try:
+        c = await core("POST", "/admin/selfdev/control", json={field: value == "on"})
+    except CoreError as e:
+        return await render(request, "self", errors=[str(e)])
+    return await render(request, "self", notice=("Perubahan diri DIJEDA." if c["paused"] else "Perubahan diri berjalan.")
+                        + (" Tingkat T2 dibuka." if c["t2_enabled"] else " Tingkat T2 tertutup."))
 
 
 @app.post("/improvements/{improvement_id}/revert", response_class=HTMLResponse)

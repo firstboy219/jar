@@ -759,7 +759,7 @@ async def test_code_change_is_tested_then_deployed_only_after_owner_approval(poo
         await dev.propose("main", "x", "y")  # only jarvis/<topic> branches
     c = await dev.propose("jarvis/cache-ringkasan", "Cache ringkasan rapat", "notulen 40 dtk → target 10 dtk")
     req = json.loads((tmp_path / "requests" / f"{c['id']}-test.json").read_text())
-    assert req == {"id": c["id"], "action": "test", "branch": "jarvis/cache-ringkasan"}
+    assert req == {"id": c["id"], "action": "test", "branch": "jarvis/cache-ringkasan", "max_tier": 1}  # no design: T1 only
     # a failed test run does not bother the owner
     (tmp_path / "results").mkdir()
     (tmp_path / "results" / "1-test.json").write_text(json.dumps(
@@ -778,7 +778,9 @@ async def test_code_change_is_tested_then_deployed_only_after_owner_approval(poo
     a = await pool.fetchrow("SELECT id, kind, risk, status FROM approvals")
     assert (a["kind"], a["risk"], a["status"]) == ("code_change", "high", "awaiting_approval")
     assert not (tmp_path / "requests" / f"{c2['id']}-deploy.json").exists()
-    done = await approvals.decide(a["id"], True, "owner")
+    with pytest.raises(approvals.AdminOnly):  # code changes: approved at the admin page only (ADR-047)
+        await approvals.decide(a["id"], True, "owner")
+    done = await approvals.decide(a["id"], True, "owner", channel="admin")
     assert done["status"] == "completed"
     deploy = json.loads((tmp_path / "requests" / f"{c2['id']}-deploy.json").read_text())
     assert deploy["commit"] == "def" and (await dev.get(c2["id"]))["status"] == "deploying"
@@ -1864,7 +1866,10 @@ async def test_a_skill_with_scripts_runs_in_the_sandbox_and_needs_the_owners_app
     ap = await approvals.get(st["approval_id"])
     assert ap["kind"] == "skill_publish" and "2/2 lulus di sandbox" in ap["detail"]["tests"] and ap["detail"]["scripts"] == ["scripts/main.py"]
     assert not (tmp_path / "learned" / "hitung-total").exists()
-    await approvals.decide(st["approval_id"], True, "owner")
+    with pytest.raises(approvals.AdminOnly):  # a skill with code is approved at the admin page only (ADR-047)
+        await approvals.decide(st["approval_id"], True, "device:HP")
+    assert not (tmp_path / "learned" / "hitung-total").exists()
+    await approvals.decide(st["approval_id"], True, "owner", channel="admin")
     assert (tmp_path / "learned" / "hitung-total" / "scripts" / "main.py").read_text().endswith("# v2\n")
     assert (await sp.status("hitung-total"))["status"] == "published"
     # the daily limit bounds how much JARVIS can spend learning

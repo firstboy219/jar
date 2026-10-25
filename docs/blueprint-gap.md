@@ -22,3 +22,16 @@ Blueprint facts checked against OpenRouter on 2026-10-23: all candidate ids exis
 ends 2026-10-31 (experiment only); the blueprint's DeepSeek V4.1 Flash price is wrong (actually $0.30 / $1.20 per
 million) and GLM 5.3 Flash is cheaper than stated ($0.005 / $0.20); no image-generation model is free. In real
 traffic `nemotron-3-super:free` answered 404, `inkling:free` 403, `gemma-4-31b:free` 429 — hence "measured".
+
+## Blueprint Terpadu v4 (2026-10-25)
+Source: "JARVIS Blueprint Terpadu v4: spesifikasi untuk Claude Code" + "Blueprint Terpadu Jarvis v4" (owner, 25–26 Oct).
+Executed per phase on branches `v4/fase-N`; each phase stops at its Gate for the owner's approval before merge/deploy.
+
+| Phase | Blueprint v4 | State before | Gap | Status |
+|---|---|---|---|---|
+| 0 | Control point & protected zone (§3) | runner forbade only `infra/admin/app/{main,auth}.py` + Dockerfile; `code_change` could be approved from the app and by voice; approval text partly written by JARVIS; no pause; no tiers | whole `infra/admin/` protected, approvals of own-code admin-only, runner-built summary, pause switch, T0–T3 ladder, test-weakening refusal, APK rollback build | done on `v4/fase-0` (ADR-047) — Gate: awaiting owner |
+| 1 | Company Federation | — | companies, Company/Decision Vault, entity relations, Jarvis-GM, Hermes-DGM adapter (mock until the real contract) | next |
+| 2 | OpenJarvis spike | — | worker service behind core, gateway as its engine, 4-metric benchmark | parallel, needs K7/K8 |
+| 3 | Voice complements | `correct_terms` for meetings only; `HALLUCINATIONS` list; no TTS text normalisation | measured baseline, daily-speech term correction, second opinion, server-side TTS normalisation, quality gate; + owner's request: TTS/STT picker from OpenRouter (ElevenLabs voices) | open (D8 vs the owner's ElevenLabs request) |
+| 4–5 | Gestures, canvas web → APK | stage panels, 3D brain | canvas model, web viewer, gesture prototype, screenshots for T2 display | needs K4, K9, K10 |
+| 6 | Inbox & watchers | n8n, calendar read | Gmail (Propose), calendar write (approval), ticket/price watchers (notify only) | later |

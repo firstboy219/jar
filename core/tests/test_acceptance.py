@@ -327,3 +327,108 @@ async def test_16_a_restart_stops_the_old_hermes_runs_and_a_full_hermes_is_waite
     assert stopped == ["run-lama-1"]                        # the orphan is stopped, not left to pile up
     assert await _wait(lambda: _status(pool, tid, "completed"))
     assert calls["n"] == 2                                  # "max 10 runs" was waited out, not turned into a failure
+
+
+# ---------- Blueprint v4, Fase 0: the control point (ADR-047) ----------
+
+async def _code_change_approval(pool):
+    from app import approvals
+    await pool.execute("TRUNCATE approvals, dev_changes, dev_designs CASCADE")
+    cid = await pool.fetchval("INSERT INTO dev_changes (branch, title, why, status) VALUES ('jarvis/uji', 'Uji', 'x', 'awaiting_approval') RETURNING id")
+    a = await approvals.create("code_change", "Uji", {"change_id": cid, "branch": "jarvis/uji", "commit": "c"}, "hermes", "high")
+    return a["id"], cid
+
+
+async def test_v4_f0_code_changes_are_approved_only_at_the_admin_page(pool, monkeypatch):
+    import httpx
+    from app import config, devices, dev, main
+    aid, cid = await _code_change_approval(pool)
+    _, token = await devices.create("HP pemilik", "test", scope="owner")
+    monkeypatch.setattr(config.settings, "admin_token", "admin-secret")
+    written = []
+    monkeypatch.setattr(dev, "_write_request", lambda change_id, action, **kw: written.append((change_id, action)))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.post(f"/api/v1/console/approvals/{aid}", json={"approve": True}, headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 403 and "halaman admin" in r.json()["detail"]
+        assert await pool.fetchval("SELECT status FROM approvals WHERE id = $1", aid) == "awaiting_approval"   # nothing happened
+        r = await c.post(f"/admin/approvals/{aid}", json={"approve": True}, headers={"X-Admin-Token": "admin-secret"})
+        assert r.status_code == 200 and r.json()["status"] == "completed" and written == [(cid, "deploy")]
+        # the app can still REJECT (that is always safe)
+        aid2, _ = await _code_change_approval(pool)
+        r = await c.post(f"/api/v1/console/approvals/{aid2}", json={"approve": False}, headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 200 and r.json()["status"] == "rejected"
+        # and the pause / T2 switches cannot be flipped from the app
+        r = await c.post("/api/v1/console/selfdev/control", json={"paused": False}, headers={"Authorization": f"Bearer {token}"})
+        assert r.status_code == 403
+
+
+async def test_v4_f0_voice_or_chat_cannot_approve_code_either(pool, monkeypatch):
+    from app import chat
+    aid, _ = await _code_change_approval(pool)
+    t = await chat.handle(f"setujui {aid}", "s-f0", actor="device:HP")
+    assert "halaman admin" in t.reply
+    assert await pool.fetchval("SELECT status FROM approvals WHERE id = $1", aid) == "awaiting_approval"
+
+
+async def test_v4_f0_the_pause_switch_stops_every_new_self_change(pool, monkeypatch, tmp_path):
+    from app import dev, skills_pipeline as sp
+    from tests.test_unit import CASES, GOOD_BODY
+    await pool.execute("DELETE FROM settings_kv WHERE key = 'selfdev:control'")
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    await dev.set_control("owner", paused=True)
+    with pytest.raises(dev.DevError, match="DIJEDA"):
+        await dev.propose("jarvis/lebih-cepat", "Lebih cepat", "alasan")
+    with pytest.raises(sp.SkillError, match="DIJEDA"):
+        await sp.submit("skill-saat-jeda", "Membuat laporan tren produk dari sebuah platform beserta rekomendasi", GOOD_BODY, CASES, None)
+    assert not list(tmp_path.glob("requests/*.json"))            # nothing reached the runner
+    await dev.set_control("owner", paused=False)
+    r = await dev.propose("jarvis/lebih-cepat", "Lebih cepat", "alasan")
+    assert r["status"] == "testing"
+    import json
+    req = json.loads(next(tmp_path.glob("requests/*.json")).read_text())
+    assert req["max_tier"] == 1                                    # without an approved design: T1 only
+
+
+async def test_v4_f0_t2_needs_the_switch_and_an_approved_design(pool, monkeypatch, tmp_path):
+    import json
+    from app import approvals, dev
+    await pool.execute("TRUNCATE approvals, dev_designs CASCADE")
+    await pool.execute("DELETE FROM settings_kv WHERE key = 'selfdev:control'")
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    plan = "Masalah: X lambat. Perubahan: modul A dipecah jadi dua. Risiko: regresi. Uji: tes baru. Batal: revert commit."
+    with pytest.raises(dev.DevError, match="belum dibuka"):
+        await dev.propose_design("Rekonstruksi A", plan, ["android/app/src/main/java/online/cosger/jarvis/net/CoreApi.kt"])
+    await dev.set_control("owner", t2_enabled=True)
+    with pytest.raises(dev.DevError, match="zona terlindungi"):
+        await dev.propose_design("Ubah admin", plan, ["infra/admin/app/main.py"])
+    d = await dev.propose_design("Rekonstruksi A", plan, ["android/app/src/main/java/online/cosger/jarvis/net/CoreApi.kt"])
+    with pytest.raises(dev.DevError, match="belum disetujui"):
+        await dev.propose("jarvis/rekonstruksi-a", "Rekonstruksi A", "x", design_id=d["design_id"])
+    with pytest.raises(approvals.AdminOnly):
+        await approvals.decide(d["approval_id"], True, "device:HP")              # not from the app
+    await approvals.decide(d["approval_id"], True, "owner", channel="admin")
+    r = await dev.propose("jarvis/rekonstruksi-a", "Rekonstruksi A", "x", design_id=d["design_id"])
+    assert r["status"] == "testing"
+    assert json.loads(next(tmp_path.glob("requests/*.json")).read_text())["max_tier"] == 2
+    await dev.set_control("owner", t2_enabled=False)                            # closing T2 again stops it
+    with pytest.raises(dev.DevError, match="ditutup"):
+        await dev.propose("jarvis/rekonstruksi-b", "B", "x", design_id=d["design_id"])
+
+
+async def test_v4_f0_the_approval_shows_what_the_runner_found(pool, monkeypatch, tmp_path):
+    import json
+    from app import dev
+    await pool.execute("TRUNCATE approvals, dev_changes CASCADE")
+    monkeypatch.setattr(dev, "ROOT", tmp_path)
+    cid = await pool.fetchval("INSERT INTO dev_changes (branch, title, why) VALUES ('jarvis/a', 'A', 'kata Jarvis: aman sekali') RETURNING id")
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / f"{cid}-test.json").write_text(json.dumps({
+        "id": cid, "action": "test", "status": "passed", "commit": "abc123", "files": ["core/app/charts.py", "core/tests/test_unit.py"],
+        "diffstat": "2 files changed", "tests": "server: 160 passed", "verdict": {"ok": True, "tier": 1, "changed_lines": 40}, "log": "ok"}))
+    assert await dev.poll() == 1
+    a = await pool.fetchrow("SELECT kind, detail, title FROM approvals ORDER BY id DESC LIMIT 1")
+    d = a["detail"]
+    assert a["kind"] == "code_change" and "(T1)" in a["title"]
+    assert d["file_dari_diff_nyata"] == ["core/app/charts.py", "core/tests/test_unit.py"] and d["hasil_tes_dari_penjalan"] == "server: 160 passed"
+    assert d["alasan_dari_jarvis_tidak_diverifikasi"] == "kata Jarvis: aman sekali"
+    assert (await pool.fetchrow("SELECT tier, tests FROM dev_changes WHERE id = $1", cid))["tests"] == "server: 160 passed"

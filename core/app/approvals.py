@@ -6,6 +6,9 @@ from typing import Any
 from . import audit, db, n8n
 
 TERMINAL = {"rejected", "completed", "failed", "cancelled", "expired"}
+# Changes to JARVIS' own code may only be APPROVED at the admin page (Blueprint v4 §3.3, ADR-047): the app is now
+# something JARVIS may change itself, so its buttons cannot be the control point. Rejecting is allowed anywhere.
+ADMIN_ONLY = {"code_change", "code_design", "skill_publish"}
 # allowed status transitions
 TRANSITIONS = {
     "awaiting_approval": {"approved", "rejected", "cancelled", "expired"},
@@ -64,7 +67,13 @@ async def _exec_skill_publish(detail: dict) -> dict:
     return done
 
 
+async def _exec_code_design(detail: dict) -> dict:
+    from . import dev
+    return await dev.on_design_approved(detail)
+
+
 EXECUTORS: dict[str, Executor] = {
+    "code_design": _exec_code_design,
     "skill_publish": _exec_skill_publish,
     "task_budget": _exec_task_budget,
     "manual": _exec_manual,
@@ -77,6 +86,10 @@ EXECUTORS: dict[str, Executor] = {
 
 class ApprovalError(RuntimeError):
     pass
+
+
+class AdminOnly(ApprovalError):
+    """This kind may only be approved at the admin page (HTTP 403)."""
 
 
 async def create(kind: str, title: str, detail: dict[str, Any], requested_by: str,
@@ -125,8 +138,9 @@ async def _set_status(conn, approval_id: int, current: str, new: str, **cols) ->
     await conn.execute(sql, approval_id, new, *cols.values())
 
 
-async def decide(approval_id: int, approve: bool, actor: str) -> dict:
-    """Approve (and execute) or reject. Row lock makes double-clicks / concurrent decisions safe."""
+async def decide(approval_id: int, approve: bool, actor: str, channel: str = "device") -> dict:
+    """Approve (and execute) or reject. Row lock makes double-clicks / concurrent decisions safe.
+    channel: "admin" only for the admin page itself; everything else (app console, chat, voice) is "device"."""
     await expire_old()
     async with db.pool().acquire() as conn:
         async with conn.transaction():
@@ -135,6 +149,9 @@ async def decide(approval_id: int, approve: bool, actor: str) -> dict:
                 raise ApprovalError(f"persetujuan #{approval_id} tidak ditemukan")
             if row["status"] != "awaiting_approval":
                 raise ApprovalError(f"persetujuan #{approval_id} sudah berstatus {row['status']}")
+            if approve and row["kind"] in ADMIN_ONLY and channel != "admin":
+                raise AdminOnly(f"persetujuan #{approval_id} ({row['kind']}) hanya bisa disetujui di halaman admin "
+                                "(jar1.cosger.online) — perubahan kode JARVIS tidak bisa disetujui dari aplikasi")
             new = "approved" if approve else "rejected"
             await _set_status(conn, approval_id, row["status"], new, decided_by=actor)
             await conn.execute("UPDATE approvals SET decided_at = now() WHERE id = $1", approval_id)

@@ -146,6 +146,11 @@ async def _set(draft_id: int, status: str, **cols) -> None:
 async def submit(name: str, description: str, content: str, cases: list, scripts: dict | None, author: str = "hermes") -> dict:
     """A skill proposed by Hermes. Returns at once: rejected with reasons, or accepted and being tested."""
     scripts = scripts or {}
+    from . import dev
+    try:
+        await dev.ensure_not_paused()  # the admin page's pause stops new skills too
+    except dev.DevError as e:
+        raise SkillError(str(e)) from e
     if await db.pool().fetchval("SELECT count(*) FROM skill_drafts WHERE created_at > now() - interval '1 day'") >= DAILY_LIMIT:
         raise SkillError(f"batas {DAILY_LIMIT} pengajuan skill per hari tercapai")
     problems = validate(name, description, content, scripts, cases)
