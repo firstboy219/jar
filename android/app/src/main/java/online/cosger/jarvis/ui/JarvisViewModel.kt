@@ -64,6 +64,8 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     fun askReplyDraft() = engine.askReplyDraft()
     suspend fun refreshComposition() = engine.refreshComposition()
     suspend fun refreshBrain() = engine.refreshBrain()
+    suspend fun refreshVoice() = engine.refreshVoice()
+    suspend fun previewVoice(model: String, voice: String) = engine.previewVoice(model, voice)
 
     /** Netralkan: stop (and keep) all work and free CPU/memory on the server. */
     fun relieve() = viewModelScope.launch {

@@ -8,6 +8,7 @@ Prices are per 1 million tokens, in USD.
 
 import difflib
 import logging
+import re
 import time
 
 import httpx
@@ -103,3 +104,47 @@ def short(m: dict) -> dict:
     """What the agent sees of a model (small: it all goes into a local model's context)."""
     return {"id": m["id"], "nama": m["name"], "harga_per_juta_token": f"${m['price_in']:g} masuk / ${m['price_out']:g} keluar"
             if not m["free"] else "gratis", "konteks": m["context"], "alat": m["tools"], "gambar": m["vision"]}
+
+
+# ---------- voices (Blueprint v4 Fase 3): text-to-speech and transcription models, with their voices ----------
+_speech_cache: dict = {}
+
+
+def normalize_speech(raw: dict, kind: str) -> dict:
+    """One TTS ('speech') or STT ('transcription') entry. OpenRouter prices TTS per input character (or per token for
+    models that also bill audio out) and STT per second of audio. Pure; unit-tested."""
+    pricing = raw.get("pricing") or {}
+    mid = str(raw.get("id") or "")
+    try:
+        p_in, p_out = float(pricing.get("prompt") or 0), float(pricing.get("completion") or 0)
+    except (TypeError, ValueError):
+        p_in, p_out = 0.0, 0.0
+    free = mid.endswith(":free") or (p_in == 0 and p_out == 0)
+    if kind == "speech":
+        price = "gratis" if free else (f"±${p_in * 1000:.3f} per 1000 huruf" if not p_out else
+                                       f"${p_in * 1e6:.2f}/juta token teks + ${p_out * 1e6:.2f}/juta token suara")
+    else:
+        price = "gratis" if free else (f"±${p_in * 3600:.3f} per jam audio" if not p_out else
+                                       f"${p_in * 1e6:.2f}/juta token audio + ${p_out * 1e6:.2f}/juta token teks")
+    desc = " ".join(str(raw.get("description") or "").split())
+    return {"id": mid, "name": str(raw.get("name") or mid), "provider": mid.split("/")[0], "free": free,
+            "price_in": p_in, "price_out": p_out, "price_text": price,
+            "voices": [str(v) for v in (raw.get("supported_voices") or []) if v][:80],
+            "multilingual": bool(re.search(r"multilingual|\d+\s+languages|bahasa|indonesian", desc, re.I)),
+            "expires": str(raw.get("expiration_date") or "")[:10] or None, "description": desc[:220]}
+
+
+async def speech_catalog(kind: str = "speech", force: bool = False) -> list[dict]:
+    """TTS (kind='speech') or STT (kind='transcription') models; [] when OpenRouter was never reachable."""
+    hit = _speech_cache.get(kind)
+    if not force and hit and time.monotonic() - hit["at"] < TTL_S:
+        return hit["models"]
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(URL, params={"output_modalities": kind})
+        r.raise_for_status()
+        models = [normalize_speech(m, kind) for m in r.json()["data"] if m.get("id")]
+        _speech_cache[kind] = {"at": time.monotonic(), "models": models}
+    except (httpx.HTTPError, KeyError, ValueError) as e:
+        log.warning("OpenRouter %s catalog not refreshed: %s", kind, e)
+    return (_speech_cache.get(kind) or {}).get("models") or []

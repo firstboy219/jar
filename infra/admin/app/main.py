@@ -73,7 +73,7 @@ SETTINGS = [
      "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma. Dipakai juga oleh Whisper."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"), ("ai", "Model AI"),
-        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
+        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("voice", "Suara"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
         ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
@@ -160,6 +160,8 @@ async def _tab_data(tab: str, request: Request) -> dict:
         listing = await core("GET", "/admin/companies")
         chosen = q.get("c") or next((c["id"] for c in listing["companies"]), None)
         return listing | {"chosen": chosen, "detail": await core("GET", f"/admin/companies/{chosen}") if chosen else None}
+    if tab == "voice":
+        return await core("GET", "/admin/voice")
     if tab == "self":
         return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors"),
                                                     "flow_issues": await core("GET", "/admin/flow-issues"),
@@ -405,6 +407,55 @@ async def company_directive(request: Request, company_id: str, action: str = For
 async def company_directive_cancel(request: Request, company_id: str, directive_id: int):
     return await _company_action(request, company_id, lambda: core("POST", f"/admin/companies/{company_id}/directives/{directive_id}/cancel"),
                                  "Arahan dibatalkan.")
+
+
+async def _voice_action(request: Request, call, done) -> HTMLResponse:
+    """Suara tab (Blueprint v4 Fase 3): run `call()` against core, then show the tab again."""
+    if r := guard(request):
+        return r
+    try:
+        result = await call()
+    except CoreError as e:
+        return await render(request, "voice", errors=[str(e)])
+    return await render(request, "voice", notice=done(result) if callable(done) else done)
+
+
+@app.post("/voice/settings", response_class=HTMLResponse)
+async def voice_settings(request: Request, field: str = Form(...), value: str = Form(...)):
+    """K3 consent (keep utterance audio on this server as a test set) and the second-opinion engine: decided here only."""
+    body = {"keep_samples": value == "on"} if field == "keep_samples" else {"second_engine": value}
+    return await _voice_action(request, lambda: core("POST", "/admin/voice/settings", json=body), "Pengaturan suara disimpan.")
+
+
+@app.post("/voice/complements/{name}", response_class=HTMLResponse)
+async def voice_mode(request: Request, name: str, mode: str = Form(...)):
+    return await _voice_action(request, lambda: core("POST", f"/admin/voice/complements/{name}", json={"mode": mode}),
+                               lambda r: f"{name}: mode {r['mode']}" + (" (otomatis lewat gerbang mutu)" if r["auto"] else " (manual)"))
+
+
+@app.post("/voice/evaluate", response_class=HTMLResponse)
+async def voice_evaluate(request: Request):
+    return await _voice_action(request, lambda: core("POST", "/admin/voice/evaluate"),
+                               lambda r: "Gerbang mutu dijalankan pada " + str(r["labeled"]) + " ucapan terkoreksi. "
+                               + ("; ".join(r["changed"]) if r["changed"] else "Tidak ada mode yang berubah."))
+
+
+@app.post("/voice/data", response_class=HTMLResponse)
+async def voice_data_add(request: Request, kind: str = Form(...), key: str = Form(...), value: str = Form("")):
+    return await _voice_action(request, lambda: core("POST", "/admin/voice/data", json={"kind": kind, "key": key, "value": value}),
+                               "Data suara ditambahkan (berversi; bisa dibatalkan).")
+
+
+@app.post("/voice/data/{row_id}/delete", response_class=HTMLResponse)
+async def voice_data_remove(request: Request, row_id: int):
+    return await _voice_action(request, lambda: core("DELETE", f"/admin/voice/data/{row_id}"), "Dibatalkan (riwayat tetap tersimpan).")
+
+
+@app.post("/voice/events/{event_id}/reference", response_class=HTMLResponse)
+async def voice_reference(request: Request, event_id: int, text: str = Form(""), not_me: str = Form("")):
+    body = {"not_me": True} if not_me else {"text": text}
+    return await _voice_action(request, lambda: core("POST", f"/admin/voice/events/{event_id}/reference", json=body),
+                               lambda r: f"Ucapan #{r['event']} diberi teks benar" + (f" (jenis kesalahan: {r['error_kind']})" if r["error_kind"] else " (sudah benar)"))
 
 
 @app.post("/selfdev/control", response_class=HTMLResponse)

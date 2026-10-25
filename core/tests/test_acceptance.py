@@ -587,3 +587,180 @@ async def test_v4_f1_mock_dgm_round_trip_and_the_fast_lane(pool, monkeypatch):
     from app import company_lane
     cid, block = await company_lane.situation("bandingkan Renature dengan JH Store")
     assert cid is None and "SATU perusahaan" in block and "120" not in block       # two companies: no data at all
+
+
+# ---------- Blueprint v4 Fase 3: voice complements (ADR-048) ----------
+
+TTS_MODELS = [{"id": "elevenlabs/eleven-flash-v2.5", "name": "ElevenLabs Flash v2.5", "provider": "elevenlabs", "free": False,
+               "price_in": 0.00004, "price_out": 0.0, "price_text": "±$0.040 per 1000 huruf", "voices": ["george", "sarah"],
+               "multilingual": True, "expires": None, "description": ""}]
+STT_MODELS = [{"id": "openai/whisper-large-v3-turbo", "name": "Whisper turbo", "provider": "openai", "free": False,
+               "price_in": 0.0000033, "price_out": 0.0, "price_text": "±$0.012 per jam audio", "voices": [],
+               "multilingual": True, "expires": None, "description": ""}]
+
+
+async def _voice(pool, monkeypatch, tmp_path):
+    from app import openrouter, voice
+    await pool.execute("TRUNCATE voice_events, voice_data, companies CASCADE")
+
+    async def catalog(kind="speech", force=False):
+        return TTS_MODELS if kind == "speech" else STT_MODELS
+    monkeypatch.setattr(openrouter, "speech_catalog", catalog)
+    monkeypatch.setattr(voice, "VOICE_DIR", tmp_path)
+    voice.forget()
+    voice._spoken.clear()
+    return voice
+
+
+def _heard(text, engine="whisper", confidence=0.8, stt_ms=3000):
+    return {"text": text, "engine": engine, "confidence": confidence, "stt_ms": stt_ms}
+
+
+async def test_v4_f3_the_baseline_is_measured_per_engine_and_secrets_are_never_stored(pool, monkeypatch, tmp_path):
+    voice = await _voice(pool, monkeypatch, tmp_path)
+    for h in (_heard("putar lagu santai"), _heard("cek cuaca besok", stt_ms=3400), _heard("ketemu uat jam tiga", "groq", 0.35, 500)):
+        out = await voice.process(h, b"\0" * 3200, "s-v1")
+        assert out["voice_event"] and out["text"] == h["text"]                       # nothing changes while complements are in shadow
+    out = await voice.process(_heard("password: rahasia123 simpan ya"), b"\0" * 3200, "s-v1")
+    assert await pool.fetchval("SELECT raw_text FROM voice_events WHERE id = $1", out["voice_event"]) == "[disensor]"
+    b = await voice.baseline()
+    whisper = next(e for e in b["engines"] if e["engine"] == "whisper")
+    groq = next(e for e in b["engines"] if e["engine"] == "groq")
+    assert whisper["utterances"] == 3 and whisper["stt_ms_p50"] >= 3000 and groq["low_confidence"] == 1
+    assert b["keep_samples"] is False and not list(tmp_path.glob("*.pcm"))          # no consent (K3) → no audio kept
+    # the owner's correction labels the utterance and is classified (Fase 3.1 taxonomy)
+    fixed = await voice.correct(session_id="s-v1", heard="uat", meant="Ashar", source="owner_chat", actor="device:HP")
+    assert fixed["reference"] == "ketemu Ashar jam tiga" and fixed["error_kind"] == "nama"
+    assert fixed["learned"] == {"kind": "lexicon", "key": "uat", "value": "Ashar"}
+    assert (await voice.baseline())["error_kinds"] == {"nama": 1}
+
+
+async def test_v4_f3_a_complement_runs_in_shadow_until_the_gate_passes_then_reverts_by_itself(pool, monkeypatch, tmp_path):
+    voice = await _voice(pool, monkeypatch, tmp_path)
+    first = await voice.process(_heard("rapat sama uat"), b"", "s-v2")
+    await voice.correct(event_id=first["voice_event"], heard="uat", meant="Ashar", source="owner_chat", actor="device:HP")
+    voice.forget()
+    ids = []
+    for _ in range(20):                                                              # the dictionary would fix these …
+        out = await voice.process(_heard("rapat sama uat"), b"", "s-v2")
+        assert out["text"] == "rapat sama uat"                                       # … but in shadow it changes nothing
+        ids.append(out["voice_event"])
+    shadow = await pool.fetchval("SELECT shadow FROM voice_events WHERE id = $1", ids[0])
+    assert shadow == [{"complement": "kamus", "after": "rapat sama Ashar"}]
+    for i in ids:
+        await voice.correct(event_id=i, full="rapat sama Ashar", source="admin", actor="admin")
+    r = await voice.evaluate("test")
+    assert "kamus: shadow → on" in r["changed"]
+    k = r["complements"]["kamus"]["eval"]
+    assert k["passes"] and k["wer_after"] < k["wer_before"] and k["false_corrections"] == 0
+    # the utterance the pair was learned from is NOT counted as fixed by it (leave-one-out)
+    assert k["fixed"] == 20 and k["samples"] == 21
+    live = await voice.process(_heard("rapat sama uat"), b"", "s-v2")
+    assert live["text"] == "rapat sama Ashar" and live["raw_text"] == "rapat sama uat"   # now ON: the fix is live, raw kept
+    # a bad dictionary entry makes correct utterances wrong → the gate takes the complement back to shadow by itself
+    for _ in range(3):
+        ok = await voice.process(_heard("putar lagu"), b"", "s-v2")
+        await voice.correct(event_id=ok["voice_event"], full="putar lagu", source="admin", actor="admin")
+    await voice.data_add("lexicon", "putar", "Pertamina", "admin", "admin")
+    r = await voice.evaluate("test")
+    assert "kamus: on → shadow" in r["changed"] and r["complements"]["kamus"]["eval"]["false_corrections"] >= 3
+    assert await pool.fetchval("SELECT count(*) FROM audit_events WHERE action = 'voice.gate'") == 2
+    voice.forget()
+    assert (await voice.process(_heard("putar lagu"), b"", "s-v2"))["text"] == "putar lagu"
+
+
+async def test_v4_f3_echo_of_jarvis_itself_and_learned_hallucinations(pool, monkeypatch, tmp_path):
+    voice = await _voice(pool, monkeypatch, tmp_path)
+    said = await voice.prepare({"type": "say", "text": "Baik, aku putar lagunya sekarang."})
+    out = await voice.process(_heard("baik aku putar lagunya sekarang"), b"", "s-v3")
+    assert out["text"] and await pool.fetchval("SELECT shadow FROM voice_events WHERE id = $1", out["voice_event"]) == \
+        [{"complement": "gema", "after": ""}]
+    await voice.set_mode("gema", "on", "admin")
+    out = await voice.process(_heard("baik aku putar lagunya sekarang"), b"", "s-v3")
+    assert out["text"] == "" and out["dropped"] == "gema" and said["text"].startswith("Baik")
+    assert (await voice.process(_heard("putar lagu jazz"), b"", "s-v3"))["text"] == "putar lagu jazz"   # the owner is still heard
+    # the owner disowns the same short phrase twice → it is learned as a hallucination (data, versioned, undoable)
+    for _ in range(2):
+        await voice.process(_heard("terima kasih semuanya"), b"", "s-v3")
+        await voice.correct(session_id="s-v3", not_me=True, source="owner_chat", actor="device:HP")
+    rows = await voice.data_list("hallucination")
+    assert [r["key"] for r in rows] == ["terima kasih semuanya"] and rows[0]["source"] == "learned"
+    assert await voice.data_remove(rows[0]["id"], "admin") and not await voice.data_list("hallucination")
+    assert len(await voice.data_list("hallucination", include_removed=True)) == 1           # history kept
+
+
+async def test_v4_f3_cloud_voice_never_reads_private_text_respects_the_budget_and_records_cost(pool, monkeypatch, tmp_path):
+    import httpx
+    voice = await _voice(pool, monkeypatch, tmp_path)
+    from app import budget, config
+    monkeypatch.setattr(config.settings, "openrouter_api_key", "sk-or-test")
+    monkeypatch.setattr(voice, "GEN_DELAY_S", 0)
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req.url.path)
+        if req.url.path.endswith("/audio/speech"):
+            import json as _j
+            body = _j.loads(req.content)
+            assert body["voice"] == "george" and "rupiah" in body["input"]       # the normalised copy is what gets spoken
+            return httpx.Response(200, content=b"ID3fake-mp3", headers={"content-type": "audio/mpeg", "x-generation-id": "gen-1"})
+        return httpx.Response(200, json={"data": {"total_cost": 0.0012}})
+    monkeypatch.setattr(voice, "_client", lambda timeout: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(voice.VoiceError):
+        await voice.set_settings({"tts": {"engine": "openrouter", "model": "elevenlabs/eleven-flash-v2.5", "voice": "darth"}}, "device:HP")
+    opts = await voice.set_settings({"tts": {"engine": "openrouter", "model": "elevenlabs/eleven-flash-v2.5", "voice": "george"}}, "device:HP")
+    assert opts["tts"]["engine"] == "openrouter" and opts["tts"]["models"][0]["voices"] == ["george", "sarah"]
+    ev = await voice.prepare({"type": "reply", "text": "Saldo Rp 1.500.000"})
+    assert ev["text"] == "Saldo Rp 1.500.000" and ev["speech"] == "Saldo satu juta lima ratus ribu rupiah" and "local_voice" not in ev
+    audio = await voice.synthesize(ev["speech"])
+    assert audio == b"ID3fake-mp3"
+    assert await voice.synthesize(ev["speech"]) == audio and calls.count("/api/v1/audio/speech") == 1   # cached
+    assert await _wait(lambda: pool.fetchval("SELECT cost_usd = 0.0012 FROM llm_usage WHERE category = 'suara'"))
+    for private in ("/privat saldo rekeningku", "password: rahasia123"):
+        with pytest.raises(voice.VoiceError) as e:
+            await voice.synthesize(private)
+        assert e.value.status == 409
+    assert (await voice.prepare({"type": "say", "text": "password: rahasia123"}))["local_voice"] is True
+    assert (await voice.prepare({"type": "reply", "text": "isi lampiran"}, local_voice=True))["local_voice"] is True
+    await pool.execute("INSERT INTO settings_kv (key, value) VALUES ('budget:total', '1')")
+    await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, cost_usd, ok) VALUES ('ngobrol', 't', 'openrouter', 'm', 5, true)")
+    budget.forget()
+    with pytest.raises(voice.VoiceError) as e:
+        await voice.synthesize("kalimat baru yang belum ada di cache")
+    assert e.value.status == 402
+
+
+async def test_v4_f3_owner_controls_voice_by_chat_and_consent_is_admin_page_only(pool, monkeypatch, tmp_path):
+    import httpx
+    voice = await _voice(pool, monkeypatch, tmp_path)
+    from app import assistant, config, devices, main
+    out = await assistant._voice_tool("voice_settings", {"query": "eleven"}, "device:HP", "s-v5", None, None, False)
+    assert out["pilihan"][0]["id"] == "elevenlabs/eleven-flash-v2.5" and out["sekarang"]["engine"] == "android"
+    out = await assistant._voice_tool("voice_settings", {"model": "elevenlabs/eleven-flash-v2.5", "voice": "sarah"},
+                                      "device:HP", "s-v5", None, None, False)
+    assert out["suara_sekarang"]["engine"] == "openrouter" and out["suara_sekarang"]["voice"] == "sarah"
+    refused = await assistant._voice_tool("voice_settings", {"engine": "android"}, "device:HP", "s-v5", None, {"is_owner": False}, False)
+    assert "pemilik" in refused["error"]
+    out = await assistant._voice_tool("voice_pronounce", {"word": "Renature", "say_as": "ri-ne-cer"}, "device:HP", "s-v5", None, None, False)
+    assert "ri-ne-cer" in out["dipelajari"]
+    voice.forget()
+    assert (await voice.prepare({"type": "say", "text": "Renature naik 7%"}))["text"] == "ri-ne-cer naik tujuh persen"
+    assert "MENYANGKUT UANG" in assistant._user_content("transfer lima juta ke Budi", None, stt={"confidence": 0.9})
+    assert "MENYANGKUT UANG" not in assistant._user_content("putar lagu jam 5", None, stt={"confidence": 0.9})
+    # K3 consent and the complements' switches belong to the admin page, never the app console
+    _, token = await devices.create("HP pemilik", "test", scope="owner")
+    monkeypatch.setattr(config.settings, "admin_token", "admin-secret")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        app_h, admin_h = {"Authorization": f"Bearer {token}"}, {"X-Admin-Token": "admin-secret"}
+        assert (await c.post("/api/v1/console/voice/settings", json={"keep_samples": True}, headers=app_h)).status_code == 403
+        assert (await c.post("/api/v1/console/voice/complements/kamus", json={"mode": "on"}, headers=app_h)).status_code == 403
+        assert (await c.post("/admin/voice/settings", json={"keep_samples": True}, headers=admin_h)).status_code == 200
+        r = await c.get("/api/v1/voice", headers=app_h)
+        assert r.status_code == 200 and r.json()["tts"]["voice"] == "sarah"
+        r = await c.put("/api/v1/voice", json={"tts": {"engine": "android"}}, headers=app_h)
+        assert r.status_code == 200 and r.json()["tts"]["engine"] == "android"
+        r = await c.post("/api/v1/voice/speak", json={"text": "halo"}, headers=app_h)
+        assert r.status_code == 422                                                   # android chosen → the phone speaks itself
+    assert await voice.keep_samples()
+    out = await voice.process(_heard("ketemu uat", confidence=0.3), b"\1" * 3200, "s-v5")
+    assert (tmp_path / f"{out['voice_event']}.pcm").exists()                          # with consent, doubtful audio is kept here

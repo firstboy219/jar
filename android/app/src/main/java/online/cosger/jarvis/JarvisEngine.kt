@@ -24,9 +24,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import online.cosger.jarvis.data.AppSettings
 import online.cosger.jarvis.data.LocationProvider
 import online.cosger.jarvis.data.PhoneSensors
@@ -48,6 +50,7 @@ import online.cosger.jarvis.ui.Phase
 import online.cosger.jarvis.ui.TurnState
 import online.cosger.jarvis.ui.stage.BrainGraph
 import online.cosger.jarvis.ui.stage.StageState
+import online.cosger.jarvis.voice.CloudVoice
 import online.cosger.jarvis.voice.ContinuousListener
 import online.cosger.jarvis.voice.ListeningService
 import online.cosger.jarvis.voice.MicState
@@ -157,6 +160,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                         while (outbox.isNotEmpty() && socket.sendControl(outbox.first())) outbox.removeFirst()
                     }
                     refreshComposition()
+                    refreshVoice()
                     refreshBrain()
                     updater.check()
                 }
@@ -227,6 +231,23 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         val wanted = if (engine == "deepgram") deepgram else vad
         if (wanted !== _input.value && !listener.unmuted) _input.value = wanted
     }
+
+    /** The owner's voice choice (Fase 3): a cloud voice from OpenRouter, or the phone's own engine. */
+    suspend fun refreshVoice() {
+        val tts = runCatching { console.get("/api/v1/voice").jsonObject["tts"]?.jsonObject }.getOrNull() ?: return
+        val cloud = tts["engine"]?.jsonPrimitive?.contentOrNull == "openrouter"
+        speaker.cloud = if (!cloud) null else CloudVoice { text ->
+            console.postForBytes("/api/v1/voice/speak", buildJsonObject { put("text", text) })
+        }
+    }
+
+    /** 'Coba' on the Suara JARVIS screen: hear a model + character before choosing it. */
+    suspend fun previewVoice(model: String, voice: String): String? = runCatching {
+        val mp3 = console.postForBytes("/api/v1/voice/preview", buildJsonObject { put("model", model); put("voice", voice) })
+            ?: return@runCatching "Contoh suara tidak bisa dibuat (cek kunci/anggaran OpenRouter)"
+        speaker.preview(mp3)
+        null
+    }.getOrElse { it.message ?: "Gagal" }
 
     suspend fun refreshBrain() {
         runCatching { BrainGraph.parse(console.get("/api/v1/brain")) }.getOrNull()?.let { _brain.value = it }
@@ -468,7 +489,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             }
             is ServerEvent.Proactive -> {
                 _history.update { it + ChatMessage(fromUser = false, text = event.text, route = "proactive") }
-                reportQueue.trySend(ServerEvent.Announce(event.text))
+                reportQueue.trySend(ServerEvent.Announce(event.text, event.speech, event.localVoice))
             }
             is ServerEvent.Announce -> {
                 _history.update { it + ChatMessage(fromUser = false, text = event.text, route = "announce") }
@@ -495,7 +516,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             is ServerEvent.Say -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
                 spokenLive = true
-                if (settings.value.speakReplies) speaker.say(event.text)
+                if (settings.value.speakReplies) speaker.say(event.text, local = event.localVoice)
             }
             else -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
@@ -506,7 +527,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                         _turn.value = TurnState()
                     } else {
                         _history.update { it + ChatMessage(fromUser = false, text = event.text, route = event.route) }
-                        if (settings.value.speakReplies && !event.spoken && !spokenLive) speaker.say(event.text)
+                        if (settings.value.speakReplies && !event.spoken && !spokenLive) speaker.say(event.speech ?: event.text, local = event.localVoice)
                     }
                     is ServerEvent.Error -> _notice.value = event.message
                     else -> Unit
@@ -523,7 +544,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         for (item in reportQueue) {
             if (item is ServerEvent.Announce) {
                 withTimeoutOrNull(45_000) { mic.first { it != MicState.Hearing } }
-                if (settings.value.speakReplies) speaker.say(item.text)
+                if (settings.value.speakReplies) speaker.say(item.speech ?: item.text, local = item.localVoice)
                 continue
             }
             val r = item as? ServerEvent.Report ?: continue
@@ -537,7 +558,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 _board.update { it.markSpoken(r.id) }
             }
             if (settings.value.speakReplies) {
-                speaker.say((if (r.repeat) "Aku ulangi ya. " else "") + r.text) { spoken() }
+                speaker.say((if (r.repeat) "Aku ulangi ya. " else "") + (r.speech ?: r.text), { spoken() }, local = r.localVoice)
             } else {
                 spoken()
             }

@@ -26,11 +26,15 @@ sealed interface ServerEvent {
     data class Context(val query: String, val items: List<ContextItem>, override val sessionId: String?) : ServerEvent
     data class Delta(val text: String, override val sessionId: String?) : ServerEvent
     /** [spoken]: the reply was already said sentence by sentence ([Say] events) — do not say it again. */
-    data class Reply(val text: String, val route: String, override val sessionId: String?, val spoken: Boolean = false) : ServerEvent
+    /** [speech]: the copy made for the ear (rupiah, dates, pronunciations; Fase 3) — [text] is what the screen shows.
+     *  [localVoice]: private/sensitive — only the phone's own voice may say it. */
+    data class Reply(val text: String, val route: String, override val sessionId: String?, val spoken: Boolean = false,
+                     val speech: String? = null, val localVoice: Boolean = false) : ServerEvent
     /** One finished sentence of the answer, to speak right away (BR-001: talk while still thinking). */
-    data class Say(val text: String, override val sessionId: String?) : ServerEvent
+    data class Say(val text: String, override val sessionId: String?, val localVoice: Boolean = false) : ServerEvent
     /** What the server heard in an utterance the phone sent (on-phone VAD + server speech recognition). */
-    data class Transcript(val text: String, val seq: Long?, val isOwner: Boolean?, val error: String?, override val sessionId: String?) : ServerEvent
+    data class Transcript(val text: String, val seq: Long?, val isOwner: Boolean?, val error: String?, override val sessionId: String?,
+                          val voiceEvent: Long? = null, val dropped: String? = null) : ServerEvent
     /** The phone's front screen ("Panggung"): show/update/close a panel (music, video, map, web, doc, draft, gallery). */
     data class Stage(val id: String, val panel: String, val mode: String, val payload: JsonObject, val caption: String) : ServerEvent {
         override val sessionId: String? = null
@@ -50,14 +54,19 @@ sealed interface ServerEvent {
     /** Live progress of one worker (wraps a thought/tool/context event). */
     data class TaskEvent(val taskId: Long, val event: ServerEvent) : ServerEvent { override val sessionId: String? = null }
     /** A worker result JARVIS must say out loud until the owner confirms hearing it. */
-    data class Report(val id: Long, val taskId: Long?, val text: String, val attempt: Int, val repeat: Boolean) : ServerEvent {
+    data class Report(val id: Long, val taskId: Long?, val text: String, val attempt: Int, val repeat: Boolean,
+                      val speech: String? = null, val localVoice: Boolean = false) : ServerEvent {
         override val sessionId: String? = null
     }
     data class ReportAck(val id: Long) : ServerEvent { override val sessionId: String? = null }
     /** JARVIS speaks first because of the situation it observed (place, time, agenda, habits). */
-    data class Proactive(val text: String) : ServerEvent { override val sessionId: String? = null }
+    data class Proactive(val text: String, val speech: String? = null, val localVoice: Boolean = false) : ServerEvent {
+        override val sessionId: String? = null
+    }
     /** Something JARVIS says on its own once (e.g. about a new notification); no confirmation needed. */
-    data class Announce(val text: String) : ServerEvent { override val sessionId: String? = null }
+    data class Announce(val text: String, val speech: String? = null, val localVoice: Boolean = false) : ServerEvent {
+        override val sessionId: String? = null
+    }
     /** Pictures/videos JARVIS wants the owner to see. */
     data class Media(val caption: String, val items: List<MediaItem>) : ServerEvent { override val sessionId: String? = null }
     data class ReportUnheard(val id: Long) : ServerEvent { override val sessionId: String? = null }
@@ -85,6 +94,8 @@ object Protocol {
     private fun JsonObject.str(key: String): String = this[key]?.jsonPrimitive?.contentOrNull ?: ""
 
     private fun JsonObject.long(key: String): Long? = this[key]?.jsonPrimitive?.longOrNull
+    private fun JsonObject.speech(): String? = this["speech"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+    private fun JsonObject.localVoice(): Boolean = this["local_voice"]?.jsonPrimitive?.booleanOrNull == true
 
     fun parse(raw: String): ServerEvent? {
         val o = runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return null
@@ -109,11 +120,12 @@ object Protocol {
                 sid,
             )
             "delta" -> ServerEvent.Delta(o.str("text"), sid)
-            "reply" -> ServerEvent.Reply(o.str("text"), o.str("route"), sid, o["spoken"]?.jsonPrimitive?.booleanOrNull == true)
-            "say" -> ServerEvent.Say(o.str("text"), sid)
+            "reply" -> ServerEvent.Reply(o.str("text"), o.str("route"), sid, o["spoken"]?.jsonPrimitive?.booleanOrNull == true,
+                o.speech(), o.localVoice())
+            "say" -> ServerEvent.Say(o.str("text"), sid, o.localVoice())
             "transcript" -> ServerEvent.Transcript(
                 o.str("text"), o.long("seq"), o["is_owner"]?.jsonPrimitive?.booleanOrNull,
-                o["error"]?.jsonPrimitive?.contentOrNull, sid,
+                o["error"]?.jsonPrimitive?.contentOrNull, sid, o.long("voice_event"), o["dropped"]?.jsonPrimitive?.contentOrNull,
             )
             "stage" -> ServerEvent.Stage(
                 o.str("id"), o.str("panel"), o.str("mode").ifEmpty { "show" },
@@ -139,10 +151,11 @@ object Protocol {
             "report" -> ServerEvent.Report(
                 o.long("id") ?: return null, o.long("task_id"), o.str("text"),
                 o["attempt"]?.jsonPrimitive?.intOrNull ?: 1, o["repeat"]?.jsonPrimitive?.booleanOrNull == true,
+                o.speech(), o.localVoice(),
             )
             "report_ack" -> ServerEvent.ReportAck(o.long("id") ?: return null)
-            "announce" -> ServerEvent.Announce(o.str("text"))
-            "proactive" -> ServerEvent.Proactive(o.str("text"))
+            "announce" -> ServerEvent.Announce(o.str("text"), o.speech(), o.localVoice())
+            "proactive" -> ServerEvent.Proactive(o.str("text"), o.speech(), o.localVoice())
             "media" -> ServerEvent.Media(
                 o.str("caption"),
                 o["items"]?.jsonArray?.mapNotNull {

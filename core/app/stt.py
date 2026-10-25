@@ -6,6 +6,8 @@ only real speech is ever transcribed — silence costs nothing, whatever the eng
   groq      Groq whisper-large-v3-turbo (cloud; ~0.5 s, WER ~10% measured locally on the same model;
             free up to ~8 h of audio/day, then $0.04/h)
   deepgram  Deepgram nova-2 prerecorded (cloud; WER 12–15% measured; ~$0.26/h)
+  openrouter  the STT model the owner picked from OpenRouter (ElevenLabs Scribe, GPT transcribe, Whisper…; voice.py)
+What JARVIS then does with the text (dictionary, echo/hallucination filters, second opinion) is voice.py's job.
 If the chosen cloud engine fails (no key, quota, network), the local engine answers instead.
 """
 
@@ -91,7 +93,12 @@ async def _deepgram(pcm: bytes, prompt: str) -> dict:
     return {"text": alt.get("transcript", ""), "confidence": alt.get("confidence"), "speakers": len(speakers) or 1}
 
 
-ENGINES = {"whisper": _whisper, "groq": _groq, "deepgram": _deepgram}
+async def _openrouter(pcm: bytes, prompt: str) -> dict:
+    from . import voice
+    return await voice.transcribe_openrouter(pcm, prompt)
+
+
+ENGINES = {"whisper": _whisper, "groq": _groq, "deepgram": _deepgram, "openrouter": _openrouter}
 
 
 async def transcribe(pcm: bytes, engine: str | None = None) -> dict:

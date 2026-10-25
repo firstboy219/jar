@@ -443,6 +443,66 @@
   {% if detail.decisions %}<h3>Decision Vault</h3>{% for x in detail.decisions %}<div class="item"><span class="pill">{{ x.kind }}</span> {{ x.text }}</div>{% endfor %}{% endif %}
 </section>
 {% endif %}
+{% elif tab == 'voice' %}
+<section class="card">
+  <h2>Suara JARVIS</h2>
+  <p class="hint">Mesin dengar (Whisper/Groq/Deepgram/OpenRouter) tidak diganti; JARVIS menutup kekurangannya. Tiap pelengkap mulai
+    dalam mode <strong>bayangan</strong>: hanya mencatat apa yang <em>akan</em> diubahnya. Ia baru menyala bila, pada ucapan yang sudah
+    kamu koreksi, kesalahan turun <strong>dan</strong> koreksi keliru ≤ 1% (minimal 20 ucapan) — dan kembali ke bayangan sendiri bila tidak lagi lolos.</p>
+  <table class="kv">
+    <tr><th>Suara bicara</th><td>{{ tts.engine }}{% if tts.engine == 'openrouter' %} · {{ tts.model }} · karakter {{ tts.voice }} · ×{{ tts.speed }}{% endif %}
+      <small>(dipilih di APK: Lainnya → Komposisi AI → Suara)</small></td></tr>
+    <tr><th>Simpan audio ucapan (K3)</th><td>{{ 'YA — hanya di server ini, tidak dikirim ke cloud' if baseline.keep_samples else 'tidak' }}
+      <form method="post" action="/voice/settings" class="inline"><input type="hidden" name="field" value="keep_samples">
+        <input type="hidden" name="value" value="{{ 'off' if baseline.keep_samples else 'on' }}">
+        <button type="submit" {% if not baseline.keep_samples %}onclick="return confirm('Simpan audio ucapan yang meragukan di server ini sebagai set uji (maks 500 MB, 60 hari)?')"{% endif %}>{{ 'Matikan' if baseline.keep_samples else 'Izinkan' }}</button></form></td></tr>
+    <tr><th>Mesin opini kedua</th><td><form method="post" action="/voice/settings" class="inline"><input type="hidden" name="field" value="second_engine">
+      <select name="value">{% for e, label in [('auto','otomatis (mesin cloud dicek Whisper lokal; tidak pernah mengirim ke cloud yang tak kamu pilih)'),('none','tidak ada'),('whisper','Whisper lokal'),('groq','Groq (cloud)'),('openrouter','OpenRouter (cloud)')] %}
+        <option value="{{ e }}" {{ 'selected' if baseline.second_engine == e }}>{{ label }}</option>{% endfor %}</select> <button type="submit">Simpan</button></form></td></tr>
+  </table>
+</section>
+<section class="card">
+  <h2>Baseline ({{ baseline.days }} hari)</h2>
+  <table class="kv"><tr><th>Mesin</th><th>Ucapan</th><th>Keyakinan rata2</th><th>Waktu p50/p90</th><th>Keyakinan rendah</th><th>Dibuang</th><th>Dikoreksi</th><th>WER</th></tr>
+  {% for e in baseline.engines %}<tr><td>{{ e.engine }}</td><td>{{ e.utterances }}</td><td>{{ e.avg_confidence }}</td><td>{{ e.stt_ms_p50 }}/{{ e.stt_ms_p90 }} ms</td>
+    <td>{{ e.low_confidence }}</td><td>{{ e.dropped }}</td><td>{{ e.corrected }}</td><td>{{ '%.1f%%' % (e.wer * 100) if e.wer is not none else '—' }}</td></tr>
+  {% else %}<tr><td colspan="8" class="hint">Belum ada ucapan tercatat.</td></tr>{% endfor %}</table>
+  {% if baseline.error_kinds %}<p>Jenis kesalahan: {% for k, n in baseline.error_kinds.items() %}<span class="pill">{{ k }} {{ n }}</span> {% endfor %}</p>{% endif %}
+</section>
+<section class="card">
+  <h2>Pelengkap & gerbang mutu</h2>
+  {% for name, c in complements.items() %}<div class="item"><span class="pill {{ 'completed' if c.mode == 'on' else ('rejected' if c.mode == 'off' else 'awaiting_approval') }}">{{ {'on':'menyala','shadow':'bayangan','off':'mati'}[c.mode] }}</span>
+    <strong>{{ name }}</strong> <small>{{ c.title }}{{ ' · otomatis' if c.auto else ' · manual' }}</small>
+    {% if c.eval %}<br><small>{{ c.eval.reason }}{% if c.eval.wer_before is defined %} · WER {{ c.eval.wer_before }} → {{ c.eval.wer_after }}, diperbaiki {{ c.eval.fixed }}, keliru {{ c.eval.false_corrections }} dari {{ c.eval.samples }}{% endif %} · {{ c.eval.at }}</small>{% endif %}
+    <form method="post" action="/voice/complements/{{ name }}" class="inline"><select name="mode">
+      {% for m, label in [('auto','otomatis (gerbang)'),('shadow','bayangan'),('on','paksa nyala'),('off','mati')] %}<option value="{{ m }}">{{ label }}</option>{% endfor %}
+    </select> <button type="submit">Ubah</button></form></div>{% endfor %}
+  <form method="post" action="/voice/evaluate" class="inline"><button type="submit">Jalankan gerbang mutu sekarang</button></form>
+</section>
+<section class="card">
+  <h2>Ucapan terakhir</h2>
+  <p class="hint">Isi teks yang benar untuk ucapan yang salah dengar — itulah set uji pelengkap. "Bukan aku" = bukan suaramu / tidak ada yang bicara.</p>
+  {% for e in recent %}<div class="item"><small>#{{ e.id }} {{ e.at[:16]|replace('T',' ') }} · {{ e.engine }}{% if e.model %} ({{ e.model }}){% endif %} · keyakinan {{ e.confidence if e.confidence is not none else '—' }} · {{ e.stt_ms }} ms</small><br>
+    <strong>{{ e.raw_text }}</strong>{% if e.final_text != e.raw_text %} → {{ e.final_text or '(dibuang: ' ~ e.dropped ~ ')' }}{% endif %}
+    {% for s in e.shadow %}<br><small>bayangan {{ s.complement }}: {{ s.after or '(akan dibuang)' }}</small>{% endfor %}
+    {% if e.second_opinion %}<br><small>opini kedua {{ e.second_opinion.engine }}: {{ e.second_opinion.text }} ({{ e.second_opinion.chosen }})</small>{% endif %}
+    {% if e.reference is not none %}<br><small>benar: "{{ e.reference }}" · {{ e.error_kind or 'tepat' }}</small>
+    {% elif e.raw_text != '[disensor]' %}<form method="post" action="/voice/events/{{ e.id }}/reference" class="inline">
+      <input name="text" value="{{ e.raw_text }}" size="50"> <button type="submit">Simpan teks benar</button>
+      <button type="submit" name="not_me" value="1" class="danger">Bukan aku</button></form>{% endif %}</div>
+  {% else %}<p class="hint">Belum ada.</p>{% endfor %}
+</section>
+<section class="card">
+  <h2>Data yang dipelajari</h2>
+  <p class="hint">Kamus dengar (salah dengar → maksud), pelafalan (tulisan → cara baca), frasa halusinasi. Tiap perubahan baris baru; "Batalkan" menyimpan riwayat.</p>
+  {% for d in data %}<div class="item"><span class="pill">{{ d.kind }}</span> <strong>{{ d.key }}</strong>{% if d.value %} → {{ d.value }}{% endif %}
+    <small>{{ d.source }} · {{ d.created_at[:10] }}</small>
+    <form method="post" action="/voice/data/{{ d.id }}/delete" class="inline"><button class="danger" type="submit">Batalkan</button></form></div>
+  {% else %}<p class="hint">Belum ada.</p>{% endfor %}
+  <form method="post" action="/voice/data"><select name="kind"><option value="lexicon">kamus dengar</option><option value="pronounce">pelafalan</option>
+    <option value="hallucination">frasa halusinasi</option></select>
+    <input name="key" placeholder="kata/frasa" required> <input name="value" placeholder="pengganti / cara baca"> <button type="submit">Tambah</button></form>
+</section>
 {% elif tab == 'docs' %}
 <section class="card">
   <h2>Dokumen buatan JARVIS</h2>

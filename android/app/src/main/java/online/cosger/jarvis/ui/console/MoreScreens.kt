@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.QueryStats
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Key
@@ -80,6 +81,7 @@ enum class ConsoleRoute(val path: String, val title: String, val hint: String, v
     Documents("documents", "Dokumen", "file buatan JARVIS", Icons.Filled.Description, "JARVIS"),
     Playlist("playlist", "Playlist", "lagu yang kamu kumpulkan lewat JARVIS", Icons.Filled.QueueMusic, "JARVIS"),
     Composition("composition", "Komposisi AI", "AI per kategori, anggaran, mesin suara, Mode Kuat", Icons.Filled.Tune, "AI & server"),
+    JarvisVoice("jarvis-voice", "Suara JARVIS", "suara bicara (HP / ElevenLabs / Gemini…) + karakternya, dan model dengar", Icons.Filled.GraphicEq, "AI & server"),
     ModelStatsRoute("model-stats", "Statistik model", "model mana yang sering error, secepat apa, semahal apa", Icons.Filled.QueryStats, "AI & server"),
     Server("server", "Pengaturan server", "kunci API, anggaran, jam tenang, password admin", Icons.Filled.AccountTree, "AI & server"),
     Devices("devices", "Perangkat", "token perangkat", Icons.Filled.Devices, "AI & server"),

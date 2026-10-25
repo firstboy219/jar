@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from . import assistant
 from . import (approvals, attachments, audit, auditor, awareness, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
-               stt, usage, voice_id, workers)
+               sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
 from .location import Location
 
@@ -117,6 +117,8 @@ async def lifespan(app: FastAPI):
                 await dev.poll()
                 await skills_pipeline.poll()  # sandbox results of skills being tested
                 await gm.tick()  # Company Federation: due sends, callback deadlines, rejections to relay (ADR-042)
+                if datetime.now(awareness.WIB).hour == 4:
+                    await voice.nightly()  # speech complements: prune old utterances, run the quality gate (ADR-048)
                 await perf.watch_recurring_errors()
                 if (await ops.background_ok())[0] and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
                     await auditor.run()
@@ -472,6 +474,70 @@ async def composition_model(p: ModelPick, device: dict = Depends(owner_device_au
         raise HTTPException(422, str(e))
 
 
+# ---------- voice (Blueprint v4 Fase 3, ADR-048): JARVIS's cloud voice and the owner's corrections ----------
+
+@app.get("/api/v1/voice")
+async def voice_get(device: dict = Depends(device_auth)):
+    return jsonable(await voice.options())
+
+
+class VoiceIn(BaseModel):
+    tts: dict | None = None
+    stt_model: str | None = Field(default=None, max_length=120)
+
+
+@app.put("/api/v1/voice")
+async def voice_put(v: VoiceIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await voice.set_settings(v.model_dump(exclude_none=True), f"device:{device['name']}"))
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
+
+
+class SpeakIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+@app.post("/api/v1/voice/speak")
+async def voice_speak(s: SpeakIn, device: dict = Depends(device_auth)):
+    """One sentence in the owner's cloud voice (audio/mpeg). Any error status = the phone speaks it with its own voice."""
+    from fastapi.responses import Response
+    try:
+        return Response(await voice.synthesize(s.text), media_type="audio/mpeg")
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
+
+
+class VoicePreviewIn(BaseModel):
+    model: str = Field(min_length=3, max_length=120)
+    voice: str = Field(default="", max_length=60)
+
+
+@app.post("/api/v1/voice/preview")
+async def voice_preview(p: VoicePreviewIn, device: dict = Depends(owner_device_auth)):
+    """'Coba' on the Suara screen: a short sample of a model + character, without choosing it."""
+    from fastapi.responses import Response
+    try:
+        return Response(await voice.synthesize(voice.SAMPLE_TEXT, p.model, p.voice or None, preview=True), media_type="audio/mpeg")
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
+
+
+class VoiceCorrectIn(BaseModel):
+    event_id: int
+    text: str | None = Field(default=None, max_length=1000)   # what the owner really said
+    not_me: bool = False                                       # it was not the owner speaking (or nobody)
+
+
+@app.post("/api/v1/voice/correct")
+async def voice_correct(c: VoiceCorrectIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return await voice.correct(event_id=c.event_id, full=c.text, not_me=c.not_me, source="owner_app",
+                                   actor=f"device:{device['name']}")
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
+
+
 class CompositionTest(BaseModel):
     category: str = "ngobrol"
     text: str = Field(default="Halo JARVIS, tes singkat. Jawab satu kalimat.", max_length=500)
@@ -553,7 +619,8 @@ async def ws(websocket: WebSocket):
     tasks: set[asyncio.Task] = set()
     client_id: int | None = None
 
-    async def send(obj: dict) -> None:
+    async def send(obj: dict, local_voice: bool = False) -> None:
+        obj = await voice.prepare(obj, local_voice)  # the spoken copy (rupiah, dates, pronunciations); private → phone's voice
         async with send_lock:
             await websocket.send_text(json.dumps(obj, ensure_ascii=False))
 
@@ -580,15 +647,19 @@ async def ws(websocket: WebSocket):
         await reports.on_connect(send)
 
         async def run(cmd: Command) -> None:
+            # a private or sensitive turn, or one about attachments/screen text, is never read out by a cloud voice
+            local_voice = bool(sensitive.is_private(cmd.user_command) or sensitive.scan(cmd.user_command)
+                               or cmd.attachments or cmd.screen_text)
+
             async def emit(event: dict) -> None:
-                await send({**event, "session_id": cmd.session_id})
+                await send({**event, "session_id": cmd.session_id}, local_voice)
             try:
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
                                          device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen,
                                          image_source=cmd.image_source, stt=cmd.stt, speak_live="say" in caps,
                                          screen_text=cmd.screen_text or "", attachment_ids=cmd.attachments)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "spoken": turn.spoken,
-                            "session_id": cmd.session_id})
+                            "session_id": cmd.session_id}, local_voice)
             except (WebSocketDisconnect, RuntimeError):
                 pass  # socket gone mid-turn; the task is cancelled below anyway
             except Exception:
@@ -640,12 +711,17 @@ async def ws(websocket: WebSocket):
                     except stt.SttError as e:
                         await send({"type": "transcript", "seq": m.get("seq"), "text": "", "error": str(e)[:200], "session_id": sid})
                         return
+                    try:  # Fase 3 complements: dictionary, echo/hallucination filters, second opinion (each behind its gate)
+                        heard = await voice.process(heard, pcm, sid)
+                    except Exception:
+                        log.exception("voice complements failed; using the engine's text")
                     await send({"type": "transcript", "seq": m.get("seq"), "text": heard["text"], "engine": heard["engine"],
-                                "confidence": heard.get("confidence"), "is_owner": heard.get("is_owner"), "session_id": sid})
+                                "confidence": heard.get("confidence"), "is_owner": heard.get("is_owner"), "session_id": sid,
+                                "voice_event": heard.get("voice_event"), "dropped": heard.get("dropped")})
                     if not heard["text"]:
                         await send({"type": "reply", "text": "", "route": "silent", "spoken": False, "session_id": sid})
                         return
-                    meta = {k: heard[k] for k in ("confidence", "speakers", "owner_voice", "is_owner", "stt_ms", "engine") if k in heard}
+                    meta = {k: heard[k] for k in ("confidence", "speakers", "owner_voice", "is_owner", "stt_ms", "engine", "voice_event") if k in heard}
                     try:
                         cmd = Command(user_command=heard["text"], session_id=sid, location=m.get("location"),
                                       screen=m.get("screen"), image_source=m.get("image_source"), stt=meta,
@@ -1108,6 +1184,78 @@ def admin_page_only(request: Request) -> None:
     """Some switches belong to the admin page alone (the control point JARVIS cannot change): never the app console."""
     if request.url.path.startswith(CONSOLE + "/"):
         raise HTTPException(403, "hanya bisa diubah di halaman admin")
+
+
+@app.get("/admin/voice")
+async def admin_voice(_: str = admin):
+    """Fase 3: how well JARVIS hears (baseline), the complements and their gate, recent utterances, learned data."""
+    return jsonable({"baseline": await voice.baseline(), "complements": await voice.modes(),
+                     "recent": await voice.recent(40), "data": await voice.data_list(), "tts": await voice.tts_settings()})
+
+
+class VoiceAdminIn(BaseModel):
+    keep_samples: bool | None = None
+    second_engine: str | None = None
+
+
+@app.post("/admin/voice/settings")
+async def admin_voice_settings(v: VoiceAdminIn, request: Request, actor: str = admin):
+    admin_page_only(request)  # K3 consent and sending audio to a second engine: the owner decides at the control point
+    try:
+        await voice.set_admin(v.model_dump(exclude_none=True), actor)
+    except voice.VoiceError as e:
+        raise HTTPException(422, str(e))
+    return await voice.baseline()
+
+
+class VoiceModeIn(BaseModel):
+    mode: str
+
+
+@app.post("/admin/voice/complements/{name}")
+async def admin_voice_mode(name: str, m: VoiceModeIn, request: Request, actor: str = admin):
+    admin_page_only(request)
+    try:
+        return await voice.set_mode(name, m.mode, actor)
+    except voice.VoiceError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/admin/voice/evaluate")
+async def admin_voice_evaluate(actor: str = admin):
+    return jsonable(await voice.evaluate(actor))
+
+
+class VoiceDataIn(BaseModel):
+    kind: str
+    key: str = Field(min_length=1, max_length=80)
+    value: str = Field(default="", max_length=120)
+
+
+@app.post("/admin/voice/data")
+async def admin_voice_data_add(d: VoiceDataIn, actor: str = admin):
+    try:
+        return jsonable(await voice.data_add(d.kind, d.key, d.value, "admin", actor))
+    except voice.VoiceError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.delete("/admin/voice/data/{row_id}")
+async def admin_voice_data_remove(row_id: int, actor: str = admin):
+    return {"removed": await voice.data_remove(row_id, actor)}
+
+
+class VoiceRefIn(BaseModel):
+    text: str | None = Field(default=None, max_length=1000)
+    not_me: bool = False
+
+
+@app.post("/admin/voice/events/{event_id}/reference")
+async def admin_voice_reference(event_id: int, r: VoiceRefIn, actor: str = admin):
+    try:
+        return await voice.correct(event_id=event_id, full=r.text, not_me=r.not_me, source="admin", actor=actor)
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
 
 
 @app.get("/admin/selfdev/control")
