@@ -47,8 +47,8 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
             if not pending:
                 return "Tidak ada tindakan yang menunggu persetujuan."
             return "Menunggu persetujuan:\n" + "\n".join(_fmt_approval(a) for a in pending)
-        case "approve" | "reject":
-            a = await approvals.decide(intent.args["id"], intent.name == "approve", actor)
+        case "approve" | "reject":  # by chat/voice = from the app: never the control point (approvals.ADMIN_ONLY)
+            a = await approvals.decide(intent.args["id"], intent.name == "approve", actor, channel="device")
             extra = f"\nGagal: {a['error']}" if a["status"] == "failed" else ""
             return f"Persetujuan #{a['id']} → {a['status']}.{extra}"
         case "remember":

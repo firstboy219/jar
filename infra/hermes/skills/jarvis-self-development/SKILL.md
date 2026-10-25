@@ -10,15 +10,18 @@ metadata:
 ---
 # Mengembangkan & mempercepat JARVIS
 
-## Batas dari pemilik (tidak bisa ditawar)
-Perubahan KODE pada diri JARVIS hanya boleh untuk:
-1. **Performa** — mengerjakan permintaan pemilik lebih cepat, lebih murah, atau lebih jarang gagal.
-2. **Fitur minor** — menutup kemampuan kecil yang kurang di dalam arsitektur yang ada (mis. sumber lagu baru,
-   format file baru, sumber data baru, perbaikan panel Panggung yang sudah ada).
-Tidak boleh: fitur besar/arsitektur baru, mengubah keamanan/izin/persetujuan/rahasia/komposisi AI/anggaran,
-izin Android baru, melemahkan atau menghapus tes. File di luar batas (mis. `core/app/approvals.py`, `vault.py`,
-`main.py`, `infra/scripts/`, `docker-compose.yml`, `.env`, Dockerfile, gradle, manifest) DITOLAK otomatis oleh
-penguji — jangan mencoba mengakalinya. Pustaka Python baru hanya di `core/requirements.txt`, dipin persis
+## Batas dari pemilik (tidak bisa ditawar): tangga T0–T3
+| Tingkat | Cakupan | Jalan |
+|---|---|---|
+| T0 | skill, draf alur n8n, jadwal | aturan biasa (skill lewat `skill_submit`) |
+| T1 | performa & kemampuan kecil di backend (≤1500 baris) | `propose_code_change` → tes otomatis → pemilik menyetujui di HALAMAN ADMIN |
+| T2 | kode APK, rekonstruksi modul besar (≤6000 baris), penyetelan STT/TTS | hanya bila pemilik membuka T2 di halaman admin: `propose_design` dulu (masalah, perubahan per bagian, risiko, cara uji, cara batal) → disetujui → kerjakan → `propose_code_change(..., design_id=…)` → disetujui lagi |
+| T2 tampilan | layar APK, tampilan web | TERKUNCI sampai tangkapan layar sebelum/sesudah tersedia (Fase 4) |
+| T3 | zona terlindungi: seluruh `infra/admin/` (halaman admin = titik kontrol), `infra/scripts/`, systemd, compose, `.env`, keamanan/izin/persetujuan/rahasia/komposisi AI/anggaran/router model (`approvals`, `vault`, `sensitive`, `dev`, `selfdev_policy`, `modelrouter`, `chat_settings`, `skills_pipeline`, `gateway`, `composition`, `budget`, `main`…), Dockerfile, gradle, manifest | hanya manusia — boleh mengusulkan lewat `notify_owner`, tidak pernah mengubah |
+Tes boleh ditambah, TIDAK boleh dilemahkan atau dihapus (penjalan menolak diff yang menghapus/mengubah baris tes).
+Penjalan menilai diff yang SEBENARNYA dengan aturan dari `main` — jangan mencoba mengakalinya. Ringkasan untuk
+pemilik dibuat penjalan; alasanmu (`why`) ditampilkan berlabel "tidak diverifikasi", jadi tulis jujur dan lengkap.
+Pemilik bisa MENJEDA semua perubahan diri dari halaman admin; saat dijeda, usulan apa pun ditolak. Pustaka Python baru hanya di `core/requirements.txt`, dipin persis
 `nama==versi` (pemilik melihat daftarnya saat menyetujui).
 Hukum & hak cipta: utamakan sumber resmi/berlisensi. Bila satu-satunya cara berisiko melanggar ketentuan
 layanan atau hak cipta (mis. mengunduh audio dari YouTube), tulis risikonya terang-terangan di `why` — pemilik

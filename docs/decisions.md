@@ -603,3 +603,42 @@ other than the author). Bug found by the tests: `openrouter/free` was counted as
   earlier episode ("masih sama dengan pengecekan sebelumnya"). Not done this round (owner's decision): Sprints 5–7 (image
   generation, Local Agent/Blender, app screens for Skills & Learning / task phase+cost, proactive n8n). The `blueprint` preset
   exists but is not applied; the owner's current composition already matches most of it.
+
+## ADR-041 — Unified framework: Blueprint v3's six layers on top of `jar` (2026-10-25)
+The owner's "Blueprint Terpadu v4" adopts v3's map (L1 interface, L2 sensors, L3 gate, L4 Hermes brain, L5 knowledge,
+L6 proactive) WITHOUT a rewrite: every v3 module maps onto what `jar` runs (docs/blueprint-gap.md), only the difference
+is built. One Hermes (Hermes-Brain) with three work profiles (Regular, Project, Company); the security gate (PII scan, vault,
+budget, router, `/privat`) stays separate in front of it; one memory (Postgres + Qdrant, ADR-018). Not taken from v3:
+Flutter, Neo4j/SQLite, unreviewed skill registration, automatic crypto transactions, unofficial WhatsApp, many parallel
+agents. Deferred: CCTV/RTSP/Tailscale. Work proceeds per phase with a Gate the owner approves; nothing reaches `main`
+before that.
+
+## ADR-047 — Self-change ladder and the admin page as the control point (2026-10-25)
+Extends ADR-026. The owner decided JARVIS may change the app and the web, so the app can no longer be the place where
+JARVIS' own changes are approved. Fase 0:
+- **Protected zone (T3, humans only)** is decided by `core/app/selfdev_policy.py` as it is on `main` (the runner calls the
+  main checkout's copy, never the branch's; the file protects itself): the WHOLE `infra/admin/` (it held the approve
+  button and `envfile.py`, the `.env` writer, which were not protected), the runners, systemd, compose, `.env`, Hermes'
+  SOUL/config/plugins, the build chain, and the guards (`approvals`, `vault`, `sensitive`, `dev`, `selfdev_policy`,
+  `modelrouter`, `chat_settings`, `skills_pipeline`, `gateway`, `composition`, `budget`, `main`, …, `core/config/`).
+- **Tests are never weakened**: the runner refuses a diff that deletes a test file or removes/rewrites a test or
+  assertion line (adding tests is fine). Old migrations still may not be edited.
+- **Approvals of own code are admin-page only** (`approvals.ADMIN_ONLY` = code_change, code_design, skill_publish):
+  approving from the app console, chat or voice → 403 with "setujui di halaman admin"; rejecting stays possible
+  everywhere (always safe). The app shows the note instead of the approve button.
+- **The approval request is built by the runner from the real diff**: tier, changed lines, files, test summary (counts
+  from the actual test run), diffstat, new packages; JARVIS' `why` is shown labelled "tidak diverifikasi".
+- **Pause switch** at the admin page (Diri JARVIS → Pengembangan diri): stops every new code proposal and skill
+  submission at once. It and the T2 switch can only be flipped from the admin page (the app console gets 403).
+- **Ladder**: T0 skills/n8n/schedules; T1 backend ≤1500 lines (as before); T2 Android code or ≤6000 lines — only
+  when the owner opened T2 at the admin page, after a design (`propose_design`) was approved there, then the result is
+  approved again (two approvals, K2); T2 *display* changes (app screens, web views) stay locked until before/after
+  screenshots exist (Fase 4); T3 refused. T2 is CLOSED by default.
+- **APK rollback** (design + mechanism): Android refuses a lower versionCode, so going back = rebuilding the android tree
+  of an earlier release (`build-apk.sh <ver> <notes> --android-from <commit>`) as a new version the updater offers
+  normally; releases.json now records the full commit and whether the build was reproducible (no uncommitted android/).
+  A one-tap button at the admin page is a later step (needs a host request path like jarvis-apply).
+Acceptance (core/tests/test_acceptance.py `test_v4_f0_*`): admin-page-only approvals (app 403, admin 200, app may reject,
+switches 403 from the app), chat/voice cannot approve code, the pause stops proposals and skills, T2 needs the switch and an
+approved design (and closing T2 stops it), the approval shows the runner's findings; unit tests for the policy; a live check
+of the runner's policy step against a real git commit (admin file + weakened assertion → both refused).

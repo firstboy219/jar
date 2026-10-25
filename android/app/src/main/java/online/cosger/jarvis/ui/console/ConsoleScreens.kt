@@ -45,6 +45,9 @@ import java.io.File
 
 private fun time(iso: String) = iso.take(16).replace('T', ' ')
 
+/** Approval kinds the server accepts only from the admin page (Blueprint v4 §3.3): the app may only reject them. */
+val ADMIN_ONLY_KINDS = setOf("code_change", "code_design", "skill_publish")
+
 // ---------- Dasbor ----------
 
 @Composable
@@ -145,8 +148,10 @@ fun TasksScreen(vm: JarvisViewModel, onBack: (() -> Unit)?) {
                             Small(it.take(400), JarvisColors.Text)
                         }
                     }
+                    val adminOnly = a.s("kind") in ADMIN_ONLY_KINDS
+                    if (adminOnly) Small("Perubahan kode JARVIS hanya bisa disetujui di halaman admin (jar1.cosger.online). Dari sini bisa ditolak.", JarvisColors.Amber)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Action("Setujui", JarvisColors.Green) {
+                        if (!adminOnly) Action("Setujui", JarvisColors.Green) {
                             val go = { act { vm.console.post("/api/v1/console/approvals/${a.i("id")}", buildJsonObject { put("approve", true) }) } }
                             if (high) gate("Setujui tindakan berisiko tinggi #${a.i("id")}") { go() } else go()
                         }
