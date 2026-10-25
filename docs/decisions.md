@@ -683,3 +683,43 @@ non-superuser role, including a refused cross-company insert), a company task se
 runs twice, missing callbacks → bounded resends with the same key then the owner is told, external-effect directives stop at
 approval (including one disguised as a plan), callbacks are signed/deduplicated/company-bound and an approval request is
 relayed back, the mock round trip completes and the fast lane answers from stored data without a model.
+
+## ADR-048 — Voice complements around the engines, and the owner's choice of voice (2026-10-26)
+Blueprint v4 Fase 3 + the owner's request (2026-10-25) to switch JARVIS's voice and ears to OpenRouter models, ElevenLabs
+included, with its character. The engines stay (Whisper local / Groq / Deepgram, and now any OpenRouter STT model); JARVIS
+closes their gaps. Nothing that already works was removed: the phone's own voice stays the default.
+- **Measure first (3.1)**: every utterance → `voice_events` (engine, model, confidence, latency, raw and final text, what each
+  complement did or would do). A secret or `/privat` utterance is stored as "[disensor]". The owner's corrections label them —
+  by voice ("bukan UAT, maksudku Ashar", "itu bukan aku yang ngomong" → `voice_correction`), in the admin page's Suara tab,
+  or `POST /api/v1/voice/correct` — and each is classified: nama, angka, istilah, gema, halusinasi, derau, lainnya. Baseline
+  per engine (utterances, confidence, p50/p90 latency, low-confidence, dropped, WER on corrected ones) at the Suara tab.
+- **Complements (3.2)**: `kamus` (the owner's misheard→meant pairs, then near-miss names: companies + aliases, learned pairs,
+  configured keywords — `meetings.correct_terms` now also for everyday speech), `halusinasi` (phrases the owner disowned twice
+  become learned hallucinations), `gema` (JARVIS hearing its own last sentences), `opini_kedua` (a doubtful utterance also
+  heard by a second engine; "auto" never sends audio to a cloud the owner did not choose — a cloud primary is checked by local
+  Whisper), `ambang` (the 'possibly misheard' line calibrated per engine). Money in a spoken command: the agent repeats the
+  figure and asks before acting (rule, always on).
+- **Quality gate (3.4, `voice_quality.py`)**: a complement starts in SHADOW — it logs what it would change and changes nothing.
+  It goes ON only when, on the corrected utterances, WER drops AND false corrections (a right utterance made wrong, or a real
+  one dropped) stay ≤ 1%, with ≥ 20 samples; a pair learned from an utterance is left out when judging that utterance. An ON
+  complement that stops passing returns to shadow by itself (audited). Runs nightly (04:00) and on demand. The owner can force a
+  mode at the admin page (then it is manual). Learned data (`voice_data`) is versioned row by row: undo keeps the history.
+- **Spoken copy (3.3, `speech.py`)**: what is SAID is normalised on the server — rupiah/dollar amounts, percentages, dates,
+  times after "pukul/jam", units, phone numbers digit by digit, versions, abbreviations (yg/dgn/tdk/dll…), the owner's
+  pronunciations ("Renature" → "ri-ne-cer", `voice_pronounce`), very long sentences cut at a comma. "say" events carry the
+  spoken copy; replies/reports/announcements keep their text for the screen and gain `speech`.
+- **Cloud voice**: Komposisi → "Suara JARVIS" in the app lists OpenRouter's TTS models (ElevenLabs first) with price and
+  characters, "Coba" plays a sample, "Pakai" chooses it (also by chat: `voice_settings`). The phone fetches each sentence from
+  `POST /api/v1/voice/speak` while the previous one plays and falls back to its own voice whenever the server refuses: private
+  or sensitive text, a turn with attachments/screen text (`local_voice`), budget used up (402), no key/unreachable. Audio is
+  cached on the server; cost comes from OpenRouter's generation record and counts in category `suara` of the monthly budget.
+- **Consent (K3)**: utterance audio is kept (doubtful ones + 1 in 5, ≤ 500 MB, 60 days, never sent anywhere) only after the
+  owner allows it at the admin page; the switch and the complements' modes are admin-page only.
+- `voice.py`, `voice_quality.py` (and Fase 1's `companies.py`, `gm.py`) joined the protected zone: JARVIS may improve
+  `speech.py` and teach data, never loosen the gate, the privacy checks or company isolation.
+Acceptance (`test_v4_f3_*`): baseline per engine without storing a secret, a correction classified and taught; a complement stays
+in shadow until 20 corrected samples pass, goes live, and returns to shadow by itself when a bad entry causes false corrections;
+JARVIS's own echo and a twice-disowned phrase are filtered only once allowed; the cloud voice speaks the normalised copy,
+caches, records the exact cost, refuses private/sensitive text and an exhausted budget; voice settings by chat (refused for a
+non-owner voice), consent and modes only at the admin page, audio kept only with consent.
+

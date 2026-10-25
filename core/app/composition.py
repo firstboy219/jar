@@ -15,7 +15,7 @@ log = logging.getLogger("jarvis-core.composition")
 
 CORE = ["Qdrant", "n8n"]
 STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whisper (cepat, ±gratis)",
-               "deepgram": "Deepgram (cloud, berbayar per jam)"}
+               "deepgram": "Deepgram (cloud, berbayar per jam)", "openrouter": "Model OpenRouter pilihanmu (ElevenLabs Scribe, GPT, …)"}
 LOCKED = {"privat"}  # always local, not editable
 BUILTIN = {"ngobrol", "cepat", "penglihatan", "balas-pesan", "web", "coding", "produktivitas", "analisis", "rapat",
            "latar-belakang", "privat"}

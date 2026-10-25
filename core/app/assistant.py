@@ -16,7 +16,8 @@ from dataclasses import dataclass
 
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, workers, writer)
+               chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
+               workers, writer)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -80,6 +81,10 @@ Perusahaan (Company Federation): bila ada KONTEKS PERUSAHAAN, kerjakan hanya unt
 perusahaan → company_directive (yang keluar uang/publikasi/pesan ke luar otomatis menunggu persetujuan pemilik); data \
 perusahaan → company_knowledge; keputusan pemilik soal proyek/perusahaan ("pokoknya jangan…", "kita pivot ke…", "ternyata…", \
 "pakai teknologi X") → decision_record. Tugas riset untuk satu perusahaan → spawn_task dengan company.
+
+Suara: pemilik bilang kamu salah dengar ("bukan UAT, maksudku Ashar", "tadi bukan aku yang ngomong") → voice_correction, \
+lalu kerjakan maksud yang benar. "Bacanya begini…" → voice_pronounce. Ganti suaramu/karakter suara (mis. ElevenLabs \
+'george') → voice_settings. Angka/uang dari ucapan suara: ulangi angkanya dan minta konfirmasi sebelum aksi apa pun.
 
 Fakta/preferensi yang pemilik minta diingat → remember. Pemilik bilang ingatanmu salah/usang → memory_correct \
 (jangan menumpuk fakta yang bertentangan). Tujuan jangka panjang ("target saya…", "tolong ingatkan saya terus soal …") \
@@ -151,6 +156,24 @@ TOOLS = [
             "entity_type": {"type": "string", "enum": ["project", "company"]}, "entity": {"type": "string", "description": "company_id atau nama proyek"},
             "kind": {"type": "string", "enum": ["core_constraint", "correction_pivot", "validated_finding", "tech_preference"]},
             "text": {"type": "string"}}, "required": ["entity_type", "entity", "kind", "text"]}}},
+    {"type": "function", "function": {
+        "name": "voice_correction",
+        "description": "Pemilik bilang kamu salah dengar ucapan suaranya barusan. heard = bagian yang kamu dengar, meant = yang "
+                       "benar (diajarkan ke kamus dengar); not_me = itu bukan ucapan pemilik/ tidak ada yang bicara.",
+        "parameters": {"type": "object", "properties": {
+            "heard": {"type": "string"}, "meant": {"type": "string"}, "not_me": {"type": "boolean"}}}}},
+    {"type": "function", "function": {
+        "name": "voice_pronounce",
+        "description": "Ajari cara melafalkan sebuah kata saat kamu bicara (mis. 'Renature' dibaca 'ri-ne-cer').",
+        "parameters": {"type": "object", "properties": {"word": {"type": "string"}, "say_as": {"type": "string"}},
+                       "required": ["word", "say_as"]}}},
+    {"type": "function", "function": {
+        "name": "voice_settings",
+        "description": "Lihat/ganti suaramu: engine 'android' (suara HP) atau 'openrouter' dengan model TTS (mis. "
+                       "elevenlabs/eleven-multilingual-v2) dan karakter (mis. george, sarah). Tanpa argumen = tampilkan pilihan.",
+        "parameters": {"type": "object", "properties": {
+            "engine": {"type": "string", "enum": ["android", "openrouter"]}, "model": {"type": "string"},
+            "voice": {"type": "string"}, "speed": {"type": "number"}, "query": {"type": "string", "description": "cari model, mis. 'elevenlabs'"}}}}},
     {"type": "function", "function": {
         "name": "find_models",
         "description": "Cari model AI di katalog OpenRouter (daftar yang sama dengan pemilih di aplikasi): id, harga, konteks, "
@@ -386,6 +409,9 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                         category=a.get("category"), private=private,
                                         company_id=await _company_of(a.get("company")))
                 return json.dumps({"task_id": t["id"], "status": "queued", "category": t["category"]})
+            case "voice_correction" | "voice_pronounce" | "voice_settings":
+                return json.dumps(await _voice_tool(call.name, a, actor, session_id, device_id, stt, bool(screen_text or attachments)),
+                                  ensure_ascii=False, default=str)
             case "company_directive" | "company_knowledge" | "decision_record":
                 return json.dumps(await _company_tool(call.name, a, actor, session_id, device_id, stt, bool(screen_text or attachments)),
                                   ensure_ascii=False, default=str)
@@ -507,6 +533,9 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
     return json.dumps({"error": f"unknown tool {call.name}"})
 
 
+MONEY_HEARD = re.compile(r"\brp\.?\s?\d|\b(rupiah|ribu|juta|miliar|dolar|usd|transfer|bayar|kirim uang|anggaran|budget)\b", re.I)
+
+
 def _user_content(text: str, image: str | None, image_source: str | None = None, stt: dict | None = None,
                   context: str = "", screen_text: str = "", files: str = ""):
     """The owner's words, with how they were heard and what they are showing (and, first, the
@@ -520,7 +549,9 @@ def _user_content(text: str, image: str | None, image_source: str | None = None,
                      + (f", keyakinan transkrip {conf:.2f}" if isinstance(conf, (int, float)) else "")
                      + (f", {speakers} pembicara terdeteksi" if isinstance(speakers, int) and speakers > 1 else "")
                      + (", suara BUKAN pemilik (voiceprint tidak cocok) — kemungkinan orang lain di dekat HP"
-                        if owner is False else ""))
+                        if owner is False else "")
+                     + ("; MENYANGKUT UANG — ulangi angkanya dan minta konfirmasi sebelum aksi yang memakainya"
+                        if MONEY_HEARD.search(text) else ""))
     if image:
         notes.append("terlampir gambar " + {"camera": "dari kamera", "attachment": "yang dilampirkan pemilik"}.get(
             image_source or "", "dari layar HP"))
@@ -710,12 +741,39 @@ async def _company_tool(name: str, a: dict, actor: str, session_id: str, device_
         return {"error": str(e)}
 
 
+async def _voice_tool(name: str, a: dict, actor: str, session_id: str, device_id, stt, outside_text: bool) -> dict:
+    try:
+        if name == "voice_correction":
+            return await voice.correct(session_id=session_id, heard=str(a.get("heard") or ""), meant=str(a.get("meant") or ""),
+                                       not_me=bool(a.get("not_me")), source="owner_chat", actor=actor)
+        if name == "voice_settings" and not any(a.get(k) for k in ("engine", "model", "voice", "speed")):
+            opts = await voice.options()  # looking is always allowed
+            q = str(a.get("query") or "").lower()
+            models = [m for m in opts["tts"]["models"] if not q or q in (m["id"] + " " + m["name"]).lower()][:8]
+            return {"sekarang": {k: opts["tts"][k] for k in ("engine", "model", "voice", "speed")},
+                    "pilihan": [{"id": m["id"], "harga": m["price_text"], "karakter": m["voices"][:21]} for m in models]}
+        if refused := await chat_settings.guard(name, device_id, stt, outside_text):
+            return {"error": refused}
+        if name == "voice_pronounce":
+            row = await voice.set_pronunciation(str(a.get("word") or ""), str(a.get("say_as") or ""), actor)
+            return {"dipelajari": f"{row['key']} → dibaca '{row['value']}'"}
+        tts = {k: a[k] for k in ("engine", "model", "voice", "speed") if a.get(k) is not None}
+        if tts.get("model") and "engine" not in tts:
+            tts["engine"] = "openrouter"
+        out = await voice.set_settings({"tts": tts}, actor)
+        return {"suara_sekarang": {k: out["tts"][k] for k in ("engine", "model", "voice", "speed")},
+                "catatan": "Teks pribadi/sensitif tetap dibacakan suara HP."}
+    except voice.VoiceError as e:
+        return {"error": str(e)}
+
+
 def _owner_clear(stt: dict | None) -> bool:
-    """The owner said it and it was heard well (typed text has no stt)."""
+    """The owner said it and it was heard well (typed text has no stt). The 'possibly misheard' line is per engine
+    once the calibrated threshold passed its gate (voice.threshold_now, ADR-048); 0.45 until then."""
     stt = stt or {}
     if stt.get("is_owner") is False:
         return False
-    return not (isinstance(stt.get("confidence"), (int, float)) and stt["confidence"] < 0.45)  # possibly misheard
+    return not (isinstance(stt.get("confidence"), (int, float)) and stt["confidence"] < voice.threshold_now(stt.get("engine")))
 
 
 def _direct_action(text: str, stt: dict | None, screen: str | None, screen_text: str):

@@ -43,6 +43,9 @@ async def pool(monkeypatch):
     gateway.invalidate()
     budget.forget()
     budget._notified.clear()
+    from app import voice as _voice
+    _voice.forget()  # learned voice data is cached for 30 s; each test starts from its own tables
+    _voice._spoken.clear()
     yield p
     await db.close()
 

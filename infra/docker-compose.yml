@@ -162,6 +162,7 @@ services:
       - ./data/attachments:/data/attachments # files and pictures attached in the chat (30 days)
       - ./data/dev:/data/dev # self-improvement requests/results exchanged with infra/scripts/self-dev.sh
       - ./data/ops:/data/ops # per-container usage (usage-collector.sh) and "netralkan" requests (ops.sh)
+      - ./data/voice:/data/voice # cloud-voice cache; utterance audio only with the owner's consent (K3, ADR-048)
       - ./data/skills:/data/skills # skills being tested: requests/results exchanged with infra/scripts/skill-sandbox.sh (ADR-040)
       - ./data/hermes/skills/jarvis-learned:/data/skills-learned # skills JARVIS learned and published (Hermes reads them as a skills folder)
       - ./data/hermes:/hermes:ro # Hermes Studio (schedules, own skills, kanban) + cron result delivery

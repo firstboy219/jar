@@ -57,4 +57,19 @@ class ProtocolTest {
         assertEquals("AQID", o["audio"]!!.jsonPrimitive.content)
         assertEquals("Bu Rina: rapat jam 9?", o["screen_text"]!!.jsonPrimitive.content)
     }
+
+    @Test fun spokenCopyAndLocalVoiceFromTheServer() {
+        // Fase 3: the screen keeps the text, the voice says the normalised copy; private turns stay on the phone's voice
+        assertEquals(
+            ServerEvent.Reply("Saldo Rp 1.500.000", "chat", "s", false, "Saldo satu juta lima ratus ribu rupiah", false),
+            Protocol.parse("""{"type":"reply","text":"Saldo Rp 1.500.000","route":"chat","session_id":"s","speech":"Saldo satu juta lima ratus ribu rupiah"}"""),
+        )
+        assertEquals(ServerEvent.Say("rahasia", "s", true), Protocol.parse("""{"type":"say","text":"rahasia","session_id":"s","local_voice":true}"""))
+        val r = Protocol.parse("""{"type":"report","id":7,"task_id":3,"text":"Emas Rp2,5 juta.","attempt":1,"speech":"Emas dua koma lima juta rupiah."}""")
+        assertEquals("Emas dua koma lima juta rupiah.", (r as ServerEvent.Report).speech)
+        val t = Protocol.parse("""{"type":"transcript","text":"","seq":4,"session_id":"s","voice_event":12,"dropped":"gema"}""")
+        assertEquals(12L, (t as ServerEvent.Transcript).voiceEvent)
+        assertEquals("gema", t.dropped)
+        assertNull((Protocol.parse("""{"type":"reply","text":"x","route":"r","speech":""}""") as ServerEvent.Reply).speech)
+    }
 }

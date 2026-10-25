@@ -1015,3 +1015,80 @@ def test_company_helpers_recognise_classify_sign_and_route():
     assert company_lane.lane("KPI Renature bulan ini?") == "fast" and company_lane.lane("status arahan Jack Healer") == "fast"
     assert company_lane.lane("Renature: susun kampanye Ramadan") == "heavy" and company_lane.lane("riset: KPI renature") == "heavy"
     assert company_lane.lane("cepat: buatkan ringkasan renature") == "fast"
+
+
+# ---- Fase 3 (ADR-048): the spoken copy, and the quality gate of the speech complements ----
+
+def test_speech_normalises_money_dates_numbers_and_pronunciations():
+    from app import speech
+    assert speech.terbilang(0) == "nol" and speech.terbilang(11) == "sebelas" and speech.terbilang(10) == "sepuluh"
+    assert speech.terbilang(1000) == "seribu" and speech.terbilang(110) == "seratus sepuluh"
+    assert speech.terbilang(1_234_567) == "satu juta dua ratus tiga puluh empat ribu lima ratus enam puluh tujuh"
+    n = speech.normalize
+    assert n("Saldo Rp 1.500.000.") == "Saldo satu juta lima ratus ribu rupiah."
+    assert n("sisa Rp25 rb") == "sisa dua puluh lima ribu rupiah"
+    assert n("naik 12,5%") == "naik dua belas koma lima persen"
+    assert n("rapat 25/10/2026 pukul 14.30") == "rapat dua puluh lima Oktober dua ribu dua puluh enam pukul empat belas lewat tiga puluh"
+    assert n("jam 09:05") == "jam sembilan lewat lima"
+    assert n("rating 4.50") == "rating empat koma lima puluh"                 # a decimal is not a time without "pukul"/"jam"
+    assert n("hubungi 08123456789") == "hubungi nol delapan satu dua tiga empat lima enam tujuh delapan sembilan"
+    assert n("versi 0.14.1") == "versi nol titik empat belas titik satu"
+    assert n("yg penting dgn tdk dll") == "yang penting dengan tidak dan lain-lain"
+    assert n("**Lihat** https://x.id/a") == "Lihat tautan"
+    assert n("Renature naik 7%", {"Renature": "ri-ne-cer"}) == "ri-ne-cer naik tujuh persen"
+    assert n("biaya $0.0042") == "biaya nol koma nol nol empat dua dolar"
+    long = "Ini kalimat panjang sekali yang terus berjalan, " * 6
+    assert all(len(s) <= 200 for s in speech.cut_long(long).split(". "))
+
+
+def test_voice_gate_wer_taxonomy_judge_and_calibration():
+    from app import voice_quality as vq
+    assert vq.wer("halo jarvis", "halo jarvis") == 0 and vq.wer("halo", "halo jarvis") == 0.5 and vq.wer("", "") == 0
+    assert vq.wer("terima kasih", "") == 1.0
+    assert vq.classify_error("rapat dengan UAT", "rapat dengan Ashar") == "nama"
+    assert vq.classify_error("transfer lima ratus ribu", "transfer lima juta") == "angka"
+    assert vq.classify_error("terima kasih telah menonton", "") == "halusinasi"
+    assert vq.classify_error("baik aku putar lagunya sekarang", "", echo=True) == "gema"
+    assert vq.classify_error("cek deployment server", "cek deployment serper") == "istilah"
+    assert vq.classify_error("halo", "halo") is None
+    assert vq.apply_reference_fix("rapat sama UAT besok", "uat", "Ashar") == "rapat sama Ashar besok"
+    assert vq.apply_reference_fix("rapat besok", "UAT", "Ashar") is None
+    assert vq.apply_lexicon("ketemu uat jam 3", {"UAT": "Ashar"}) == "ketemu Ashar jam 3"
+    assert vq.is_echo("baik aku putar lagunya", ["Baik, aku putar lagunya sekarang."]) and not vq.is_echo("putar", ["putar lagu"])
+    assert vq.is_hallucination("Terima kasih telah menonton.", ["terima kasih telah menonton"])
+    assert not vq.is_hallucination("terima kasih telah menonton videonya bro", ["terima kasih telah menonton"])
+    assert vq.choose({"text": "ketemu uat"}, {"text": "ketemu Ashar"}, ["Ashar"]) == "second"
+    assert vq.choose({"text": "ketemu Ashar"}, {"text": "ketemu Ashar."}, []) == "primary"
+    # the gate: too few samples → no; error down without false corrections → yes; one false correction in 20 → no
+    good = [{"raw": "ketemu uat", "after": "ketemu Ashar", "reference": "ketemu Ashar"}] * 5 + \
+           [{"raw": "putar lagu", "after": "putar lagu", "reference": "putar lagu"}] * 15
+    assert not vq.judge(good[:5], "kamus")["passes"]
+    v = vq.judge(good, "kamus")
+    assert v["passes"] and v["wer_after"] < v["wer_before"] and v["false_corrections"] == 0
+    bad = good[:-1] + [{"raw": "beli kopi", "after": "beli Kopiko", "reference": "beli kopi"}]
+    assert not vq.judge(bad, "kamus")["passes"] and "koreksi keliru" in vq.judge(bad, "kamus")["reason"]
+    assert vq.next_mode("shadow", True, v) == "on" and vq.next_mode("on", True, vq.judge(bad, "kamus")) == "shadow"
+    assert vq.next_mode("shadow", False, v) == "shadow" and vq.next_mode("off", True, v) == "off"
+    pts = [(0.3, True)] * 10 + [(0.5, False)] * 30 + [(0.9, False)] * 10
+    assert vq.calibrate(pts) == 0.35 and vq.calibrate(pts[:10]) is None
+
+
+def test_openrouter_speech_catalog_entry():
+    from app import openrouter
+    m = openrouter.normalize_speech({"id": "elevenlabs/eleven-flash-v2.5", "name": "ElevenLabs Flash", "pricing": {"prompt": "0.00004"},
+                                     "supported_voices": ["george", "sarah"], "description": "supports 32 languages"}, "speech")
+    assert m["provider"] == "elevenlabs" and m["voices"] == ["george", "sarah"] and "0.040 per 1000 huruf" in m["price_text"]
+    assert m["multilingual"] and not m["free"]
+    s = openrouter.normalize_speech({"id": "openai/whisper-large-v3-turbo", "pricing": {"prompt": "0.00000333"}}, "transcription")
+    assert "per jam audio" in s["price_text"]
+    assert openrouter.normalize_speech({"id": "x/y:free", "pricing": {}}, "speech")["price_text"] == "gratis"
+
+
+def test_selfdev_policy_protects_the_voice_gate_and_company_isolation():
+    """The speech complements' quality gate and the cloud-voice privacy checks (ADR-048), and Company Federation's
+    isolation (ADR-042), are guards: JARVIS may improve speech normalisation, never loosen these."""
+    from app import selfdev_policy as p
+    for f in ("core/app/voice_quality.py", "core/app/voice.py", "core/app/companies.py", "core/app/gm.py"):
+        v = p.judge([{"file": f, "added": 3, "deleted": 1}], "", [], 2)
+        assert not v["ok"] and "zona terlindungi" in v["reasons"][0]
+    assert p.judge([{"file": "core/app/speech.py", "added": 3, "deleted": 1}], "", [], 1)["ok"]

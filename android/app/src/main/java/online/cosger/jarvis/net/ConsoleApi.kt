@@ -55,6 +55,15 @@ class ConsoleApi(
     suspend fun postBytes(path: String, bytes: ByteArray, type: String = "application/octet-stream"): JsonElement =
         call(request(path).post(bytes.toRequestBody(type.toMediaType())).build())
 
+    /** POST JSON, get raw bytes back (a sentence in JARVIS's cloud voice); null on any refusal or failure. */
+    suspend fun postForBytes(path: String, body: JsonElement): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            client.newCall(request(path).post(body.toString().toRequestBody(jsonType)).build()).execute().use { r ->
+                if (r.isSuccessful) r.body?.bytes() else null
+            }
+        }.getOrNull()
+    }
+
     /** Download a file (document, APK) into [target]; returns it. */
     suspend fun download(path: String, target: File): File = withContext(Dispatchers.IO) {
         client.newCall(request(path).get().build()).execute().use { r ->
