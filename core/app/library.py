@@ -55,19 +55,21 @@ def parse_key(key: str) -> tuple[str, str]:
     return m.group(1), m.group(2)
 
 
-async def record(panel: str, payload: dict, caption: str = "") -> None:
-    """Called by stage.show: remember what was shown so it can be shown again. Never fails the show."""
+async def record(panel: str, payload: dict, caption: str = "") -> int | None:
+    """Called by stage.show: remember what was shown so it can be shown again (returns its id). Never fails the show."""
     if panel in _NOT_RECORDED:
-        return
+        return None
     try:
-        await db.pool().execute("INSERT INTO stage_history (panel, title, payload) VALUES ($1, $2, $3)",
-                                panel, title_of(panel, payload, caption), json.dumps(payload, ensure_ascii=False))
+        shown = await db.pool().fetchval("INSERT INTO stage_history (panel, title, payload) VALUES ($1, $2, $3) RETURNING id",
+                                         panel, title_of(panel, payload, caption), json.dumps(payload, ensure_ascii=False))
         await db.pool().execute(
             """DELETE FROM stage_history WHERE id IN (
                  SELECT id FROM stage_history ORDER BY id DESC OFFSET $1)
                AND 'shown:' || id NOT IN (SELECT key FROM library_kept)""", HISTORY_KEEP)
+        return shown
     except Exception as e:
         log.warning("stage history not saved: %s", e)
+        return None
 
 
 async def kept() -> set[str]:
@@ -152,7 +154,7 @@ async def show(key: str) -> dict:
             return await playlists.play(p["name"])
         case "doc" | "meeting":
             if source == "meeting":
-                ident = str(await db.pool().fetchval("SELECT document_id FROM meetings WHERE id = $1", int(ident)) or "")
+                ident = str(await db.pool().fetchval("SELECT document_id FROM meetings WHERE id = $1::uuid", ident) or "")  # meeting ids are uuids
             found = await documents.get(ident) if ident else None
             if not found:
                 raise LibraryError("dokumennya sudah tidak ada")

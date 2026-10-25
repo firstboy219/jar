@@ -157,6 +157,9 @@ async def _run(task_id: int, context: str) -> None:
             await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "completed", "kind": kind})
             await _deliver(task_id, kind, row["title"], text, row["session_id"])
             await _remember_episode(task_id)
+            if kind == "owner" and not row["private"]:  # the result becomes a card in its galaxy (the company's own, or utama) — ADR-049
+                from . import canvas
+                await canvas.auto(f"task:{task_id}", row["company_id"])
         except asyncio.CancelledError:
             stopped = task_id in _stopping
             await db.pool().execute(  # only a task still in flight: a cancel during report delivery must not undo "completed"

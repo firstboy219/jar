@@ -2,6 +2,7 @@
 Heavier mechanics have their own unit/integration tests; these check the CRITERION as the owner would state it."""
 
 import asyncio
+import json
 import os
 
 import pytest
@@ -764,3 +765,141 @@ async def test_v4_f3_owner_controls_voice_by_chat_and_consent_is_admin_page_only
     assert await voice.keep_samples()
     out = await voice.process(_heard("ketemu uat", confidence=0.3), b"\1" * 3200, "s-v5")
     assert (tmp_path / f"{out['voice_event']}.pcm").exists()                          # with consent, doubtful audio is kept here
+
+
+# ---------- Blueprint v4 Fase 4: the 3D canvas (ADR-049) ----------
+
+async def _task(pool, title, company=None, status="completed", result="hasil"):
+    return await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, status, result, company_id)
+                                  VALUES ('s', $1, $1, $2, $3, $4) RETURNING id""", title, status, result, company)
+
+
+async def test_v4_f4_each_context_is_its_own_galaxy_and_companies_never_mix(pool, monkeypatch):
+    from app import canvas, companies
+    await pool.execute("TRUNCATE canvases CASCADE")
+    r, j = await _two_companies(pool, monkeypatch)
+    rv = await companies.vault_add(r, "kpi", "Omzet Renature", "owner", data={"metric": "Omzet", "value": 120, "unit": "juta", "period": "Okt"})
+    jv = await companies.vault_add(j, "validated_finding", "Rahasia dagang JH", "owner")
+    rt = await _task(pool, "Riset pasar Renature", company=r)
+    mine = await _task(pool, "Cari resep rendang")
+    mem = await pool.fetchval("INSERT INTO memories (text, category, source) VALUES ('Aku suka kopi tubruk', 'personal', 'owner') RETURNING id")
+    await canvas.add(f"company:{r}", f"vault:{rv['id']}", "owner")
+    await canvas.add(f"company:{r}", f"task:{rt}", "owner")
+    await canvas.add("utama", f"task:{mine}", "owner")
+    await canvas.add("utama", f"memory:{mem}", "owner")
+    refused = [(f"company:{r}", f"vault:{jv['id']}"), (f"company:{r}", f"memory:{mem}"), (f"company:{r}", f"task:{mine}"),
+               ("utama", f"vault:{rv['id']}"), ("utama", f"task:{rt}"), (f"company:{j}", f"task:{rt}")]
+    for ctx, ref in refused:
+        with pytest.raises(canvas.CanvasError):
+            await canvas.add(ctx, ref, "owner")
+    rc, uc = await canvas.ensure(f"company:{r}"), await canvas.ensure("utama")
+    rview, uview = await canvas.view(rc["id"]), await canvas.view(uc["id"])
+    assert {c["ref"] for c in rview["cards"]} == {f"vault:{rv['id']}", f"task:{rt}"}
+    assert {c["ref"] for c in uview["cards"]} == {f"task:{mine}", f"memory:{mem}"}
+    assert "120" in next(c for c in rview["cards"] if c["ref"].startswith("vault"))["snippet"]
+    assert "Rahasia" not in json.dumps(rview, default=str) and "Renature" not in json.dumps(uview, default=str)
+    assert {c["kind"] for c in rview["constellations"]} == {"tugas", "perusahaan", "arahan", "dokumen", "keputusan"}
+    assert "memori" in {c["kind"] for c in uview["constellations"]} and "arahan" not in {c["kind"] for c in uview["constellations"]}
+    titles = {c["context"]: c for c in await canvas.contexts()}
+    assert set(titles) >= {"utama", f"company:{r}", f"company:{j}"} and titles[f"company:{r}"]["cards"] == 2
+    # Postgres itself: as a role without the RLS bypass, Jack Healer's scope sees none of Renature's canvas
+    await pool.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$")
+    await pool.execute("GRANT SELECT, INSERT ON canvases, canvas_nodes TO rls_probe")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL ROLE rls_probe")
+            await conn.execute("SELECT set_config('jarvis.company', $1, true)", j)
+            assert await conn.fetchval("SELECT count(*) FROM canvas_nodes WHERE company_id = $1", r) == 0
+            assert await conn.fetchval("SELECT count(*) FROM canvases WHERE company_id = $1", r) == 0
+            assert await conn.fetchval("SELECT count(*) FROM canvas_nodes WHERE company_id IS NULL") == 2   # personal cards are not a company's
+        with pytest.raises(Exception):
+            async with conn.transaction():
+                await conn.execute("SET LOCAL ROLE rls_probe")
+                await conn.execute("SELECT set_config('jarvis.company', $1, true)", j)
+                await conn.execute("INSERT INTO canvas_nodes (canvas_id, company_id, kind, ref) VALUES ($1, $2, 'tugas', 'task:999')", rc["id"], r)
+
+
+async def test_v4_f4_jarvis_places_its_work_and_the_canvas_holds_layout_not_knowledge(pool, monkeypatch):
+    from app import canvas, stage, workers
+    await pool.execute("TRUNCATE canvases, stage_history CASCADE")
+    await stage.show("text", {"text": "Ringkasan cuaca minggu ini"}, "Cuaca minggu ini")
+    shown = await pool.fetchval("SELECT id FROM stage_history ORDER BY id DESC LIMIT 1")
+    tid = await _task(pool, "Bandingkan harga laptop")
+    await canvas.auto(f"task:{tid}")
+    await canvas.auto(f"task:{tid}")                                                   # idempotent: one card
+    doc = await pool.fetchval("""INSERT INTO documents (title, format, filename, size, task_id, created_by)
+                                 VALUES ('Perbandingan laptop', 'docx', 'x.docx', 10, $1, 'jarvis') RETURNING id""", tid)
+    await canvas.auto(f"doc:{doc}")
+    c = await canvas.ensure("utama")
+    v = await canvas.view(c["id"])
+    assert {x["ref"] for x in v["cards"]} == {f"shown:{shown}", f"task:{tid}", f"doc:{doc}"}
+    assert next(x for x in v["cards"] if x["ref"] == f"doc:{doc}")["url"] == f"/api/v1/documents/{doc}"
+    # the canvas stores references only; the text comes from where it lives, and follows it
+    cols = {r["column_name"] for r in await pool.fetch("SELECT column_name FROM information_schema.columns WHERE table_name = 'canvas_nodes'")}
+    assert not cols & {"text", "title", "body", "content", "snippet"}
+    await pool.execute("UPDATE tasks SET title = 'Bandingkan harga laptop gaming' WHERE id = $1", tid)
+    assert any(x["title"] == "Bandingkan harga laptop gaming" for x in (await canvas.view(c["id"]))["cards"])
+    # a private task never becomes a card
+    priv = await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, status, private) VALUES ('s', 'rahasia', 'x', 'queued', true) RETURNING id")
+    assert priv and "rahasia" not in json.dumps(await canvas.view(c["id"]), default=str)
+    # end to end: a worker finishing an owner task puts its card on the galaxy by itself
+    _hermes(monkeypatch, lambda n, text, sid: _done("Laptop A paling hemat."))
+    t = await workers.spawn("Cek harga SSD", "Cek harga SSD 1TB", "s-f4", "test")
+    assert await _wait(lambda: pool.fetchval("SELECT status = 'completed' FROM tasks WHERE id = $1", t["id"]))
+    assert await _wait(lambda: pool.fetchval("SELECT count(*) = 1 FROM canvas_nodes WHERE ref = $1", f"task:{t['id']}"))
+
+
+async def test_v4_f4_moves_links_focus_versions_and_hiding_never_deletes_data(pool, monkeypatch):
+    from app import canvas
+    await pool.execute("TRUNCATE canvases CASCADE")
+    a, b = await _task(pool, "Tugas A"), await _task(pool, "Tugas B")
+    na = await canvas.add("utama", f"task:{a}", "owner")
+    nb = await canvas.add("utama", f"task:{b}", "owner")
+    c = await canvas.ensure("utama")
+    moved = await canvas.move(na["id"], "owner", x=12345.5, y=-300, z=88)
+    assert (moved["x"], moved["y"]) == (12345.5, -300)                                 # anywhere in the infinite space
+    with pytest.raises(canvas.CanvasError):
+        await canvas.move(na["id"], "owner", x=float("inf"))
+    e = await canvas.link(na["id"], nb["id"], "owner", "lanjutan")
+    v1 = await canvas.view(c["id"])
+    assert v1["edges"] == [{"id": e["id"], "a": na["id"], "b": nb["id"], "label": "lanjutan"}]
+    assert (await canvas.view(c["id"], since=v1["version"]))["unchanged"]
+    f = await canvas.focus("utama", f"task:{b}", "jarvis")
+    assert (await canvas.view(c["id"]))["focus"] == nb["id"] and f["version"] > v1["version"]
+    before_hide = (await canvas.versions(c["id"]))[0]["version"]
+    assert await canvas.hide(nb["id"], "owner")
+    assert await pool.fetchval("SELECT count(*) FROM tasks WHERE id = $1", b) == 1     # the task itself is untouched
+    v2 = await canvas.view(c["id"])
+    assert [x["ref"] for x in v2["cards"]] == [f"task:{a}"] and v2["edges"] == []
+    r = await canvas.restore(c["id"], before_hide, "owner")
+    v3 = await canvas.view(c["id"])
+    assert r["cards"] == 2 and {x["ref"] for x in v3["cards"]} == {f"task:{a}", f"task:{b}"} and len(v3["edges"]) == 1
+    assert next(x for x in v3["cards"] if x["ref"] == f"task:{a}")["x"] == 12345.5
+
+
+async def test_v4_f4_viewer_is_served_safely_and_the_api_needs_the_owner(pool, monkeypatch):
+    import httpx
+    from app import devices, main
+    await pool.execute("TRUNCATE canvases CASCADE")
+    _, token = await devices.create("HP pemilik", "test", scope="owner")
+    _, guest = await devices.create("Tamu", "test", scope="device")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.get("/canvas/")
+        assert r.status_code == 200 and "Galaksi JARVIS" in r.text
+        csp = r.headers["content-security-policy"]
+        assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp and "unsafe-eval'" not in csp.replace("wasm-unsafe-eval'", "")
+        for f in ("app.js", "lib.js", "gestures.js", "gesture.html", "vendor/three.module.min.js", "vendor/THREE_LICENSE"):
+            assert (await c.get(f"/canvas/{f}")).status_code == 200
+        assert (await c.get("/canvas/../main.py")).status_code == 404 and (await c.get("/canvas/%2e%2e/main.py")).status_code == 404
+        assert (await c.get("/api/v1/canvases")).status_code == 401
+        h, g = {"Authorization": f"Bearer {token}"}, {"Authorization": f"Bearer {guest}"}
+        opened = (await c.post("/api/v1/canvases", json={"context": "project:Toko Online"}, headers=h)).json()
+        assert opened["context"] == "project:toko-online"
+        tid = await _task(pool, "Desain logo toko")
+        assert (await c.post(f"/api/v1/canvases/{opened['id']}/cards", json={"ref": f"task:{tid}"}, headers=g)).status_code == 403
+        card = (await c.post(f"/api/v1/canvases/{opened['id']}/cards", json={"ref": f"task:{tid}"}, headers=h)).json()
+        found = (await c.get(f"/api/v1/canvases/{opened['id']}/search?q=logo", headers=h)).json()
+        assert found[0]["ref"] == f"task:{tid}"
+        assert (await c.patch(f"/api/v1/canvas/cards/{card['id']}", json={"x": 1, "y": 2, "z": 3}, headers=h)).json()["z"] == 3
+        view = (await c.get(f"/api/v1/canvases/{opened['id']}", headers=g)).json()      # anyone paired may look
+        assert view["cards"][0]["title"] == "Desain logo toko" and view["constellations"]

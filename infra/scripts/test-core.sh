@@ -7,6 +7,11 @@ NET=jarvis-test-$$
 cleanup() { docker rm -f "$NET-db" "$NET-qdrant" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
+# the 3D canvas viewer's pure modules (gestures, galaxy geometry) — ES modules tested with node when it is installed
+if command -v node >/dev/null && [ -d app/web/canvas/tests ]; then
+  (cd app/web/canvas && node --test tests/ >/tmp/jarvis-canvas-js.log 2>&1) || { cat /tmp/jarvis-canvas-js.log; echo "canvas JS tests failed"; exit 1; }
+  echo "canvas JS: $(grep -E '^# pass' /tmp/jarvis-canvas-js.log)"
+fi
 docker build -q --build-arg DEV=1 -t jarvis-core:test . >/dev/null
 docker network create "$NET" >/dev/null
 docker run -d --name "$NET-db" --network "$NET" -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jarvis postgres:16.15-alpine >/dev/null

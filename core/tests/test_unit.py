@@ -1092,3 +1092,35 @@ def test_selfdev_policy_protects_the_voice_gate_and_company_isolation():
         v = p.judge([{"file": f, "added": 3, "deleted": 1}], "", [], 2)
         assert not v["ok"] and "zona terlindungi" in v["reasons"][0]
     assert p.judge([{"file": "core/app/speech.py", "added": 3, "deleted": 1}], "", [], 1)["ok"]
+
+
+# ---- Fase 4 (ADR-049): the 3D canvas ----
+
+def test_canvas_geometry_refs_contexts_and_isolation_rule():
+    from app import canvas
+    centers = {k: canvas.constellation_center(k) for k in canvas.PERSONAL_KINDS}
+    assert len(set(centers.values())) == len(centers)                               # every constellation has its own place
+    assert len({canvas.constellation_center(k, True) for k in canvas.COMPANY_KINDS}) == len(canvas.COMPANY_KINDS)
+    assert set(canvas.PERSONAL_KINDS + canvas.COMPANY_KINDS) == set(canvas.KINDS) == set(canvas.KIND_OF.values())
+    a, b = canvas.place("tugas", 0), canvas.place("tugas", 1)
+    assert a != b and canvas.place("tugas", 5) == canvas.place("tugas", 5)          # deterministic, distinct
+    cx, _, cz = centers["tugas"]
+    assert all(abs(p[0] - cx) < 500 and abs(p[2] - cz) < 500 for p in (canvas.place("tugas", i) for i in range(30)))
+    assert canvas.context_of("") == "utama" and canvas.context_of("Toko Online!") == "project:toko-online"
+    assert canvas.context_of("company:renature") == "company:renature" and canvas.context_company("company:renature") == "renature"
+    assert canvas.parse_ref("task:12") == ("task", "12")
+    for bad in ("task:abc", "doc:12", "memory:not-a-uuid", "secret:1", "task:1;drop"):
+        with pytest.raises(canvas.CanvasError):
+            canvas.parse_ref(bad)
+    # isolation: a company galaxy only its own things, a personal galaxy nothing of a company
+    assert canvas.allowed("vault:3", "renature", "renature") and not canvas.allowed("vault:3", "renature", "jack-healer")
+    assert not canvas.allowed("vault:3", None, "renature") and not canvas.allowed("memory:" + "0" * 8 + "-0000-0000-0000-" + "0" * 12, "renature", None)
+    assert canvas.allowed("task:1", None, None) and not canvas.allowed("task:1", None, "renature") and canvas.allowed("task:1", "renature", "renature")
+
+
+def test_selfdev_policy_protects_canvas_isolation_and_gestures():
+    from app import selfdev_policy as p
+    for f in ("core/app/canvas.py", "core/app/web/canvas/gestures.js"):
+        assert not p.judge([{"file": f, "added": 1, "deleted": 0}], "", [], 2)["ok"]
+    v = p.judge([{"file": "core/app/web/canvas/app.js", "added": 1, "deleted": 0}], "", [], 1)
+    assert v["ok"] and v["display_files"] == ["core/app/web/canvas/app.js"]           # the viewer is display (T2 locked beyond T1)
