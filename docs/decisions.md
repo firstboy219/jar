@@ -642,3 +642,44 @@ Acceptance (core/tests/test_acceptance.py `test_v4_f0_*`): admin-page-only appro
 switches 403 from the app), chat/voice cannot approve code, the pause stops proposals and skills, T2 needs the switch and an
 approved design (and closing T2 stops it), the approval shows the runner's findings; unit tests for the policy; a live check
 of the runner's policy step against a real git commit (admin file + weakened assertion → both refused).
+
+## ADR-042 — Company Federation: one Jarvis-GM, Hermes-DGM as a remote member (2026-10-25)
+Owner confirmed Company Federation as the first priority (K5). One component, not one service per company:
+- **Data** (migration 022): `companies` (id, aliases, adapter, Hermes-DGM URL, AES-GCM-encrypted token and callback secret,
+  `contract_verified`, callback timeout, max retries, monthly budget), `company_vault` (core constraints, strategic pivots,
+  validated findings, KPI, cash flow with structured `data`, notes), `gm_directives`, plus `tasks.company_id` and
+  `episodes.company_id`.
+- **Isolation in three layers**: (1) every access function takes a `company_id` and refuses an empty/unknown one;
+  (2) every query runs in a transaction with `SET LOCAL jarvis.company` and Postgres row-level security (FORCE'd, so the
+  owning role `jarvis_core` — not a superuser — obeys it): outside a scope every company table looks empty, and a row for
+  another company cannot even be inserted; queries ALSO carry an explicit `company_id` predicate; (3) company knowledge has
+  its own Qdrant collection and every search carries a mandatory `company_id` filter, results re-read under the scope.
+  Hermes' read-only SQL role is never granted these tables. A company task's worker sees only that company's vault and
+  that company's earlier episodes.
+- **Routing (2×3 Company row)**: a turn naming ONE company → fast lane (KPI, cash flow, constraints, directive status from
+  stored data, no model) or heavy lane (the main agent's `company_directive` / `company_knowledge` / `decision_record`
+  tools, or a company-scoped task); prefix "riset:" / "cepat:" wins. A turn naming two companies gets no company data
+  and the agent asks which one.
+- **Jarvis-GM (`gm.py`)**: directive → classified; anything that spends money, publishes or messages outsiders (known
+  action, any budget, or the words used) or exceeds the company's monthly budget waits for the owner's approval BEFORE it is
+  sent (`company_directive`); otherwise it goes out at once. `task_key` (UUID) is the idempotency key on every (re)send; a
+  repeated key returns the existing directive. Callbacks: `POST /api/v1/gm/callback/{company}`, HMAC-SHA256 of
+  "<timestamp>.<body>" with the company's secret, ±5 min, deduplicated by `callback_id`, bound to the company in the URL;
+  `needs_approval` → approval `company_action` whose decision is relayed back. No callback by the deadline → resend with the
+  same key up to `max_retries` (backoff 30 s, 2 min, 8 min…), then `timed_out` and the owner is told. Jarvis-GM may cancel.
+- **Hermes-DGM contract: BELUM DIVERIFIKASI.** `MockDGM` simulates a DGM through the REAL signed callback path; `HttpDGM`
+  follows blueprint v3's draft (POST /directives, /directives/{task_id}/decision, /cancel, Bearer token) and refuses to
+  call out until the owner ticks "kontrak sudah kucocokkan" at the admin page. Adapter, URL, token, secret rotation and the
+  verified flag can only be set at the admin page (Perusahaan tab).
+
+## ADR-046 — Relational memory in Postgres: Decision Vault and entity relations (2026-10-25)
+`decision_vault` (per project or company: core constraint, correction/pivot, validated finding, technical preference;
+company rows under the same row-level security) and `entity_relations` (subject —relation→ object, optionally owned by one
+company). The main agent records decisions with `decision_record`; Hermes with `decision_record(task_id, …)`, scoped to its
+task's company. Company decisions are part of the company context given to its tasks. A graph database only if a relation
+query cannot be served here (none so far).
+Acceptance (`test_v4_f1_*`): Renature never reads Jack Healer (context, vault, Qdrant search, credentials, and Postgres RLS as a
+non-superuser role, including a refused cross-company insert), a company task sees only its company, the same task_key never
+runs twice, missing callbacks → bounded resends with the same key then the owner is told, external-effect directives stop at
+approval (including one disguised as a plan), callbacks are signed/deduplicated/company-bound and an approval request is
+relayed back, the mock round trip completes and the fast lane answers from stored data without a model.

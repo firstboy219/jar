@@ -432,3 +432,158 @@ async def test_v4_f0_the_approval_shows_what_the_runner_found(pool, monkeypatch,
     assert d["file_dari_diff_nyata"] == ["core/app/charts.py", "core/tests/test_unit.py"] and d["hasil_tes_dari_penjalan"] == "server: 160 passed"
     assert d["alasan_dari_jarvis_tidak_diverifikasi"] == "kata Jarvis: aman sekali"
     assert (await pool.fetchrow("SELECT tier, tests FROM dev_changes WHERE id = $1", cid))["tests"] == "server: 160 passed"
+
+
+# ---------- Blueprint v4, Fase 1: Company Federation (ADR-042, ADR-046) ----------
+
+async def _two_companies(pool, monkeypatch):
+    from app import companies, gm
+    monkeypatch.setenv("VAULT_KEY", "33" * 32)  # company credentials are encrypted with the vault key
+    await pool.execute("TRUNCATE companies, company_vault, decision_vault, entity_relations, gm_directives, approvals, reports CASCADE")
+    companies.forget()
+    monkeypatch.setattr(gm.MockDGM, "behaviour", {})
+    monkeypatch.setattr(gm.MockDGM, "sent", [])
+    monkeypatch.setattr(gm.MockDGM, "delay_s", 0.01)
+    r = await companies.create("PT Renature", "owner", ["renature"])
+    j = await companies.create("Jack Healer", "owner", ["jh store"])
+    await companies.configure("jack-healer", "owner", dgm_token="token-rahasia-jack-healer")
+    await companies.configure("renature", "owner", dgm_token="token-rahasia-renature")
+    return r["id"], j["id"]
+
+
+async def test_v4_f1_renature_never_reads_jack_healer(pool, monkeypatch):
+    from app import companies
+    _fake_embed(monkeypatch)
+    r, j = await _two_companies(pool, monkeypatch)
+    await companies.vault_add(r, "kpi", "Omzet", "owner", data={"metric": "Omzet", "value": 120, "unit": "juta IDR", "period": "Okt"})
+    await companies.vault_add(r, "core_constraint", "Tidak boleh pakai influencer politik", "owner")
+    await companies.vault_add(j, "kpi", "Omzet", "owner", data={"metric": "Omzet", "value": 999, "unit": "juta IDR", "period": "Okt"})
+    await companies.vault_add(j, "validated_finding", "Pelanggan JH suka bundling vitamin", "owner")
+    await companies.decision_add("company", j, "correction_pivot", "JH pindah ke B2B", "owner")
+    ctx = await companies.context_block(r)
+    assert "120 juta" in ctx and "influencer" in ctx and "999" not in ctx and "bundling" not in ctx and "B2B" not in ctx
+    assert all(e["company_id"] == r for e in await companies.vault_list(r))
+    hits = await companies.search(r, "omzet penjualan pelanggan bundling vitamin")
+    assert hits and all(h["company_id"] == r for h in hits)                       # Qdrant filter + re-read under r's scope
+    assert (await companies.credentials(r))["token"] == "token-rahasia-renature"   # each company decrypts only its own key
+    with pytest.raises(companies.CompanyError):
+        await companies.vault_list("")                                              # no company → refused
+    with pytest.raises(companies.CompanyError):
+        await companies.vault_list("perusahaan-hantu")
+    # Postgres itself, as a role that does NOT bypass row-level security (production's jarvis_core is such a role)
+    await pool.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$")
+    await pool.execute("GRANT SELECT, INSERT ON company_vault, decision_vault, gm_directives TO rls_probe")
+    await pool.execute("GRANT USAGE ON SEQUENCE company_vault_id_seq TO rls_probe")
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL ROLE rls_probe")
+            assert await conn.fetchval("SELECT count(*) FROM company_vault") == 0      # no company set: nothing visible
+            await conn.execute("SELECT set_config('jarvis.company', $1, true)", r)
+            rows = await conn.fetch("SELECT company_id FROM company_vault")
+            assert rows and {x["company_id"] for x in rows} == {r}                     # even without a WHERE: only Renature
+            assert await conn.fetchval("SELECT count(*) FROM decision_vault WHERE company_id = $1", j) == 0
+        with pytest.raises(Exception):
+            async with conn.transaction():
+                await conn.execute("SET LOCAL ROLE rls_probe")
+                await conn.execute("SELECT set_config('jarvis.company', $1, true)", r)
+                await conn.execute("INSERT INTO company_vault (company_id, kind, title) VALUES ($1, 'note', 'menyusup')", j)
+
+
+async def test_v4_f1_a_company_task_sees_only_its_company(pool, monkeypatch):
+    from app import companies, hermes, memory, workers
+    _fake_embed(monkeypatch)
+    monkeypatch.setattr(memory, "search", _no_memory)
+    r, j = await _two_companies(pool, monkeypatch)
+    await companies.vault_add(r, "core_constraint", "Anggaran iklan maksimal 10 juta per bulan", "owner")
+    await companies.vault_add(j, "core_constraint", "JH tidak menjual ke luar Jawa", "owner")
+    prompts = []
+
+    async def stream(text, session_id, image=None, **kw):
+        prompts.append(text)
+        yield {"type": "done", "reply": hermes.HermesReply("ok", 1, 1, 1)}
+    monkeypatch.setattr(hermes, "stream", stream)
+    await workers.spawn("Riset Renature", "Riset kompetitor skincare untuk Renature", "s-c", "owner", company_id=r)
+    assert await _wait(lambda: _prompted(prompts))
+    assert "KONTEKS PERUSAHAAN: PT Renature" in prompts[0] and "10 juta" in prompts[0] and "luar Jawa" not in prompts[0]
+
+
+async def test_v4_f1_same_task_key_never_runs_twice(pool, monkeypatch):
+    from app import gm
+    r, _ = await _two_companies(pool, monkeypatch)
+    key = "9b2f6a2e-3a9c-4c7f-9a7e-2f0d3c1b4a55"
+    a = await gm.create(r, "laporan", "Rekap penjualan minggu ini per kanal", "owner", task_key=key)
+    b = await gm.create(r, "laporan", "Rekap penjualan minggu ini per kanal", "owner", task_key=key)
+    assert a["id"] == b["id"] and b.get("duplicate") and len(gm.MockDGM.sent) == 1
+
+
+async def test_v4_f1_no_callback_means_limited_resends_then_the_owner_is_told(pool, monkeypatch):
+    from app import companies, gm
+    r, _ = await _two_companies(pool, monkeypatch)
+    await companies.configure(r, "owner", max_retries=1, callback_timeout_s=60)
+    gm.MockDGM.behaviour[r] = "silent"
+    d = await gm.create(r, "laporan", "Rekap stok gudang hari ini", "owner")
+    assert d["status"] == "sent" and d["attempts"] == 1
+    await pool.execute("UPDATE gm_directives SET deadline = now() - interval '1 second' WHERE id = $1", d["id"])
+    assert (await gm.tick())["retried"] == 1
+    assert (await gm.get(r, d["id"]))["attempts"] == 2
+    assert {x["task_id"] for x in gm.MockDGM.sent} == {str(d["task_key"])}         # the resend carries the SAME key
+    await pool.execute("UPDATE gm_directives SET deadline = now() - interval '1 second' WHERE id = $1", d["id"])
+    assert (await gm.tick())["timed_out"] == 1
+    assert (await gm.get(r, d["id"]))["status"] == "timed_out"
+    assert "tidak membalas" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
+
+
+async def test_v4_f1_anything_that_changes_the_outside_world_stops_at_approval(pool, monkeypatch):
+    from app import approvals, gm
+    r, _ = await _two_companies(pool, monkeypatch)
+    d = await gm.create(r, "keluarkan_anggaran", "Jalankan iklan Meta untuk produk serum baru", "owner", constraints={"budget_usd": 300})
+    assert d["status"] == "awaiting_owner" and d["approval_id"] and gm.MockDGM.sent == []   # nothing went out
+    sneaky = await gm.create(r, "rencana", "Susun rencana lalu posting ke Instagram resmi", "owner")
+    assert sneaky["status"] == "awaiting_owner"                                     # the words give it away
+    await approvals.decide(d["approval_id"], True, "device:HP")                     # the owner's phone may approve company work
+    assert (await gm.get(r, d["id"]))["status"] == "sent" and len(gm.MockDGM.sent) == 1
+
+
+async def test_v4_f1_callbacks_are_signed_deduplicated_and_company_bound(pool, monkeypatch):
+    import json
+    import time
+    from app import approvals, companies, gm
+    r, j = await _two_companies(pool, monkeypatch)
+    gm.MockDGM.behaviour[r] = "silent"
+    d = await gm.create(r, "laporan", "Rekap penjualan minggu ini per kanal", "owner")
+    secret_r = (await companies.credentials(r))["callback_secret"]
+    secret_j = (await companies.credentials(j))["callback_secret"]
+    body = json.dumps({"task_id": str(d["task_key"]), "callback_id": "cb-1", "status": "needs_approval",
+                       "result": "Draf siap", "approval_request": {"title": "Bayar vendor foto Rp3 juta"}}).encode()
+    ts = str(int(time.time()))
+    with pytest.raises(gm.GMError, match="tanda tangan"):
+        await gm.callback(r, body, ts, gm.sign(secret_j, ts, body))                # Jack Healer's key cannot speak for Renature
+    with pytest.raises(gm.GMError, match="tidak dikenal"):
+        await gm.callback(j, body, ts, gm.sign(secret_j, ts, body))                # nor reach Renature's directive via its own URL
+    ok = await gm.callback(r, body, ts, gm.sign(secret_r, ts, body))
+    assert ok["status"] == "awaiting_owner_result"
+    assert (await gm.callback(r, body, ts, gm.sign(secret_r, ts, body)))["duplicate"]   # replay: ignored
+    ap = await pool.fetchrow("SELECT id, kind FROM approvals WHERE kind = 'company_action'")
+    await approvals.decide(ap["id"], True, "device:HP")
+    assert gm.MockDGM.sent[-1] == {"decision": True, "task_id": str(d["task_key"])}   # the decision went back to Hermes-DGM
+
+
+async def test_v4_f1_mock_dgm_round_trip_and_the_fast_lane(pool, monkeypatch):
+    from app import assistant, chat, companies, gm
+    r, j = await _two_companies(pool, monkeypatch)
+    await companies.vault_add(r, "kpi", "Omzet", "owner", data={"metric": "Omzet", "value": 120, "unit": "juta IDR", "period": "Okt"})
+    d = await gm.create(r, "rekap_kpi", "Kirimkan rekap KPI bulan Oktober", "owner")
+
+    async def done():
+        return (await gm.get(r, d["id"]))["status"] == "completed"
+    assert await _wait(done)                                                       # sent → signed callback → completed → reported
+    assert "SIMULASI" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
+
+    async def never(*a, **k):
+        raise AssertionError("the fast lane uses stored data, not a model")
+    monkeypatch.setattr(assistant.llm, "stream_chat", never, raising=False)
+    t = await chat.handle("berapa KPI Renature sekarang?", "s-kpi", actor="test")
+    assert "Omzet: 120 juta IDR (Okt)" in t.reply and "rekap kpi — selesai" in t.reply
+    from app import company_lane
+    cid, block = await company_lane.situation("bandingkan Renature dengan JH Store")
+    assert cid is None and "SATU perusahaan" in block and "120" not in block       # two companies: no data at all

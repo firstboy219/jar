@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               chat_settings, goals, modelrouter, self_model, skills_pipeline, stage, workers, writer)
+               chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, workers, writer)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -76,6 +76,11 @@ list_settings/change_setting (jam tenang dll.). Kunci/password rahasia tidak lew
 Pengaturan server). Setelah mengubah, sebutkan modelnya dan harganya. Model mahal: tanya dulu (needs_confirmation). \
 Hanya Qdrant dan n8n yang permanen; model lain bebas dipilih.
 
+Perusahaan (Company Federation): bila ada KONTEKS PERUSAHAAN, kerjakan hanya untuk perusahaan itu. Mengarahkan tim \
+perusahaan → company_directive (yang keluar uang/publikasi/pesan ke luar otomatis menunggu persetujuan pemilik); data \
+perusahaan → company_knowledge; keputusan pemilik soal proyek/perusahaan ("pokoknya jangan…", "kita pivot ke…", "ternyata…", \
+"pakai teknologi X") → decision_record. Tugas riset untuk satu perusahaan → spawn_task dengan company.
+
 Fakta/preferensi yang pemilik minta diingat → remember. Pemilik bilang ingatanmu salah/usang → memory_correct \
 (jangan menumpuk fakta yang bertentangan). Tujuan jangka panjang ("target saya…", "tolong ingatkan saya terus soal …") \
 → goal; tujuan aktif tampil di bagian TUJUAN AKTIF. Skill yang kamu pelajari sendiri bisa dilihat/dikembalikan \
@@ -116,8 +121,36 @@ TOOLS = [
             "category": {"type": "string",
                          "description": "jenis pekerjaan (menentukan AI): web, coding, produktivitas, analisis, atau kategori "
                                         "buatan pemilik (ai_settings show). Kosong = pilih otomatis"},
-            "attach_image": {"type": "boolean", "description": "sertakan gambar kamera/layar yang sedang ditunjukkan"}},
+            "attach_image": {"type": "boolean", "description": "sertakan gambar kamera/layar yang sedang ditunjukkan"},
+            "company": {"type": "string", "description": "company_id bila tugas ini untuk SATU perusahaan (worker hanya melihat data perusahaan itu)"}},
             "required": ["title", "instruction"]}}},
+    {"type": "function", "function": {
+        "name": "company_directive",
+        "description": "Jarvis-GM: kirim arahan ke tim (Hermes-DGM) satu perusahaan. Yang mengeluarkan uang, mempublikasikan, "
+                       "atau mengirim pesan ke pihak luar otomatis menunggu persetujuan pemilik dulu.",
+        "parameters": {"type": "object", "properties": {
+            "company": {"type": "string", "description": "company_id dari KONTEKS PERUSAHAAN"},
+            "action": {"type": "string", "description": "laporan, status, analisis, riset, rencana, draf_kampanye, rekap_kpi, tinjau, "
+                                                        "tugaskan_tim_internal, keluarkan_anggaran, publikasi, kirim_pesan_eksternal, beli, kontrak, rekrut, ubah_harga"},
+            "instruction": {"type": "string", "description": "arahan lengkap & mandiri untuk tim"},
+            "budget_usd": {"type": "number"}, "deadline_hours": {"type": "number"}},
+            "required": ["company", "action", "instruction"]}}},
+    {"type": "function", "function": {
+        "name": "company_knowledge",
+        "description": "Cari di Company Vault SATU perusahaan (batasan, KPI, arus kas, temuan, pivot) atau tambahkan isian baru.",
+        "parameters": {"type": "object", "properties": {
+            "company": {"type": "string"}, "query": {"type": "string"},
+            "add_kind": {"type": "string", "enum": ["", "core_constraint", "strategic_pivot", "validated_finding", "kpi", "cashflow", "note"]},
+            "add_title": {"type": "string"}, "add_body": {"type": "string"},
+            "add_data": {"type": "object", "description": "untuk kpi/cashflow: {metric, value, unit, period, target}"}},
+            "required": ["company"]}}},
+    {"type": "function", "function": {
+        "name": "decision_record",
+        "description": "Catat keputusan pemilik ke Decision Vault proyek/perusahaan: batasan inti, koreksi/pivot, temuan tervalidasi, preferensi teknis.",
+        "parameters": {"type": "object", "properties": {
+            "entity_type": {"type": "string", "enum": ["project", "company"]}, "entity": {"type": "string", "description": "company_id atau nama proyek"},
+            "kind": {"type": "string", "enum": ["core_constraint", "correction_pivot", "validated_finding", "tech_preference"]},
+            "text": {"type": "string"}}, "required": ["entity_type", "entity", "kind", "text"]}}},
     {"type": "function", "function": {
         "name": "find_models",
         "description": "Cari model AI di katalog OpenRouter (daftar yang sama dengan pemilih di aplikasi): id, harga, konteks, "
@@ -325,6 +358,12 @@ async def _situation(text: str, location: Location | None, compact: bool = False
         parts.append("YANG KAMU INGAT (memori, bisa usang):\n" + "\n".join(f"- {memory.label(m)}" for m in hits))
     if goals_text := await goals.situation_block():
         parts.append(goals_text)
+    try:
+        _, company_text = await company_lane.situation(text)
+    except Exception:
+        company_text = ""
+    if company_text:
+        parts.append(company_text)
     return "\n\n".join(p for p in parts if p)
 
 
@@ -344,8 +383,12 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                         + (quick.CONTEXT_MARK + ctx if ctx else ""),
                                         session_id, actor, device_id, location,
                                         image=image if a.get("attach_image") else None,
-                                        category=a.get("category"), private=private)
+                                        category=a.get("category"), private=private,
+                                        company_id=await _company_of(a.get("company")))
                 return json.dumps({"task_id": t["id"], "status": "queued", "category": t["category"]})
+            case "company_directive" | "company_knowledge" | "decision_record":
+                return json.dumps(await _company_tool(call.name, a, actor, session_id, device_id, stt, bool(screen_text or attachments)),
+                                  ensure_ascii=False, default=str)
             case "stay_silent":
                 return json.dumps({"silent": True})
             case "self_check":
@@ -524,6 +567,13 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await send({"type": "say", "text": reply})
         return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
+    if not (files or screen_text or screen) and _owner_clear(stt) and len(found := await companies.mentioned(text)) == 1 \
+            and company_lane.lane(text) == "fast":  # Company × fast: from the vault, no model, no Hermes-DGM (§7.1)
+        reply = await company_lane.fast_answer(found[0])
+        if speak_live:
+            await send({"type": "say", "text": reply})
+        return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
+                      route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
     if (action := _direct_action(text, stt, screen, screen_text or files)) and (
             reply := await _act(action, session_id, actor, device_id, location, private)) is not None:
         if speak_live:
@@ -612,6 +662,52 @@ def without_tool_talk(text: str) -> str:
     """The small model sometimes says "saya akan panggil spawn_task…": drop such sentences. Pure."""
     kept = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p and not _TOOL_NAMES.search(p)]
     return " ".join(kept) or ("Oke, sedang kuurus." if text.strip() else "")
+
+
+async def _company_of(value) -> str | None:
+    """A company_id the model passed, validated against the registry (never invented)."""
+    if not value:
+        return None
+    ids = {c["id"] for c in await companies.all_()}
+    v = str(value).strip().lower()
+    if v in ids:
+        return v
+    found = companies.recognise(v, await companies.all_())
+    return found[0] if len(found) == 1 else None
+
+
+async def _company_tool(name: str, a: dict, actor: str, session_id: str, device_id, stt, outside_text: bool) -> dict:
+    company = await _company_of(a.get("company") if name != "decision_record" else (a.get("entity") if a.get("entity_type") == "company" else None))
+    try:
+        if name == "company_directive":
+            if not company:
+                return {"error": "perusahaan tidak dikenal — sebut nama perusahaan yang terdaftar"}
+            if refused := await chat_settings.guard("company_directive", device_id, stt, outside_text):
+                return {"error": refused}
+            d = await gm.create(company, str(a.get("action") or "tinjau"), str(a.get("instruction") or ""), actor,
+                                constraints={k: a[k] for k in ("budget_usd", "deadline_hours") if a.get(k)}, session_id=session_id)
+            return {"arahan": d["id"], "status": d["status"], "perlu_persetujuan": bool(d.get("approval_id")), "catatan": d.get("note"),
+                    "hermes_dgm": "tiruan (kontrak BELUM DIVERIFIKASI)" if (await companies.get(company))["adapter"] == "mock" else "nyata"}
+        if name == "company_knowledge":
+            if not company:
+                return {"error": "perusahaan tidak dikenal"}
+            if a.get("add_kind"):
+                if refused := await chat_settings.guard("company_knowledge", device_id, stt, outside_text):
+                    return {"error": refused}
+                e = await companies.vault_add(company, a["add_kind"], str(a.get("add_title") or ""), actor, str(a.get("add_body") or ""),
+                                              a.get("add_data") if isinstance(a.get("add_data"), dict) else None, verified=True)
+                return {"disimpan": e["id"], "jenis": e["kind"]}
+            hits = await companies.search(company, str(a.get("query") or "")) if a.get("query") else []
+            return {"perusahaan": company, "hasil": [{"jenis": h["kind"], "judul": h["title"], "isi": h["body"][:300], "data": h["data"]} for h in hits],
+                    "ringkasan": await company_lane.fast_answer(company)}
+        entity_type = str(a.get("entity_type") or "project")
+        entity = company if entity_type == "company" else str(a.get("entity") or "").strip().lower()
+        if entity_type == "company" and not company:
+            return {"error": "perusahaan tidak dikenal"}
+        d = await companies.decision_add(entity_type, entity, str(a.get("kind") or ""), str(a.get("text") or ""), actor)
+        return {"dicatat": d["id"], "entitas": f"{entity_type}:{entity}"}
+    except (companies.CompanyError, gm.GMError) as e:
+        return {"error": str(e)}
 
 
 def _owner_clear(stt: dict | None) -> bool:

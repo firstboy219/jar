@@ -36,7 +36,7 @@ def format_brief(eps: list[dict], now: datetime | None = None) -> str:
 async def record(task_id: int) -> dict | None:
     """Write the finished task into episodic memory (owner tasks that had a goal)."""
     row = await db.pool().fetchrow(
-        """SELECT goal, plan, result, error, status, cost_usd::float AS cost, model_used, artifacts FROM tasks
+        """SELECT goal, plan, result, error, status, cost_usd::float AS cost, model_used, artifacts, company_id FROM tasks
            WHERE id = $1 AND kind = 'owner' AND status IN ('completed', 'failed')""", task_id)
     if not row or not row["goal"]:
         return None
@@ -51,16 +51,18 @@ async def record(task_id: int) -> dict | None:
                   if row["status"] == "failed" else str(checks[-1].get("evidence"))[:200])
     [vec] = await memory.embed([row["goal"]])
     await db.pool().execute(
-        """INSERT INTO episodes (task_id, goal, approach, result, success, cost_usd, model, lesson, embedding)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+        """INSERT INTO episodes (task_id, goal, approach, result, success, cost_usd, model, lesson, embedding, company_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
         task_id, row["goal"], "; ".join(str(s) for s in plan)[:600], (row["result"] or "")[:1500], ok, row["cost"],
-        row["model_used"], lesson, vec)
+        row["model_used"], lesson, vec, row["company_id"])
     return {"task": task_id, "success": ok}
 
 
-async def similar(goal: str, limit: int = 2) -> list[dict]:
-    """The closest earlier episodes: successes first (a failure only when nothing succeeded), newest first."""
-    rows = await db.pool().fetch("SELECT * FROM episodes WHERE embedding IS NOT NULL ORDER BY created_at DESC LIMIT 400")
+async def similar(goal: str, limit: int = 2, company_id: str | None = None) -> list[dict]:
+    """The closest earlier episodes OF THE SAME COMPANY (or personal ones when none): successes first, newest first."""
+    rows = await db.pool().fetch(
+        "SELECT * FROM episodes WHERE embedding IS NOT NULL AND company_id IS NOT DISTINCT FROM $1 ORDER BY created_at DESC LIMIT 400",
+        company_id)
     if not rows:
         return []
     [qv] = await memory.embed([goal])
@@ -71,9 +73,9 @@ async def similar(goal: str, limit: int = 2) -> list[dict]:
     return [r | {"similarity": round(s, 3)} for s, r in ranked[:limit]]
 
 
-async def brief_for(goal: str) -> str:
+async def brief_for(goal: str, company_id: str | None = None) -> str:
     try:
-        return format_brief(await similar(goal))
+        return format_brief(await similar(goal, company_id=company_id))
     except Exception as e:
         log.warning("episode brief failed: %s", e)
         return ""

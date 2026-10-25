@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, attachments, audit, auditor, awareness, capabilities, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                stt, usage, voice_id, workers)
 from .config import settings
@@ -116,6 +116,7 @@ async def lifespan(app: FastAPI):
                     log.info("memory upkeep: %s, old failed episodes pruned: %s", await memory.maintain(), await episodes.prune())
                 await dev.poll()
                 await skills_pipeline.poll()  # sandbox results of skills being tested
+                await gm.tick()  # Company Federation: due sends, callback deadlines, rejections to relay (ADR-042)
                 await perf.watch_recurring_errors()
                 if (await ops.background_ok())[0] and await auditor.due():  # flow watcher (ADR-028): after a conversation pauses
                     await auditor.run()
@@ -259,6 +260,22 @@ async def youtube_embed_state(video_id: str, s: str = ""):
     """What the player did on the phone (ready / playing / error:153 …): only logged, to diagnose playback."""
     log.info("youtube %s: %s", video_id[:11], re.sub(r"[^a-z0-9:-]", "", s.lower())[:20])
     return {"ok": True}
+
+
+@app.post("/api/v1/gm/callback/{company_id}")
+async def gm_callback(company_id: str, request: Request):
+    """Hermes-DGM reports back (public, no device token): HMAC-SHA256 of "<X-Jarvis-Timestamp>.<body>" with the
+    company's callback secret in X-Jarvis-Signature. Format = blueprint v3 draft, BELUM DIVERIFIKASI."""
+    raw = await request.body()
+    if len(raw) > 200_000:
+        raise HTTPException(413, "terlalu besar")
+    try:
+        return await gm.callback(company_id, raw, request.headers.get("x-jarvis-timestamp", ""),
+                                 request.headers.get("x-jarvis-signature", ""))
+    except companies.CompanyError:
+        raise HTTPException(404, "tidak dikenal")
+    except gm.GMError as e:
+        raise HTTPException(401 if "tanda tangan" in str(e) else 422, str(e))
 
 
 @app.post("/api/v1/chat")
@@ -1287,6 +1304,116 @@ async def admin_skill_rollback(name: str, actor: str = admin):
 @app.post("/admin/skills/{name}/retire")
 async def admin_skill_retire(name: str, actor: str = admin):
     return {"retired": await skills_pipeline.retire(name, actor)}
+
+
+@app.get("/admin/companies")
+async def admin_companies(_: str = admin):
+    return jsonable({"companies": await companies.all_(include_inactive=True), "vault_kinds": companies.VAULT_KINDS,
+                     "decision_kinds": companies.DECISION_KINDS, "actions": gm.ACTIONS})
+
+
+class CompanyIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    aliases: list[str] = Field(default_factory=list, max_length=20)
+
+
+@app.post("/admin/companies")
+async def admin_company_add(c: CompanyIn, actor: str = admin):
+    try:
+        return jsonable(await companies.create(c.name, actor, c.aliases))
+    except companies.CompanyError as e:
+        raise HTTPException(422, str(e))
+
+
+class CompanyConfigIn(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    aliases: list[str] | None = None
+    active: bool | None = None
+    adapter: str | None = Field(default=None, pattern="^(mock|http)$")
+    dgm_url: str | None = Field(default=None, max_length=300)
+    dgm_token: str | None = Field(default=None, max_length=500)
+    contract_verified: bool | None = None
+    callback_timeout_s: int | None = Field(default=None, ge=60, le=604800)
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    budget_usd_month: float | None = Field(default=None, ge=0, le=1_000_000)
+
+
+@app.patch("/admin/companies/{company_id}")
+async def admin_company_configure(company_id: str, c: CompanyConfigIn, request: Request, actor: str = admin):
+    fields = c.model_dump(exclude_none=True)
+    if {"dgm_token", "dgm_url", "adapter", "contract_verified"} & set(fields):
+        admin_page_only(request)  # where directives go and with which key: the admin page only
+    try:
+        return jsonable(await companies.configure(company_id, actor, **fields))
+    except companies.CompanyError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/admin/companies/{company_id}/callback-secret")
+async def admin_company_secret(company_id: str, request: Request, actor: str = admin):
+    admin_page_only(request)
+    try:
+        return {"callback_secret": await companies.rotate_callback_secret(company_id, actor),
+                "callback_url": gm.callback_url(company_id),
+                "note": "Tampil sekali. Berikan ke server Hermes-DGM untuk menandatangani callback."}
+    except companies.CompanyError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/admin/companies/{company_id}")
+async def admin_company_detail(company_id: str, _: str = admin):
+    try:
+        return jsonable({"company": await companies.get(company_id), "vault": await companies.vault_list(company_id),
+                         "decisions": await companies.decisions_list("company", company_id),
+                         "relations": await companies.related("company", company_id, company_id),
+                         "directives": await gm.list_(company_id)})
+    except companies.CompanyError as e:
+        raise HTTPException(404, str(e))
+
+
+class VaultEntryIn(BaseModel):
+    kind: str
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(default="", max_length=8000)
+    data: dict | None = None
+    verified: bool = False
+
+
+@app.post("/admin/companies/{company_id}/vault")
+async def admin_company_vault_add(company_id: str, e: VaultEntryIn, actor: str = admin):
+    try:
+        return jsonable(await companies.vault_add(company_id, e.kind, e.title, actor, e.body, e.data, e.verified))
+    except companies.CompanyError as err:
+        raise HTTPException(422, str(err))
+
+
+@app.delete("/admin/companies/{company_id}/vault/{entry_id}")
+async def admin_company_vault_delete(company_id: str, entry_id: int, actor: str = admin):
+    return {"deleted": await companies.vault_delete(company_id, entry_id, actor)}
+
+
+class DirectiveIn(BaseModel):
+    action: str = Field(min_length=2, max_length=40)
+    instruction: str = Field(min_length=10, max_length=4000)
+    budget_usd: float | None = Field(default=None, ge=0)
+    deadline_hours: float | None = Field(default=None, gt=0, le=2000)
+
+
+@app.post("/admin/companies/{company_id}/directives")
+async def admin_directive(company_id: str, d: DirectiveIn, actor: str = admin):
+    try:
+        return jsonable(await gm.create(company_id, d.action, d.instruction, actor,
+                                        constraints={k: v for k, v in (("budget_usd", d.budget_usd), ("deadline_hours", d.deadline_hours)) if v}))
+    except (companies.CompanyError, gm.GMError) as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/admin/companies/{company_id}/directives/{directive_id}/cancel")
+async def admin_directive_cancel(company_id: str, directive_id: int, actor: str = admin):
+    try:
+        return jsonable(await gm.cancel(company_id, directive_id, actor))
+    except (companies.CompanyError, gm.GMError) as e:
+        raise HTTPException(422, str(e))
 
 
 @app.get("/admin/kpi")

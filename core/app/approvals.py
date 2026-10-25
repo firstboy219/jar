@@ -72,7 +72,19 @@ async def _exec_code_design(detail: dict) -> dict:
     return await dev.on_design_approved(detail)
 
 
+async def _exec_company_directive(detail: dict) -> dict:
+    from . import gm
+    return await gm.on_owner_approved(detail)
+
+
+async def _exec_company_action(detail: dict) -> dict:
+    from . import gm
+    return await gm.on_result_decision(detail)
+
+
 EXECUTORS: dict[str, Executor] = {
+    "company_directive": _exec_company_directive,
+    "company_action": _exec_company_action,
     "code_design": _exec_code_design,
     "skill_publish": _exec_skill_publish,
     "task_budget": _exec_task_budget,
