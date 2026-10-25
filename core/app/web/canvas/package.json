@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "JARVIS 3D canvas viewer (static ES modules); tests: node --test tests/"
+}

@@ -723,3 +723,42 @@ JARVIS's own echo and a twice-disowned phrase are filtered only once allowed; th
 caches, records the exact cost, refuses private/sensitive text and an exhausted budget; voice settings by chat (refused for a
 non-owner voice), consent and modes only at the admin page, audio kept only with consent.
 
+## ADR-049 — The canvas is 3D: a galaxy per context; gestures on the device, navigation only (2026-10-26)
+Blueprint v4 Fase 4. The owner changed the plan from a 2D infinite canvas to a **3D** one: "seperti ada di galaxy ruang
+kerjanya". K4 (library) and K10 (web first) were left to us ("ok"): three.js r160 (MIT, vendored with its licence — no CDN at
+runtime, no watermark), web first; the APK can load the same page later (Fase 5).
+- **Model (migration 024)**: `canvases` (one per context: `utama`, `project:<slug>`, `company:<id>`), `canvas_nodes` (kind, a
+  reference `<type>:<id>`, x/y/z, size, pinned), `canvas_edges`, `canvas_versions` (every change; last 60 kept; restore brings
+  positions and links back, cards whose thing is gone stay gone). No column holds text: a card's title/snippet is read from
+  where the thing lives (tasks, documents, stage_history, memories, goals, meetings, playlists, songs, company vault,
+  directives, decisions) every time the canvas is read — the canvas stores layout, not knowledge.
+- **Isolation (§4.4)**: a company galaxy accepts only that company's own vault entries, directives, decisions, tasks and those
+  tasks' documents; a personal galaxy nothing that belongs to a company and never vault/directive refs. Checked on add AND on
+  read; the four tables carry `company_id` under the same FORCE'd row-level security as ADR-042 (tested as a non-superuser role).
+  A company galaxy also has only company constellations (tugas, data perusahaan, arahan, dokumen, keputusan).
+- **JARVIS places its work**: a finished owner task (not private) → its company's galaxy or Utama; a document → the galaxy of
+  the task that made it; whatever JARVIS shows on the phone → Utama. Tool `canvas` (place / focus / link / list) for the main
+  agent; "focus" makes every open viewer fly to a card. Placement: each kind is a constellation on a spiral arm; cards spiral
+  around it by the golden angle; the owner can move them anywhere (the space is unbounded).
+- **Viewer** (`/canvas/`, static, same origin as the API, strict CSP, served by jarvis-core): a spiral galaxy of particles,
+  background stars, one glowing constellation per kind, cards as glass panels that grow as you approach and turn into stars far
+  away (the 140 nearest are drawn as cards). Orbit/pan/zoom with mouse, touch (two-finger pinch) or WASD/QE; drag a card through
+  space; double-click flies to it; search; "+ Kartu" (only things allowed in this galaxy); version history; deep link
+  `#kartu=<id>`; reduced-motion → jumps instead of flights. Sign-in with the admin password creates the browser's own device
+  token (revocable in Perangkat). It can take a card off the canvas (confirmed, never through a gesture) — never delete data,
+  approve, send or pay.
+- **Gestures (4.0)**: MediaPipe hand landmarks in the browser (code from jsdelivr, model from Google storage); the camera runs
+  only while the mode is on, with a visible preview and a red frame, nothing stored or sent. Pinch is computed from fingertip
+  distance with hysteresis; a pose acts only after 3 stable frames; open palm held still 1 s turns the lock on/off; fist pauses;
+  a minute without hands switches it off. `gesture.html` is the separate prototype with live FPS, camera-to-cursor latency and a
+  false-trigger counter (targets: ≤ 100 ms, ≤ 1 per 10 minutes) for the Gate; in the viewer the mode is optional and a gesture
+  "click" only reaches navigation controls (data-gesture="ok"), never "Lepas" or a confirmation.
+- `canvas.py` and `gestures.js` joined the protected zone (isolation; what a gesture may do); the viewer files are "display"
+  (T2-locked for JARVIS beyond T1). Pure JS (gesture machine, galaxy geometry, search/diff) is tested with node in
+  `infra/scripts/test-core.sh`.
+Acceptance (`test_v4_f4_*`): each context is its own galaxy and companies never mix (refused cross refs; RLS as a non-superuser
+role, including a refused insert); JARVIS places a finished task end to end, a document and what it showed, idempotently,
+and the canvas holds references only (a renamed task shows its new title; a private task never appears); moves anywhere,
+links, focus, version restore, and hiding a card never deletes the task; the viewer is served with its CSP, path traversal is
+refused, and changes need the owner's device while any paired device may look.
+

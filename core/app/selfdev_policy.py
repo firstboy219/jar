@@ -23,11 +23,11 @@ FORBIDDEN = re.compile(
     r"infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|"
     r"infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements-dev|core/config/|"
     r"core/app/(main|approvals|devices|vault|sensitive|dev|perf|auditor|ops|composition|budget|errors|config|db|"
-    r"selfdev_policy|modelrouter|chat_settings|skills_pipeline|gateway|kpi|companies|gm|voice|voice_quality)\.py|"
+    r"selfdev_policy|modelrouter|chat_settings|skills_pipeline|gateway|kpi|companies|gm|voice|voice_quality|canvas)\.py|core/app/web/canvas/gestures\.js|"
     r"android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|"
     r"\.github/|\.claude/|BRD\.docx)")
 # Anything the owner SEES: locked for T2 until before/after screenshots can be shown with the approval.
-DISPLAY = re.compile(r"^(android/app/src/main/java/.*/ui/|android/app/src/main/res/|web/|.*\.(html|css|jinja2?)$)")
+DISPLAY = re.compile(r"^(android/app/src/main/java/.*/ui/|android/app/src/main/res/|web/|core/app/web/|.*\.(html|css|jinja2?)$)")
 TEST_PATH = re.compile(r"^(core/tests/|android/app/src/test/|android/app/src/androidTest/)")
 TEST_LINE = re.compile(r"^\s*(async\s+def\s+test_|def\s+test_|@Test\b|@pytest\.mark|assert\b|assert[A-Z]\w*\(|fun\s+`?\w)")
 LIMITS = {1: 1500, 2: 6000}   # changed lines (added + deleted)

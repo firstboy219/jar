@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>Galaksi JARVIS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="space"></div>
+<div id="labels"></div>
+<div id="cards"></div>
+<div id="cursor" hidden></div>
+
+<header id="bar">
+  <strong class="brand">JARVIS</strong>
+  <select id="galaxy" aria-label="Galaksi (konteks)" data-gesture="ok"></select>
+  <span id="title"></span><span id="count"></span>
+  <div class="find"><input id="find" placeholder="Cari kartu…" autocomplete="off"><div id="find-results"></div></div>
+  <button id="add" data-gesture="ok">+ Kartu</button>
+  <button id="new-project" title="Galaksi baru untuk sebuah proyek">+ Proyek</button>
+  <button id="home" data-gesture="ok" title="Kembali ke inti (Home)">Inti</button>
+  <button id="history">Riwayat</button>
+  <button id="gesture" title="Kendali tangan lewat kamera — di perangkat ini saja">Gestur</button>
+  <button id="logout" title="Keluar dari kanvas di browser ini">Keluar</button>
+</header>
+
+<section id="add-panel" class="panel" hidden>
+  <h3>Taruh kartu di galaksi ini</h3>
+  <input id="add-q" placeholder="Cari tugas, dokumen, memori, yang pernah ditampilkan…" autocomplete="off">
+  <div id="add-results"></div>
+  <p class="hint">Kartu hanya menunjuk ke isinya. Galaksi perusahaan hanya bisa memuat data perusahaan itu sendiri.</p>
+</section>
+<section id="history-panel" class="panel" hidden></section>
+
+<div id="gesture-box">
+  <video id="camera" playsinline muted></video>
+  <div id="gesture-hud">kamera mati</div>
+</div>
+<div id="hud"></div>
+<div id="help">Seret: putar · Shift/klik kanan/2 jari: geser · Gulir/cubit: zoom · WASD QE: terbang · seret kartu: pindahkan · klik dua kali: terbang ke kartu</div>
+<div id="toasts"></div>
+
+<div id="login" hidden>
+  <form id="login-form">
+    <h2>Galaksi JARVIS</h2>
+    <p>Masuk dengan password halaman admin. Browser ini lalu mendapat token perangkat sendiri (bisa dicabut di menu Perangkat).</p>
+    <input id="password" type="password" autocomplete="current-password" placeholder="Password admin" required>
+    <button type="submit">Masuk</button>
+    <p id="login-error" role="alert"></p>
+  </form>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

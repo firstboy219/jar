@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
+               canvas, chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
                workers, writer)
 from .location import WIB, Location, context_prefix
 
@@ -156,6 +156,16 @@ TOOLS = [
             "entity_type": {"type": "string", "enum": ["project", "company"]}, "entity": {"type": "string", "description": "company_id atau nama proyek"},
             "kind": {"type": "string", "enum": ["core_constraint", "correction_pivot", "validated_finding", "tech_preference"]},
             "text": {"type": "string"}}, "required": ["entity_type", "entity", "kind", "text"]}}},
+    {"type": "function", "function": {
+        "name": "canvas",
+        "description": "Kanvas 3D (galaksi kerja pemilik, satu per konteks: utama, project:<nama>, company:<id>). place = taruh "
+                       "kartu (ref: task:<id>, doc:<uuid>, memory:<uuid>, shown:<id>, goal:<id>, vault:<id>, directive:<id>); "
+                       "focus = terbangkan tampilan ke kartu; link = hubungkan dua kartu; list = isi kanvas. Hanya tata letak.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["place", "focus", "link", "list"]},
+            "context": {"type": "string", "description": "utama | project:<nama> | company:<id>"},
+            "ref": {"type": "string"}, "ref_b": {"type": "string", "description": "kartu kedua untuk link"},
+            "label": {"type": "string"}}, "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "voice_correction",
         "description": "Pemilik bilang kamu salah dengar ucapan suaranya barusan. heard = bagian yang kamu dengar, meant = yang "
@@ -409,6 +419,9 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                         category=a.get("category"), private=private,
                                         company_id=await _company_of(a.get("company")))
                 return json.dumps({"task_id": t["id"], "status": "queued", "category": t["category"]})
+            case "canvas":
+                return json.dumps(await _canvas_tool(a, actor, device_id, stt, bool(screen_text or attachments)),
+                                  ensure_ascii=False, default=str)
             case "voice_correction" | "voice_pronounce" | "voice_settings":
                 return json.dumps(await _voice_tool(call.name, a, actor, session_id, device_id, stt, bool(screen_text or attachments)),
                                   ensure_ascii=False, default=str)
@@ -738,6 +751,34 @@ async def _company_tool(name: str, a: dict, actor: str, session_id: str, device_
         d = await companies.decision_add(entity_type, entity, str(a.get("kind") or ""), str(a.get("text") or ""), actor)
         return {"dicatat": d["id"], "entitas": f"{entity_type}:{entity}"}
     except (companies.CompanyError, gm.GMError) as e:
+        return {"error": str(e)}
+
+
+async def _canvas_tool(a: dict, actor: str, device_id, stt, outside_text: bool) -> dict:
+    action, context = str(a.get("action") or "list"), str(a.get("context") or "utama")
+    try:
+        if action == "list":
+            c = await canvas.ensure(context)
+            v = await canvas.view(c["id"])
+            return {"kanvas": v["title"], "kartu": [{"ref": x["ref"], "judul": x["title"], "jenis": x["kind"]} for x in v["cards"][:40]],
+                    "buka": "https://vis1.cosger.online/canvas/"}
+        if action == "focus":
+            return await canvas.focus(context, str(a.get("ref") or ""), actor)
+        if refused := await chat_settings.guard("canvas_" + action, device_id, stt, outside_text):
+            return {"error": refused}
+        if action == "place":
+            n = await canvas.add(context, str(a.get("ref") or ""), actor)
+            return {"kartu": n["id"], "sudah_ada": bool(n.get("existing"))}
+        if action == "link":
+            c = await canvas.ensure(context)
+            v = await canvas.view(c["id"])
+            ids = {x["ref"]: x["id"] for x in v["cards"]}
+            if a.get("ref") not in ids or a.get("ref_b") not in ids:
+                return {"error": "kedua kartu harus sudah ada di kanvas itu"}
+            e = await canvas.link(ids[a["ref"]], ids[a["ref_b"]], actor, str(a.get("label") or ""))
+            return {"garis": e["id"]}
+        return {"error": "aksi kanvas tidak dikenal"}
+    except (canvas.CanvasError, companies.CompanyError) as e:
         return {"error": str(e)}
 
 

@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, attachments, audit, auditor, awareness, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
@@ -536,6 +536,155 @@ async def voice_correct(c: VoiceCorrectIn, device: dict = Depends(owner_device_a
                                    actor=f"device:{device['name']}")
     except voice.VoiceError as e:
         raise HTTPException(e.status, str(e))
+
+
+# ---------- the 3D canvas (Blueprint v4 Fase 4, ADR-049): galaxies of cards, layout only ----------
+
+def _canvas_error(e: Exception) -> HTTPException:
+    return HTTPException(404 if "tidak ada" in str(e) else 422, str(e))
+
+
+@app.get("/api/v1/canvases")
+async def canvases_list(device: dict = Depends(device_auth)):
+    return jsonable(await canvas.contexts())
+
+
+class CanvasIn(BaseModel):
+    context: str = Field(min_length=1, max_length=80)     # "utama", "project:Toko Online", "company:renature"
+    title: str | None = Field(default=None, max_length=80)
+
+
+@app.post("/api/v1/canvases")
+async def canvases_open(c: CanvasIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await canvas.ensure(c.context, c.title))
+    except (canvas.CanvasError, companies.CompanyError) as e:
+        raise _canvas_error(e)
+
+
+@app.get("/api/v1/canvases/{canvas_id}")
+async def canvases_view(canvas_id: int, since: int | None = None, device: dict = Depends(device_auth)):
+    try:
+        return jsonable(await canvas.view(canvas_id, since))
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+@app.get("/api/v1/canvases/{canvas_id}/search")
+async def canvases_search(canvas_id: int, q: str = "", device: dict = Depends(owner_device_auth)):
+    try:
+        row = await canvas._canvas_row(canvas_id)
+        return jsonable(await canvas.search_refs(row["context"], q[:80]))
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+class CardIn(BaseModel):
+    ref: str = Field(min_length=3, max_length=80)
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+
+
+@app.post("/api/v1/canvases/{canvas_id}/cards")
+async def canvases_add_card(canvas_id: int, c: CardIn, device: dict = Depends(owner_device_auth)):
+    try:
+        row = await canvas._canvas_row(canvas_id)
+        pos = (c.x, c.y, c.z) if None not in (c.x, c.y, c.z) else None
+        return jsonable(await canvas.add(row["context"], c.ref, f"device:{device['name']}", pos))
+    except (canvas.CanvasError, companies.CompanyError) as e:
+        raise _canvas_error(e)
+
+
+class CardPatch(BaseModel):
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    size: float | None = None
+    pinned: bool | None = None
+
+
+@app.patch("/api/v1/canvas/cards/{node_id}")
+async def canvases_move_card(node_id: int, p: CardPatch, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await canvas.move(node_id, f"device:{device['name']}", **p.model_dump()))
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+@app.delete("/api/v1/canvas/cards/{node_id}")
+async def canvases_hide_card(node_id: int, device: dict = Depends(owner_device_auth)):
+    """Takes the card off the canvas only; what it points at is never deleted from here."""
+    try:
+        return {"hidden": await canvas.hide(node_id, f"device:{device['name']}")}
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+class EdgeIn(BaseModel):
+    a: int
+    b: int
+    label: str = Field(default="", max_length=60)
+
+
+@app.post("/api/v1/canvases/{canvas_id}/edges")
+async def canvases_link(canvas_id: int, e: EdgeIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await canvas.link(e.a, e.b, f"device:{device['name']}", e.label))
+    except canvas.CanvasError as err:
+        raise _canvas_error(err)
+
+
+@app.delete("/api/v1/canvases/{canvas_id}/edges/{edge_id}")
+async def canvases_unlink(canvas_id: int, edge_id: int, device: dict = Depends(owner_device_auth)):
+    try:
+        return {"removed": await canvas.unlink(edge_id, canvas_id, f"device:{device['name']}")}
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+@app.get("/api/v1/canvases/{canvas_id}/versions")
+async def canvases_versions(canvas_id: int, device: dict = Depends(device_auth)):
+    try:
+        return jsonable(await canvas.versions(canvas_id))
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+class RestoreIn(BaseModel):
+    version: int
+
+
+@app.post("/api/v1/canvases/{canvas_id}/restore")
+async def canvases_restore(canvas_id: int, r: RestoreIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return await canvas.restore(canvas_id, r.version, f"device:{device['name']}")
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
+_CANVAS_DIR = __import__("pathlib").Path(__file__).parent / "web" / "canvas"
+# The viewer and the gesture prototype: static, same origin as the API. Hand tracking (MediaPipe) runs in the browser:
+# its code and model come from jsdelivr / Google storage, camera frames never leave the device.
+_CANVAS_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
+               "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; img-src 'self' https: data: blob:; "
+               "media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-ancestors 'none'")
+
+
+@app.get("/canvas")
+async def canvas_root():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/canvas/")
+
+
+@app.get("/canvas/{path:path}")
+async def canvas_static(path: str):
+    name = path or "index.html"
+    target = (_CANVAS_DIR / name).resolve()
+    if not str(target).startswith(str(_CANVAS_DIR.resolve())) or not target.is_file():
+        raise HTTPException(404)
+    return FileResponse(target, headers={"Content-Security-Policy": _CANVAS_CSP, "X-Content-Type-Options": "nosniff",
+                                         "Cache-Control": "no-cache"})
 
 
 class CompositionTest(BaseModel):
