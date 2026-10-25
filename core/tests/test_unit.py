@@ -984,3 +984,34 @@ def test_approval_request_comes_from_the_runner_and_labels_jarvis_text():
     assert d["file_dari_diff_nyata"] == ["core/app/charts.py"] and d["hasil_tes_dari_penjalan"] == "server: 160 passed"
     assert d["tingkat"] == "T1" and d["baris_berubah"] == 12
     assert d["alasan_dari_jarvis_tidak_diverifikasi"] == "lebih cepat 3x" and "why" not in d
+
+
+def test_company_helpers_recognise_classify_sign_and_route():
+    import time
+    from app import companies, company_lane, gm
+    assert companies.slug("PT Renature Indonesia") == "renature-indonesia" and companies.slug("Jack Healer") == "jack-healer"
+    regs = [{"id": "renature", "name": "PT Renature", "aliases": ["renature", "pt renature"]},
+            {"id": "jack-healer", "name": "Jack Healer", "aliases": ["jack healer", "jh store"]}]
+    assert companies.recognise("Berapa KPI Renature bulan ini?", regs) == ["renature"]
+    assert companies.recognise("bandingkan renature dan JH Store", regs) == ["renature", "jack-healer"]
+    assert companies.recognise("aku mau renatures sesuatu", regs) == []           # whole words only
+    assert companies.search_filter("renature") == {"must": [{"key": "company_id", "match": {"value": "renature"}}]}
+    with pytest.raises(companies.CompanyError):
+        companies.search_filter("")                                                  # never a search without a company
+    assert companies.kpi_line({"title": "Omzet", "data": {"metric": "Omzet", "value": 120, "unit": "juta IDR", "period": "Okt 2026", "target": 150}}) \
+        == "Omzet: 120 juta IDR (Okt 2026), target 150 juta IDR"
+    assert gm.external_effect("laporan", "rekap penjualan minggu ini", {}) is False
+    assert gm.external_effect("publikasi", "unggah konten", {}) is True
+    assert gm.external_effect("rencana", "siapkan rencana lalu bayar vendor", {}) is True          # words betray an external effect
+    assert gm.external_effect("rencana", "rencana kampanye", {"budget_usd": 50}) is True           # any budget = spending
+    now = time.time()
+    ts, body = str(int(now)), b'{"task_id": "x"}'
+    sig = gm.sign("rahasia", ts, body)
+    assert gm.verify("rahasia", ts, body, sig, now) and not gm.verify("lain", ts, body, sig, now)
+    assert not gm.verify("rahasia", ts, body + b" ", sig, now)                                    # tampered body
+    assert not gm.verify("rahasia", str(int(now) - 600), body, gm.sign("rahasia", str(int(now) - 600), body), now)  # replayed later
+    assert not gm.verify(None, ts, body, sig, now)
+    assert [gm.backoff_s(n) for n in (1, 2, 3, 9)] == [30, 120, 480, 3600]
+    assert company_lane.lane("KPI Renature bulan ini?") == "fast" and company_lane.lane("status arahan Jack Healer") == "fast"
+    assert company_lane.lane("Renature: susun kampanye Ramadan") == "heavy" and company_lane.lane("riset: KPI renature") == "heavy"
+    assert company_lane.lane("cepat: buatkan ringkasan renature") == "fast"

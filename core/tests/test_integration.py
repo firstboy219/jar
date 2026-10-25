@@ -1801,6 +1801,10 @@ async def test_learning_a_skill_validate_evaluate_publish_version_rollback(pool,
     assert skill_md.startswith("---\nname: laporan-tren") and "## Langkah" in skill_md and "version: 1.0.0" in skill_md
     cap = await pool.fetchrow("SELECT tested, own, version, status FROM capabilities WHERE id = 'skill:laporan-tren'")
     assert (cap["tested"], cap["own"], cap["version"], cap["status"]) == (True, True, 1, "published")
+    for _ in range(100):  # the report is written right after the status flips to published
+        if await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1"):
+            break
+        await __import__("asyncio").sleep(0.02)
     assert "Aku belajar skill baru: laporan-tren" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
     # a second version (improved) → v2; then rollback restores v1's text as v3 and keeps the history
     await sp.submit("laporan-tren", desc, GOOD_BODY.replace("5 produk", "10 produk"), CASES, None)

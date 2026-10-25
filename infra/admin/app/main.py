@@ -73,7 +73,7 @@ SETTINGS = [
      "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma. Dipakai juga oleh Whisper."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"), ("ai", "Model AI"),
-        ("studio", "Hermes Studio"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
+        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
         ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
@@ -156,6 +156,10 @@ async def _tab_data(tab: str, request: Request) -> dict:
         return {"events": await core("GET", "/admin/audit")}
     if tab == "app":
         return {"releases": load_releases()}
+    if tab == "companies":
+        listing = await core("GET", "/admin/companies")
+        chosen = q.get("c") or next((c["id"] for c in listing["companies"]), None)
+        return listing | {"chosen": chosen, "detail": await core("GET", f"/admin/companies/{chosen}") if chosen else None}
     if tab == "self":
         return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors"),
                                                     "flow_issues": await core("GET", "/admin/flow-issues"),
@@ -329,6 +333,78 @@ async def efficiency_review(request: Request):
     except CoreError as e:
         return await render(request, "self", errors=[str(e)])
     return await render(request, "self", notice=f"Tinjauan efisiensi dimulai (tugas #{t['task_id']}).")
+
+
+async def _company_action(request: Request, company_id: str | None, call, done: str) -> HTMLResponse:
+    """Company tab actions: run `call()` against core, then show the company again."""
+    if r := guard(request):
+        return r
+    try:
+        result = await call()
+    except CoreError as e:
+        return await render(request, "companies", errors=[str(e)])
+    if company_id:
+        request.scope["query_string"] = f"tab=companies&c={company_id}".encode()
+    return await render(request, "companies", notice=done(result) if callable(done) else done)
+
+
+@app.post("/companies", response_class=HTMLResponse)
+async def company_add(request: Request, name: str = Form(...), aliases: str = Form("")):
+    return await _company_action(request, None, lambda: core("POST", "/admin/companies", json={
+        "name": name, "aliases": [a.strip() for a in aliases.split(",") if a.strip()]}), lambda c: f"Perusahaan {c['name']} ({c['id']}) ditambahkan.")
+
+
+@app.post("/companies/{company_id}/config", response_class=HTMLResponse)
+async def company_config(request: Request, company_id: str, adapter: str = Form("mock"), dgm_url: str = Form(""),
+                         dgm_token: str = Form(""), contract_verified: str = Form(""), callback_timeout_s: int = Form(1800),
+                         max_retries: int = Form(2), budget_usd_month: str = Form(""), aliases: str = Form(""), active: str = Form("")):
+    body = {"adapter": adapter, "dgm_url": dgm_url or None, "contract_verified": contract_verified == "on",
+            "callback_timeout_s": callback_timeout_s, "max_retries": max_retries, "active": active == "on",
+            "aliases": [a.strip() for a in aliases.split(",") if a.strip()],
+            "budget_usd_month": float(budget_usd_month) if budget_usd_month.strip() else None}
+    if dgm_token.strip():
+        body["dgm_token"] = dgm_token.strip()  # write-only: never shown again
+    return await _company_action(request, company_id, lambda: core("PATCH", f"/admin/companies/{company_id}", json=body), "Pengaturan disimpan.")
+
+
+@app.post("/companies/{company_id}/secret", response_class=HTMLResponse)
+async def company_secret(request: Request, company_id: str):
+    return await _company_action(request, company_id, lambda: core("POST", f"/admin/companies/{company_id}/callback-secret"),
+                                 lambda r: f"Rahasia callback baru (tampil SEKALI, salin ke server Hermes-DGM): {r['callback_secret']} · URL callback: {r['callback_url']}")
+
+
+@app.post("/companies/{company_id}/vault", response_class=HTMLResponse)
+async def company_vault_add(request: Request, company_id: str, kind: str = Form(...), title: str = Form(...), body: str = Form(""),
+                            metric: str = Form(""), value: str = Form(""), unit: str = Form(""), period: str = Form(""), target: str = Form("")):
+    data = None
+    if kind in ("kpi", "cashflow") and value.strip():
+        data = {"metric": metric or title, "value": value, "unit": unit or None, "period": period or None, "target": target or None}
+        data = {k: v for k, v in data.items() if v}
+    return await _company_action(request, company_id, lambda: core("POST", f"/admin/companies/{company_id}/vault", json={
+        "kind": kind, "title": title, "body": body, "data": data, "verified": True}), "Isian Company Vault disimpan.")
+
+
+@app.post("/companies/{company_id}/vault/{entry_id}/delete", response_class=HTMLResponse)
+async def company_vault_delete(request: Request, company_id: str, entry_id: int):
+    return await _company_action(request, company_id, lambda: core("DELETE", f"/admin/companies/{company_id}/vault/{entry_id}"), "Isian dihapus.")
+
+
+@app.post("/companies/{company_id}/directives", response_class=HTMLResponse)
+async def company_directive(request: Request, company_id: str, action: str = Form(...), instruction: str = Form(...),
+                            budget_usd: str = Form(""), deadline_hours: str = Form("")):
+    body = {"action": action, "instruction": instruction}
+    if budget_usd.strip():
+        body["budget_usd"] = float(budget_usd)
+    if deadline_hours.strip():
+        body["deadline_hours"] = float(deadline_hours)
+    return await _company_action(request, company_id, lambda: core("POST", f"/admin/companies/{company_id}/directives", json=body),
+                                 lambda d: f"Arahan #{d['id']}: {d['status']}" + (" — menunggu persetujuanmu" if d.get("approval_id") else ""))
+
+
+@app.post("/companies/{company_id}/directives/{directive_id}/cancel", response_class=HTMLResponse)
+async def company_directive_cancel(request: Request, company_id: str, directive_id: int):
+    return await _company_action(request, company_id, lambda: core("POST", f"/admin/companies/{company_id}/directives/{directive_id}/cancel"),
+                                 "Arahan dibatalkan.")
 
 
 @app.post("/selfdev/control", response_class=HTMLResponse)

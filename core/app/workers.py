@@ -48,7 +48,7 @@ def _sem_() -> asyncio.Semaphore:
 
 async def spawn(title: str, instruction: str, session_id: str, actor: str, device_id=None,
                 location: Location | None = None, kind: str = "owner", image: str | None = None,
-                category: str | None = None, private: bool = False) -> dict:
+                category: str | None = None, private: bool = False, company_id: str | None = None) -> dict:
     """kind: 'owner' (result spoken as a report) or an internal purpose handled by its module:
     'situation' (awareness), 'routine' (habits), 'selfcheck' (self-improvement).
     category: which AI does the work (gateway category); private tasks only ever use the local model."""
@@ -58,12 +58,12 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
     if private:
         category = "privat"
     row = await db.pool().fetchrow(
-        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd, company_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING id, title, status, kind, category, created_at""",
         session_id, device_id, title.strip()[:120] or "Tugas", instruction.strip()[:12000], kind, image,
         category, private, re.sub(r"\s+", " ", instruction.split(quick.CONTEXT_MARK)[0]).strip()[:500],
-        await modelrouter.default_task_budget())
+        await modelrouter.default_task_budget(), company_id)
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
     await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
@@ -84,7 +84,7 @@ async def _run(task_id: int, context: str) -> None:
     async with _sem_():
         row = await db.pool().fetchrow(
             "UPDATE tasks SET status = 'running', started_at = now(), phase = 'executing' WHERE id = $1 AND status = 'queued' "
-            "RETURNING id, title, instruction, session_id, kind, image, category, private, goal", task_id)
+            "RETURNING id, title, instruction, session_id, kind, image, category, private, goal, company_id", task_id)
         if row is None:  # cancelled while queued
             return
         kind = row["kind"]
@@ -93,8 +93,11 @@ async def _run(task_id: int, context: str) -> None:
         brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
         if kind == "owner":  # what JARVIS can already do for this, and how well it has worked (Blueprint §6.2 F: reuse first)
             asked = row["instruction"].split(quick.CONTEXT_MARK)[0]
+            if row["company_id"]:  # work for ONE company: its vault only, never another company's context (ADR-042)
+                from . import companies
+                brief += await companies.context_block(row["company_id"]) + "\n\n"
             brief += await capabilities.brief_for(asked)
-            brief += await episodes.brief_for(row["goal"] or asked)  # a repeated task starts from the last result
+            brief += await episodes.brief_for(row["goal"] or asked, row["company_id"])  # a repeated task starts from the last result
         if row["image"]:
             brief += ("Gambar terlampir adalah apa yang ditunjukkan pemilik (kamera/layar) saat memberi tugas ini.\n"
                       f"DESKRIPSI GAMBAR (oleh agen utama, karena model worker mungkin tidak bisa melihat): "

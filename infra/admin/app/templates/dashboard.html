@@ -383,6 +383,66 @@
   {% else %}<p class="hint">Belum ada login tersimpan.</p>{% endfor %}
 </section>
 
+{% elif tab == 'companies' %}
+<section class="card">
+  <h2>Company Federation</h2>
+  <p class="hint">Jarvis-GM mengarahkan tim tiap perusahaan (Hermes-DGM) dengan konteks perusahaan itu saja. Data antar perusahaan
+    dipisah di database (row-level security). Arahan yang mengeluarkan uang, mempublikasikan, atau mengirim pesan ke pihak luar
+    selalu menunggu persetujuanmu. <strong>Kontrak API Hermes-DGM BELUM DIVERIFIKASI</strong>: selama belum kamu konfirmasi,
+    perusahaan memakai Hermes-DGM tiruan.</p>
+  <div class="row">{% for c in companies or [] %}<a class="pill {{ 'completed' if c.id == chosen else '' }}" href="/?tab=companies&c={{ c.id }}">{{ c.name }}{% if not c.active %} (nonaktif){% endif %}</a> {% endfor %}</div>
+  <form method="post" action="/companies" class="inline"><input name="name" placeholder="Nama perusahaan, mis. PT Renature" required>
+    <input name="aliases" placeholder="nama lain, pisahkan koma"><button type="submit">Tambah perusahaan</button></form>
+</section>
+{% if detail %}{% set c = detail.company %}
+<section class="card">
+  <h2>{{ c.name }} <small>({{ c.id }})</small></h2>
+  <form method="post" action="/companies/{{ c.id }}/config">
+    <label>Nama lain <input name="aliases" value="{{ c.aliases | join(', ') }}"></label>
+    <label>Adaptor <select name="adapter"><option value="mock" {{ 'selected' if c.adapter == 'mock' }}>tiruan (simulasi)</option>
+      <option value="http" {{ 'selected' if c.adapter == 'http' }}>REST Hermes-DGM</option></select></label>
+    <label>Alamat Hermes-DGM <input name="dgm_url" value="{{ c.dgm_url or '' }}" placeholder="https://…"></label>
+    <label>Token Hermes-DGM <input name="dgm_token" type="password" placeholder="{{ 'terisi — isi untuk mengganti' if c.has_dgm_token else 'kosong' }}"></label>
+    <label><input type="checkbox" name="contract_verified" {{ 'checked' if c.contract_verified }}> Kontrak API sudah kucocokkan dengan dokumentasi Hermes-DGM</label>
+    <label>Batas waktu balasan (detik) <input name="callback_timeout_s" type="number" value="{{ c.callback_timeout_s }}"></label>
+    <label>Kirim ulang maksimal <input name="max_retries" type="number" value="{{ c.max_retries }}"></label>
+    <label>Anggaran bulanan tanpa persetujuan (USD) <input name="budget_usd_month" value="{{ c.budget_usd_month if c.budget_usd_month is not none else '' }}"></label>
+    <label><input type="checkbox" name="active" {{ 'checked' if c.active }}> Aktif</label>
+    <button type="submit">Simpan</button>
+  </form>
+  <form method="post" action="/companies/{{ c.id }}/secret" class="inline"
+        onsubmit="return confirm('Rahasia lama tidak berlaku lagi. Lanjut?')"><button type="submit">Buat rahasia callback baru</button></form>
+</section>
+<section class="card">
+  <h2>Company Vault</h2>
+  {% for e in detail.vault %}<div class="item"><span class="pill">{{ e.kind }}</span> <strong>{{ e.title }}</strong>
+    {% if e.data %}<small>{{ e.data | tojson }}</small>{% endif %}{% if e.body %}<br><small>{{ e.body[:300] }}</small>{% endif %}
+    <form method="post" action="/companies/{{ c.id }}/vault/{{ e.id }}/delete" class="inline"><button class="danger" type="submit">Hapus</button></form></div>
+  {% else %}<p class="hint">Masih kosong.</p>{% endfor %}
+  <form method="post" action="/companies/{{ c.id }}/vault">
+    <select name="kind">{% for k in vault_kinds %}<option value="{{ k }}">{{ k }}</option>{% endfor %}</select>
+    <input name="title" placeholder="Judul" required> <input name="body" placeholder="Isi">
+    <input name="metric" placeholder="metrik (KPI/kas)"> <input name="value" placeholder="nilai"> <input name="unit" placeholder="satuan">
+    <input name="period" placeholder="periode"> <input name="target" placeholder="target"> <button type="submit">Simpan</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Arahan ke Hermes-DGM</h2>
+  <form method="post" action="/companies/{{ c.id }}/directives">
+    <select name="action">{% for a, ext in actions.items() %}<option value="{{ a }}">{{ a }}{{ ' (perlu persetujuan)' if ext }}</option>{% endfor %}</select>
+    <input name="instruction" placeholder="Arahan lengkap untuk tim" required size="60">
+    <input name="budget_usd" placeholder="anggaran USD"> <input name="deadline_hours" placeholder="tenggat (jam)"> <button type="submit">Kirim</button>
+  </form>
+  {% for d in detail.directives %}<div class="item"><span class="pill {{ 'completed' if d.status == 'completed' else ('rejected' if d.status in ('failed','timed_out','rejected','cancelled') else 'awaiting_approval') }}">{{ d.status }}</span>
+    <strong>#{{ d.id }} {{ d.action }}</strong> <small>{{ d.created_at[:16]|replace('T',' ') }} · kirim {{ d.attempts }}×</small><br><small>{{ d.instruction[:200] }}</small>
+    {% if d.callback and d.callback.result %}<br><small>Hasil: {{ d.callback.result[:300] }}</small>{% endif %}
+    {% if d.error %}<br><small class="alert error">{{ d.error }}</small>{% endif %}
+    {% if d.status in ('queued','sent','acknowledged','awaiting_owner','awaiting_owner_result') %}
+    <form method="post" action="/companies/{{ c.id }}/directives/{{ d.id }}/cancel" class="inline"><button class="danger" type="submit">Batalkan</button></form>{% endif %}</div>
+  {% else %}<p class="hint">Belum ada arahan.</p>{% endfor %}
+  {% if detail.decisions %}<h3>Decision Vault</h3>{% for x in detail.decisions %}<div class="item"><span class="pill">{{ x.kind }}</span> {{ x.text }}</div>{% endfor %}{% endif %}
+</section>
+{% endif %}
 {% elif tab == 'docs' %}
 <section class="card">
   <h2>Dokumen buatan JARVIS</h2>

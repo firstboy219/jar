@@ -332,6 +332,39 @@ async def goals_list() -> list[dict]:
             for g in await goals.list_("active")]
 
 
+async def _task_company(task_id: int) -> str | None:
+    from . import db
+    return await db.pool().fetchval("SELECT company_id FROM tasks WHERE id = $1 AND status = 'running'", task_id)
+
+
+@mcp.tool()
+async def company_context(task_id: int, query: str = "") -> dict:
+    """For a task done for a company: that company's Company Vault (constraints, KPIs, cash flow, pivots, findings,
+    decisions) and, with `query`, the entries that match. Only the task's own company — never another one."""
+    from . import companies
+    cid = await _task_company(task_id)
+    if not cid:
+        return {"error": "tugas ini bukan tugas perusahaan (atau sudah selesai)"}
+    out = {"company_id": cid, "context": await companies.context_block(cid)}
+    if query:
+        out["matches"] = [{"kind": h["kind"], "title": h["title"], "body": h["body"][:400], "data": h["data"]}
+                          for h in await companies.search(cid, query)]
+    return json.loads(json.dumps(out, default=str))
+
+
+@mcp.tool()
+async def decision_record(task_id: int, kind: str, text: str, project: str = "") -> dict:
+    """Record a decision found while working: core_constraint | correction_pivot | validated_finding | tech_preference.
+    For a company task it goes to that company's Decision Vault; otherwise give `project` (its name)."""
+    from . import companies
+    cid = await _task_company(task_id)
+    try:
+        d = await companies.decision_add("company" if cid else "project", cid or project, kind, text, ACTOR)
+    except companies.CompanyError as e:
+        return {"error": str(e)}
+    return {"recorded": d["id"]}
+
+
 @mcp.tool()
 async def capability_search(query: str, limit: int = 5) -> dict:
     """What JARVIS can already do for this (skills, workers, tools), found by meaning, with how often each worked.
