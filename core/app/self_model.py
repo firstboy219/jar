@@ -42,7 +42,8 @@ async def describe(full: bool = False) -> str:
                     "keyakinan dan bisa membedakan JUMLAH pembicara",
         "groq": "HP memotong ucapan (VAD) dan mengirimnya ke server; server menyalin dengan Whisper large-v3-turbo di Groq",
         "whisper": "HP memotong ucapan (VAD) dan mengirimnya ke server; server menyalin dengan Whisper LOKAL (tidak keluar server)",
-    }[engine]
+        "openrouter": "HP memotong ucapan (VAD) dan mengirimnya ke server; server menyalin dengan model transkripsi pilihan pemilik di OpenRouter",
+    }.get(engine, f"mesin pengenal suara '{engine}'")  # a new engine must never break every chat turn
     lines = [
         "Kamu JARVIS, asisten pribadi pemilik, berjalan di server pemilik (vis1.cosger.online) + aplikasi Android-nya.",
         f"- Pendengaran: {hearing}. Kosakata khusus: {', '.join(stt['keywords'][:12]) or '-'}. Mode mute/unmute. "

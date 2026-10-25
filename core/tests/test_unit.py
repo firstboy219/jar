@@ -1124,3 +1124,17 @@ def test_selfdev_policy_protects_canvas_isolation_and_gestures():
         assert not p.judge([{"file": f, "added": 1, "deleted": 0}], "", [], 2)["ok"]
     v = p.judge([{"file": "core/app/web/canvas/app.js", "added": 1, "deleted": 0}], "", [], 1)
     assert v["ok"] and v["display_files"] == ["core/app/web/canvas/app.js"]           # the viewer is display (T2 locked beyond T1)
+
+
+def test_self_model_describes_every_stt_engine(monkeypatch):
+    # Regression: choosing the OpenRouter STT engine (Fase 3) raised KeyError in describe() and broke every chat turn.
+    import asyncio
+    from app import composition, gateway, self_model
+    monkeypatch.setattr(self_model, "stt_config", lambda: asyncio.sleep(0, {"model": "nova-3", "keywords": []}))
+    monkeypatch.setattr(gateway, "categories", lambda: asyncio.sleep(0, {}))
+    monkeypatch.setattr(self_model.hub, "clients", lambda: [])
+    monkeypatch.setattr(self_model, "lessons", lambda: asyncio.sleep(0, []))
+    for engine in list(composition.STT_ENGINES) + ["engine-baru"]:
+        monkeypatch.setattr(composition, "stt_engine", lambda e=engine: asyncio.sleep(0, e))
+        text = asyncio.run(self_model.describe())
+        assert "Pendengaran:" in text
