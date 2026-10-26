@@ -136,6 +136,26 @@ if env("MCP_TOKEN"):
                          "headers": {"Authorization": "Bearer " + env("MCP_TOKEN")}}
 cfg["mcp_servers"] = servers
 
+# --- Fase 2 spike (ADR-043): a second, isolated Hermes (container jarvis-spike-hermes, started by infra/spike/spike.sh). The same agent
+# loop, none of JARVIS' reach: model 'jarvis-spike' with a spike-only gateway key, file tools on its workspace
+# only, no JARVIS tools (MCP), no shared memory, no schedules. Never set on the real jarvis-brain.
+if env("JARVIS_SPIKE") == "1":
+    providers["jarvis"].update({"key_env": "SPIKE_GATEWAY_KEY", "default_model": "jarvis-spike"})
+    providers["jarvis"].pop("stale_timeout_seconds", None)
+    cfg["model"]["default"] = "jarvis-spike"
+    extra["model_routes"] = {"jarvis-spike": {"model": "jarvis-spike", "provider": "jarvis", "base_url": GATEWAY}}
+    delegation.update({"model": "jarvis-spike", "max_concurrent_children": 1})
+    cron["allow_agent_scheduling"] = False
+    for task, entry in aux.items():
+        if isinstance(entry, dict) and entry.get("provider") == "jarvis":
+            entry["model"] = "jarvis-spike"
+    pt["api_server"] = ["file", "code_execution", "todo"]
+    agent["max_turns"] = 60  # same cap as OpenJarvis in the spike
+    mem.update({"memory_enabled": False, "user_profile_enabled": False})
+    mem.pop("provider", None)
+    plugins["enabled"] = [p for p in plugins["enabled"] if p != "jarvis-memory"]
+    servers.pop("jarvis", None)
+
 with open(path, "w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 print(f"[jarvis] gateway={GATEWAY} routes={len(extra['model_routes'])} memory={mem['provider']} mcp={list(servers)} "

@@ -1,0 +1,35 @@
+[
+  {
+    "id": "p1",
+    "title": "Obrolan gagal setelah mesin pengenal suara OpenRouter dipilih",
+    "kind": "patch",
+    "snapshot": "2f300ca",
+    "reference": "88e8cce",
+    "hidden": "hidden/p1_test.py",
+    "brief": "Masalah nyata dari error_log JARVIS (25 Okt 2026, 6 kali, setiap pesan pemilik): 'chat turn failed'. Potongan traceback:\n  File \"/srv/app/assistant.py\", line 618, in respond\n    messages = [{\"role\": \"system\", \"content\": SYSTEM + \"\\n\\nTENTANG DIRIMU:\\n\" + await self_model.describe()},\n  File \"/srv/app/self_model.py\", line 40, in describe\n    hearing = {\nKeyError: 'openrouter'\nIni mulai terjadi setelah pemilik memilih mesin pengenal suara OpenRouter. Kode jarvis-core (Python, FastAPI) ada di {dir}/core (core/app = aplikasi, core/tests = tes). Temukan akar masalahnya dan perbaiki langsung di berkas {dir}/core/app, sehingga mesin pengenal suara apa pun — termasuk yang ditambahkan nanti — tidak pernah lagi membuat obrolan gagal, dan deskripsi diri JARVIS tetap benar untuk mesin OpenRouter.",
+    "done": "perbaikan ada di berkas kode di {dir}/core/app dan {dir}/SUMMARY.md menjelaskan akar masalah serta perubahanmu",
+    "reference_files": [
+      "core/app/self_model.py"
+    ]
+  },
+  {
+    "id": "p2",
+    "title": "Tugas pemilik gagal karena Hermes penuh (429) setelah deploy",
+    "kind": "patch",
+    "snapshot": "a4c8a10",
+    "reference": "dc0dfb1",
+    "hidden": "hidden/p2_test.py",
+    "brief": "Masalah nyata dari error_log JARVIS (23 Okt 2026): beberapa tugas pemilik gagal total ('worker 162 failed', 'worker 165 failed', 'worker 166 failed') dengan:\n  File \"/srv/app/workers.py\", line 124, in _run\n    async for ev in events:\n  File \"/srv/app/hermes.py\", line 103, in stream\n    raise HermesError(f\"Hermes HTTP {r.status_code}: {r.text[:300]}\")\napp.hermes.HermesError: Hermes HTTP 429: {\"error\": {\"message\": \"Too many concurrent runs (max 10)\", \"type\": \"rate_limit_error\"}}\nPengamatan: kejadiannya selalu tak lama setelah jarvis-core di-restart (deploy), padahal pemilik tidak sedang menjalankan 10 tugas. Hermes (otak kerja) adalah layanan terpisah yang TIDAK ikut restart. Kode jarvis-core ada di {dir}/core (core/app/workers.py menjalankan tugas, core/app/hermes.py adalah klien Hermes). Temukan SEMUA akar masalahnya dan perbaiki langsung di berkas {dir}/core/app, sehingga tugas pemilik tidak pernah gagal hanya karena Hermes sedang penuh, dan restart tidak membuat run Hermes menumpuk.",
+    "done": "perbaikan ada di berkas kode di {dir}/core/app dan {dir}/SUMMARY.md menjelaskan setiap akar masalah serta perubahanmu",
+    "reference_files": [
+      "core/app/workers.py"
+    ]
+  },
+  {
+    "id": "p3",
+    "title": "Tinjauan efisiensi mingguan dari log pemakaian AI",
+    "kind": "report",
+    "brief": "Tinjauan efisiensi mingguan JARVIS. Berkas {dir}/usage.csv berisi log pemakaian model AI 7 hari terakhir, satu baris per panggilan model (kolom: at, category, caller, provider, model, prompt_tokens, completion_tokens, cost_usd, latency_ms, ok, fallback_reason). Hitung dari data (jangan menebak) lalu tulis {dir}/report.json berupa objek JSON dengan kunci:\n  most_expensive_model: model dengan total cost_usd tertinggi;\n  slowest_category: kategori dengan MEDIAN latency_ms tertinggi, hanya di antara kategori yang punya minimal 5 panggilan dengan latency_ms terisi;\n  most_failing_model: model dengan rasio ok=false tertinggi, hanya di antara model dengan minimal 5 panggilan;\n  recommendation: minimal dua kalimat saran konkret untuk menurunkan biaya atau latensi, berdasarkan angkanya.\nNilai model dan kategori ditulis persis seperti di CSV.",
+    "done": "{dir}/report.json ada dan berisi keempat kunci"
+  }
+]

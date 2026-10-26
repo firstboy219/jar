@@ -68,6 +68,7 @@ class Route:
 # When every model the owner chose for a category fails, a cheap cloud model answers BEFORE the slow local one
 # (a dead pick used to mean minutes on the CPU for every message). The owner can change it (composition:safety_model).
 SAFETY_MODEL = "deepseek/deepseek-v4-flash"
+STRICT = {"spike"}  # categories without the safety model, the budget reordering or the local fallback
 BAD_FOR_S = 600  # a model OpenRouter refuses outright (400/403/404/422) is skipped for 10 minutes
 _bad: dict[tuple[str, str], float] = {}
 _cache: dict = {"at": 0.0, "providers": {}, "categories": {}, "safety": SAFETY_MODEL}
@@ -170,6 +171,12 @@ async def plan(category: str, *, caller: str = "core", private: bool = False, wo
             continue
         if route not in routes and not _is_bad(route):
             routes.append(route)
+    if category in STRICT:  # the spike (ADR-043): only the model chosen for it — a failure is a measured failure
+        if (await budget.state(force=True))["categories"].get(category, {}).get("level", 0) >= 100:  # fresh, not the 60 s cache
+            raise GatewayError(f"anggaran kategori {category} habis")
+        if not routes:
+            raise GatewayError(f"model kategori {category} tidak bisa dipakai")
+        return routes
     if not private:
         routes = await _arrange(category, routes, cat, provs, caller)
     net = _safety_route(provs, caller, category, private)

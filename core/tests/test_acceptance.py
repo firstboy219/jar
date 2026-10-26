@@ -903,3 +903,48 @@ async def test_v4_f4_viewer_is_served_safely_and_the_api_needs_the_owner(pool, m
         assert (await c.patch(f"/api/v1/canvas/cards/{card['id']}", json={"x": 1, "y": 2, "z": 3}, headers=h)).json()["z"] == 3
         view = (await c.get(f"/api/v1/canvases/{opened['id']}", headers=g)).json()      # anyone paired may look
         assert view["cards"][0]["title"] == "Desain logo toko" and view["constellations"]
+
+
+async def test_v4_f2_spike_keys_reach_only_the_spike_model_and_stop_at_its_budget(pool, monkeypatch):
+    import hashlib
+
+    import httpx
+    from app import billing, config, main, spike
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(billing, "_last_notified", 0.0)
+    monkeypatch.setattr(config.settings, "llm_gateway_key", "hermes-key")
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["model"])
+        return httpx.Response(200, content=_sse("ok", cost=0.3), headers={"content-type": "text/event-stream"})
+    # what migration 025 seeds (the test fixture points every category at the local model)
+    await pool.execute("""UPDATE llm_categories SET budget_usd = 1.00,
+                          routes = '[{"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash"}]' WHERE name = 'spike'""")
+    _fake_providers(monkeypatch, handler)
+    for rt, key in (("hermes", "k-h"), ("openjarvis", "k-oj")):
+        await pool.execute("INSERT INTO settings_kv (key, value) VALUES ($1, to_jsonb($2::text)) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                           f"spike:key:{rt}", hashlib.sha256(key.encode()).hexdigest())
+    spike.forget_keys()
+    body = {"model": "jarvis-spike", "stream": True, "messages": [{"role": "user", "content": "halo"}]}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.post("/llm/v1/chat/completions", json=body, headers={"Authorization": "Bearer salah"})
+        assert r.status_code == 401
+        r = await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-web"}, headers={"Authorization": "Bearer k-oj"})
+        assert r.status_code == 403                                            # a spike key is good for the spike only
+        r = await c.get("/llm/v1/models", headers={"Authorization": "Bearer k-oj"})
+        assert [m["id"] for m in r.json()["data"]] == ["jarvis-spike"]
+        r = await c.post("/llm/v1/chat/completions", json=body, headers={"Authorization": "Bearer k-oj"})
+        assert r.status_code == 200 and "ok" in r.text
+        assert seen == ["deepseek/deepseek-v4.1-flash"]                      # the spike model, nothing else in front
+        row = await pool.fetchrow("SELECT caller, category FROM llm_usage ORDER BY id DESC LIMIT 1")
+        assert (row["caller"], row["category"]) == ("spike-openjarvis", "spike")   # cost is attributed per runtime
+        # past the $1 cap: no safety model, no local fallback — the call is refused
+        await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, cost_usd, ok) VALUES ('spike', 'spike-hermes', 'openrouter', 'x', 1.5, true)")
+        r = await c.post("/llm/v1/chat/completions", json=body, headers={"Authorization": "Bearer k-h"})
+        assert r.status_code == 502 and "anggaran" in r.text
+        assert seen == ["deepseek/deepseek-v4.1-flash"]
+        # the real Hermes key still works for everything
+        r = await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-web"}, headers={"Authorization": "Bearer hermes-key"})
+        assert r.status_code == 200
+    spike.forget_keys()

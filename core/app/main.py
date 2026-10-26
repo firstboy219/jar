@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, spike, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
@@ -708,36 +708,45 @@ async def composition_test(t: CompositionTest, device: dict = Depends(owner_devi
 
 # ---------- LLM gateway for Hermes (internal) ----------
 
-def _gateway_auth(request: Request) -> None:
+async def _gateway_auth(request: Request) -> str:
+    """The caller: 'hermes' (LLM_GATEWAY_KEY) or 'spike-<runtime>' (a spike key, category 'spike' only, ADR-043)."""
     _internal_only(request)
     key = _bearer(request.headers.get("authorization")) or ""
-    if not settings.llm_gateway_key or not hmac.compare_digest(key, settings.llm_gateway_key):
-        raise HTTPException(401, "invalid gateway key")
+    if settings.llm_gateway_key and hmac.compare_digest(key, settings.llm_gateway_key):
+        return "hermes"
+    if caller := await spike.caller_for(key):
+        return caller
+    raise HTTPException(401, "invalid gateway key")
 
 
 @app.get("/llm/v1/models")
 async def llm_models(request: Request):
-    _gateway_auth(request)
-    return {"object": "list", "data": await gateway.model_list()}
+    caller = await _gateway_auth(request)
+    models = await gateway.model_list()
+    if caller != "hermes":
+        models = [m for m in models if gateway.category_of_alias(str(m.get("id") or "")) == spike.CATEGORY]
+    return {"object": "list", "data": models}
 
 
 @app.post("/llm/v1/chat/completions")
 async def llm_chat(request: Request, body: dict = Body(...)):
-    _gateway_auth(request)
+    caller = await _gateway_auth(request)
     category = gateway.category_of_alias(str(body.get("model") or ""))
     if category not in await gateway.categories():
         raise HTTPException(404, f"model tidak dikenal: {body.get('model')}")
+    if caller != "hermes" and category != spike.CATEGORY:
+        raise HTTPException(403, "kunci uji hanya untuk kategori spike")
     session = request.headers.get("x-session-id") or (str(body.get("user")) if body.get("user") else None)
     private = category == "privat"
     if not body.get("stream"):
         try:
-            data = await gateway.complete(category, body, caller="hermes", session_id=session, private=private, worker=True)
+            data = await gateway.complete(category, body, caller=caller, session_id=session, private=private, worker=True)
         except gateway.GatewayError as e:
             return JSONResponse({"error": {"message": str(e)[:1000], "type": "gateway_error"}}, status_code=502)
         data.pop("jarvis_route", None)
         return data
 
-    agen = gateway.stream(category, body, caller="hermes", session_id=session, private=private, worker=True)
+    agen = gateway.stream(category, body, caller=caller, session_id=session, private=private, worker=True)
     try:  # fail over before the first byte: only commit to a 200 stream once a route has answered
         first = await agen.__anext__()
     except gateway.GatewayError as e:
