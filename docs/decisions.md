@@ -795,3 +795,11 @@ test task ("rekonstruksi / peningkatan performa diri", K7) and capped the spike 
   OpenJarvis passes only with ≥ 2 of 4 metrics better AND zero violations. 3 attempts × 3 problems × 2 runtimes, sequential,
   interleaved (who goes first alternates); a run never starts when the month's `spike` spend is ≥ $0.95.
 - `spike.py`, `infra/spike/`, `infra/openjarvis/` are in the protected zone (JARVIS must not grade itself).
+- **Batch 1 (spike1, 2026-10-26) is void as a comparison; recorded as is.** 6 runs, $0.75 of the $1. Hermes lost every run to
+  the harness, not its ability: `HERMES_WRITE_SAFE_ROOT` pointed at its own data dir (writes to /work refused — p3's numbers
+  were right but could not be saved), code execution waited for an approval nobody could give, and p1 started before the
+  container was ready (0 s, $0). Fixed (`HERMES_WRITE_SAFE_ROOT=/work`, approvals off inside the spike, readiness wait;
+  `tool_search` only loads schemas and is allowed — its "violation" in p2 was a false alarm). A real finding about OpenJarvis
+  with this model: all three runs ended after 24–41 s with the model's tool calls as raw text (`<｜DSML｜ ... >`) that
+  OpenJarvis did not execute (it does send native `tools`; Hermes got structured calls from the same model), so OpenJarvis
+  scored 0 on p1, p2 and p3 — but cheaper and ~10× faster per attempt ($0.02–0.05, 30–40 s vs $0.12–0.34, 5–17 min).

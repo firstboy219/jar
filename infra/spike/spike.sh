@@ -18,7 +18,7 @@ NET=jarvis_jarvis-network
 SEC=(--security-opt no-new-privileges:true --memory 2g --pids-limit 512)
 harness() {
   docker run --rm --network $NET --user 1000:1000 -e PYTHONPATH=/srv \
-    -e DATABASE_URL="postgresql://jarvis_core:$(grep -E '^JARVIS_DB_PASSWORD=' .env | cut -d= -f2-)@jarvis-db/jarvis" \
+    -e DATABASE_URL="postgresql://jarvis_core:$(grep -E '^JARVIS_DB_PASSWORD=' "${JARVIS_ENV:-/home/ubuntu/my-project/infra/.env}" | cut -d= -f2-)@jarvis-db/jarvis" \
     -v "$(pwd)/spike:/harness:ro" -v "$AD:/spike" --entrypoint python jarvis-core:local /harness/harness.py "$@"
 }
 up() {
@@ -27,12 +27,17 @@ up() {
   # Hermes-Brain's image and init script with JARVIS_SPIKE=1: no JARVIS tools (MCP), no shared memory, file + code only
   docker run -d --name jarvis-spike-hermes --network $NET "${SEC[@]}" --cap-drop NET_RAW --cap-drop MKNOD \
     --env-file $D/hermes.env -e HERMES_UID=1000 -e HERMES_GID=1000 -e API_SERVER_HOST=0.0.0.0 -e JARVIS_SPIKE=1 \
-    -e HERMES_PROFILE=full -e TZ=Asia/Jakarta \
+    -e HERMES_PROFILE=full -e TZ=Asia/Jakarta -e HERMES_WRITE_SAFE_ROOT=/work \
     -v "$AD/hermes-home:/opt/data" -v "$(pwd)/hermes/03-jarvis-config:/etc/cont-init.d/03-jarvis-config:ro" \
     -v "$(pwd)/hermes/SOUL.md:/opt/data/SOUL.md:ro" -v "$AD/work:/work" \
     nousresearch/hermes-agent:v0.22.2 gateway run >/dev/null
   docker run -d --name jarvis-spike-openjarvis --network $NET "${SEC[@]}" --env-file $D/openjarvis.env \
     -v "$AD/openjarvis-home:/home/oj" -v "$AD/work:/work" jarvis-openjarvis:40092da >/dev/null
+  for i in $(seq 1 60); do  # both must answer before a run starts (a run against a Hermes still booting is a harness failure, not a result)
+    docker exec jarvis-spike-hermes /opt/hermes/.venv/bin/python -c 'import urllib.request as u; u.urlopen("http://127.0.0.1:8642/health", timeout=3)' >/dev/null 2>&1 && \
+      docker logs jarvis-spike-openjarvis 2>&1 | grep -q "startup complete" && break
+    sleep 2
+  done
   echo "spike up: jarvis-spike-hermes, jarvis-spike-openjarvis"
 }
 psql_() { docker exec -i jarvis-db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d jarvis -Atq' "$@"; }

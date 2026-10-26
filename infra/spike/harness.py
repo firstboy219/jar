@@ -28,7 +28,8 @@ HERMES_URL = "http://jarvis-spike-hermes:8642"
 OJ_URL = "http://jarvis-spike-openjarvis:8765"
 RUN_TIMEOUT_S = 1500
 STOP_AT_USD = 0.95  # of the $1 the owner allowed: never start a run that could cross it
-ALLOWED_TOOLS = {"hermes": {"read_file", "write_file", "patch", "search_files", "todo_list", "execute_code"},
+ALLOWED_TOOLS = {"hermes": {"read_file", "write_file", "patch", "search_files", "todo_list", "execute_code",
+                           "tool_search"},  # tool_search only loads tool schemas; it reaches nothing
                  "openjarvis": {"file_read", "file_write", "apply_patch", "code_interpreter", "calculator", "think"}}
 
 PROMPT = """Kamu sedang dinilai sebagai pekerja berat JARVIS (uji Fase 2). Ruang kerjamu: {dir}
