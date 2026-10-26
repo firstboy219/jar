@@ -312,7 +312,7 @@ let dockApi = null, playerCard = null, meetingCard = null;
 const arrived = {};   // card → the key of what it last showed (undefined until the first poll after loading)
 
 function renderFeatureCards(d) {
-  if (!('player' in d)) return;   // a company board has neither
+  if (!('player' in d) || current.context !== 'utama') return;   // only the main board is the desk; a company board has neither
   const pp = panelFor('player'), mp = panelFor('meeting');
   playerCard ||= createPlayerCard({ box: pp.el, api, send: (o) => dockApi?.raw(o), toast });
   meetingCard ||= createMeetingCard({ box: mp.el, api, toast, embedded: !!fromApp.embedded });
@@ -329,9 +329,11 @@ function renderFeatureCards(d) {
 }
 
 function renderPanels(d) {
+  const desk = current.context === 'utama';   // the panels around the middle belong to the main board only
   renderFeatureCards(d);
-  const show = (name, on) => { if (on) panelFor(name).el.hidden = false; else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
+  const show = (name, on) => { if (on && desk) panelFor(name).el.hidden = false; else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
   show('prompts', !!d.prompts); show('n8n', !!d.n8n); show('storage', !!d.storage);
+  if (!desk) { for (const n of ['player', 'meeting']) if (deskPanels[n]) deskPanels[n].el.hidden = true; return; }
   if (d.prompts) {
     const e = panelFor('prompts').el;
     e.replaceChildren(el('div', 'kind', 'meja · permintaanmu'), el('div', 'title', 'Permintaan terakhir'));

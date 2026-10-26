@@ -166,7 +166,9 @@ export function createMeetingCard({ box, api, toast, embedded }) {
       const ok = check('Semua peserta sudah tahu dan setuju rapat ini direkam.');
       const go = button('● Mulai rekam', 'mgo', () => start({ title: title.i.value, participants: who.i.value, agenda: agenda.i.value, confidential: conf.c.checked }));
       go.disabled = true; ok.c.addEventListener('change', () => { go.disabled = !ok.c.checked; });
-      body.append(title.w, who.w, agenda.w, conf.w, ok.w, go, el('div', 'snippet', embedded ? 'HP yang merekam (mikrofon aplikasi).' : 'Browser ini yang merekam (mikrofon komputer).'));
+      const cancel = button('Batal', 'pbtn', async () => { try { await api.req('DELETE', '/api/v1/meetings/want'); dismissed.add(key); box.hidden = true; } catch (err) { toast(err.message, true); } });
+      body.append(title.w, who.w, agenda.w, conf.w, ok.w, el('div', 'pctl'), el('div', 'snippet', embedded ? 'HP yang merekam (mikrofon aplikasi).' : 'Browser ini yang merekam (mikrofon komputer).'));
+      body.children[5].append(go, cancel);
       if (busy) { go.disabled = true; go.textContent = 'Menunggu HP mulai merekam…'; }
     } else if (m.state === 'recording') {
       head.textContent = m.title || 'Rapat';
