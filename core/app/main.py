@@ -700,6 +700,13 @@ _CANVAS_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https:/
                "media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-ancestors 'none'")
 
 
+@app.get("/")
+async def site_root():
+    """The desk is the main page (ADR-052): the site's front door opens the canvas."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/canvas/")
+
+
 @app.get("/canvas")
 async def canvas_root():
     from fastapi.responses import RedirectResponse
@@ -713,7 +720,9 @@ async def canvas_static(path: str):
     if not str(target).startswith(str(_CANVAS_DIR.resolve())) or not target.is_file():
         raise HTTPException(404)
     return FileResponse(target, headers={"Content-Security-Policy": _CANVAS_CSP, "X-Content-Type-Options": "nosniff",
-                                         "Cache-Control": "no-cache"})
+                                         "Cache-Control": "no-cache",
+                                         # the desk's own microphone, camera and screen sharing (dock.js), for this origin only
+                                         "Permissions-Policy": "camera=(self), microphone=(self), display-capture=(self), geolocation=()"})
 
 
 class CompositionTest(BaseModel):

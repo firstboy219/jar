@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -69,6 +70,7 @@ import online.cosger.jarvis.ui.theme.JarvisColors
 import online.cosger.jarvis.ui.theme.JarvisTheme
 
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
+    Desk("desk", "Meja", Icons.Filled.Public),
     Talk("talk", "Bicara", Icons.Filled.GraphicEq),
     Chat("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
     Tasks("tasks", "Tugas", Icons.AutoMirrored.Filled.FactCheck),
@@ -166,10 +168,11 @@ class MainActivity : FragmentActivity() {
                 ) { padding ->
                     NavHost(
                         nav,
-                        startDestination = if (settings.isConfigured) Tab.Talk.route else "console/app",
+                        startDestination = if (settings.isConfigured) Tab.Desk.route else "console/app",
                         modifier = Modifier.padding(padding),
                     ) {
                         val back: () -> Unit = { nav.popBackStack() }
+                        composable(Tab.Desk.route) { GalaxyScreen(vm, back, asTab = true) }
                         composable(Tab.Talk.route) {
                             TalkScreen(vm, onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
                                 onOpenBackground = { nav.navigate("console/${ConsoleRoute.Background.path}") })
