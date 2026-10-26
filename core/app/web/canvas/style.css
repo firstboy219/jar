@@ -272,7 +272,9 @@ body.taking .topbar, body.taking .toolrail, body.taking .zoombar, body.taking .m
 .tk-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
 .tk-canvas { background: #000; border: 2px solid #fbbf24; border-radius: 6px; touch-action: none; cursor: crosshair; max-width: 100%; max-height: 100%; }
 .tk-paste { display: flex; gap: 6px; padding: 6px 12px; padding-bottom: max(6px, env(safe-area-inset-bottom)); } .tk-paste input { flex: 1; }
-.tk-input { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; padding: 0; border: 0; }
+/* a real (if invisible) field near the top: Android only opens its keyboard for a field it can see, and 16px keeps iOS from zooming */
+.tk-input { position: fixed; left: 8px; top: 60px; width: 48px; height: 32px; opacity: .01; font-size: 16px; padding: 0; border: 0; color: transparent;
+  background: transparent; caret-color: transparent; z-index: 25001; pointer-events: none; }
 @media (max-width: 700px) { .tk-title { max-width: 100%; } .tk-bar button { padding: 5px 8px; font-size: 12px; } }
 
 /* feature cards on the desk: the player and the meeting recorder (ADR-054) */

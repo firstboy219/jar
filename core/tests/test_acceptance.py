@@ -1702,6 +1702,35 @@ async def test_v4_f12_the_owner_can_step_in_unasked_and_the_worker_stands_still_
     assert not (await live.snapshot("utama"))["stations"][0]["paused"]
 
 
+async def test_v4_f12_a_tap_on_a_field_in_the_page_opens_the_phones_keyboard(pool, monkeypatch):
+    import asyncio
+
+    from app import devices, live, main
+    await _station_env(pool, monkeypatch)
+    _, owner = await devices.create("HP pemilik", "test", scope="owner")
+    sent = []
+
+    async def send_input(task_id, context, ev):
+        sent.append(ev)
+        return True
+
+    async def focus_editable(task_id, context):
+        return sent[-1].get("x") == 0.5
+    monkeypatch.setattr(live, "send_input", send_input)
+    monkeypatch.setattr(live, "focus_editable", focus_editable)
+    sock = _FakeSocket()
+    srv = asyncio.create_task(main.canvas_live_ws(sock))
+    for m in ({"type": "auth", "token": owner}, {"type": "watch", "context": "utama"},
+              {"type": "input", "task": 7, "ev": {"t": "mouse", "k": "up", "x": 0.5, "y": 0.5, "b": "left", "f": 1}},
+              {"type": "input", "task": 7, "ev": {"t": "mouse", "k": "up", "x": 0.1, "y": 0.5, "b": "left", "f": 1}},
+              {"type": "input", "task": 7, "ev": {"t": "mouse", "k": "up", "x": 0.5, "y": 0.5, "b": "left"}}):
+        await sock.inbox.put(json.dumps(m))
+        await asyncio.sleep(0.05)
+    focus = [m for m in sock.out if m.get("what") == "focus"]
+    assert [m["editable"] for m in focus] == [True, False]          # a field → keyboard up; elsewhere → down; a mouse click never asks
+    srv.cancel()
+
+
 async def test_v4_f9_the_owner_can_take_the_wheel_of_a_workers_browser_and_hand_it_back(pool, monkeypatch):
     import asyncio
 
