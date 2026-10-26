@@ -95,7 +95,7 @@ import kotlin.math.roundToInt
 val LOCATION_PERMISSIONS = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
 
 @Composable
-fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}, onOpenBackground: () -> Unit = {}) {
+fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}, onOpenBackground: () -> Unit = {}, compact: Boolean = false) {
     val turn by vm.turn.collectAsStateWithLifecycle()
     val interim by vm.interim.collectAsStateWithLifecycle()
     val level by vm.micLevel.collectAsStateWithLifecycle()
@@ -172,13 +172,14 @@ fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}, onOpenBackgro
                 StageActions(vm.console, vm::stageEvent, vm::notify, mic == MicState.Hearing), Modifier.fillMaxSize(),
                 onNode = { card = it })
         },
-        background = {
+        compact = compact,
+        background = if (compact) null else ({
             // JARVIS' brain fills the whole home screen, behind everything; nodes light up as memories are used
             val workersBusy = board.workers.any { it.active }
             BrainView(brain, stage.pulses, orbPhase(turn, mic, speaking, workersBusy) != Phase.Idle, Modifier.fillMaxSize(),
                 onNode = { card = it }, captionAlignment = Alignment.TopCenter, captionPadding = PaddingValues(top = 46.dp),
                 dim = if (stage.panel != null || cameraOn) 0.45f else 1f, centerY = BRAIN_CENTER_Y, zoom = BRAIN_ZOOM)
-        },
+        }),
         involved = stage.involved.map { it.label },
         server = server,
         onServerTap = onOpenServer,
@@ -240,10 +241,12 @@ fun TalkContent(
     onRelieve: () -> Unit = {},
     onRetryTask: (Long) -> Unit = {},
     onCloseTask: (Long) -> Unit = {},
+    /** On the desk (Meja) the conversation is a sheet over the 3D canvas: no brain of its own, a small readiness ring instead. */
+    compact: Boolean = false,
 ) {
     val workers = board.workers.filter { it.active }
     val phase = orbPhase(turn, mic, speaking, workers.isNotEmpty())
-    Box(Modifier.fillMaxSize().background(JarvisColors.Background)) {
+    Box(Modifier.fillMaxSize().then(if (compact) Modifier else Modifier.background(JarvisColors.Background))) {
         background?.let {
             Box(Modifier.fillMaxSize()) { it() }
             // keep the conversation readable over the brain: darker towards the bottom
@@ -255,7 +258,7 @@ fun TalkContent(
             Modifier.fillMaxSize().padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera)
+            Header(connected, workers.size, sharing, onToggleShare, cameraOn, onToggleCamera, top = if (compact) 4.dp else 14.dp)
             server?.let { ServerStrip(it, onServerTap, onBackgroundTap, onRelieve) }
             if (sharing) ShareBanner(onToggleShare, onReply)
 
@@ -277,8 +280,13 @@ fun TalkContent(
                 Spacer(Modifier.height(8.dp))
             } else if (panelOpen && stageContent != null) {
                 // JARVIS opened something for this conversation: music, video, map, web, document, drafts
-                Box(Modifier.fillMaxWidth().height(400.dp).padding(top = 8.dp)) { stageContent() }
+                Box(Modifier.fillMaxWidth().height(if (compact) 300.dp else 400.dp).padding(top = 8.dp)) { stageContent() }
                 Spacer(Modifier.height(6.dp))
+            } else if (compact) {
+                Box(Modifier.fillMaxWidth().height(92.dp), contentAlignment = Alignment.Center) {
+                    ReadinessRing(mic, Modifier.size(84.dp))
+                    ThoughtOrb(phase, if (mic == MicState.Hearing) micLevel else 0f, if (workers.isNotEmpty()) 0.5f else 0f, Modifier.size(52.dp))
+                }
             } else {
                 Box(Modifier.fillMaxWidth().height(250.dp), contentAlignment = Alignment.Center) {
                     // Default: JARVIS' brain — its memories in 3D (full-screen background, or here when there is none);
@@ -440,8 +448,8 @@ private fun InvolvedMemories(labels: List<String>) {
 
 @Composable
 private fun Header(connected: Boolean, workers: Int, sharing: Boolean, onToggleShare: () -> Unit,
-                   cameraOn: Boolean, onToggleCamera: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                   cameraOn: Boolean, onToggleCamera: () -> Unit, top: androidx.compose.ui.unit.Dp = 14.dp) {
+    Row(Modifier.fillMaxWidth().padding(top = top), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(8.dp).clip(CircleShape).background(if (connected) JarvisColors.Green else JarvisColors.Amber))
         Spacer(Modifier.width(8.dp))
         Text("JARVIS", color = JarvisColors.Text, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
@@ -485,7 +493,7 @@ private fun ShareBanner(onStop: () -> Unit, onReply: () -> Unit) {
     }
 }
 
-private fun micColor(mic: MicState): Color = when (mic) {
+fun micColor(mic: MicState): Color = when (mic) {
     MicState.Muted -> JarvisColors.Muted
     MicState.Preparing -> JarvisColors.Amber
     MicState.Ready, MicState.Hearing -> JarvisColors.Green

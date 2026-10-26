@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.NoPhotography
@@ -41,6 +43,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -63,11 +66,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import online.cosger.jarvis.ui.JarvisViewModel
+import online.cosger.jarvis.ui.Phase
+import online.cosger.jarvis.ui.SpokenReport
+import online.cosger.jarvis.ui.screens.TalkScreen
+import online.cosger.jarvis.ui.screens.micColor
 import online.cosger.jarvis.ui.theme.JarvisColors
 
 /**
@@ -78,13 +86,22 @@ import online.cosger.jarvis.ui.theme.JarvisColors
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false) {
+fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false,
+                 onOpenServer: () -> Unit = {}, onOpenBackground: () -> Unit = {}) {
     val appSettings by vm.settings.collectAsState()
     val context = LocalContext.current
     val url = remember(appSettings.serverUrl, appSettings.deviceToken) { galaxyUrl(appSettings.serverUrl, appSettings.deviceToken) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var pendingCamera by remember { mutableStateOf<PermissionRequest?>(null) }
     var title by remember { mutableStateOf("Galaksi 3D") }
+    var talkOpen by remember { mutableStateOf(false) }
+    val stage by vm.stage.collectAsStateWithLifecycle()
+    val board by vm.board.collectAsStateWithLifecycle()
+    // what needs the owner's eyes comes to the front by itself: something JARVIS put on the screen, or a report not yet heard
+    val panelId = stage.panel?.id
+    val unheard = board.reports.count { it.state == SpokenReport.State.Unheard }
+    LaunchedEffect(panelId) { if (asTab && panelId != null) talkOpen = true }
+    LaunchedEffect(unheard) { if (asTab && unheard > 0) talkOpen = true }
 
     // the camera is only for the viewer's hand-gesture mode, only for our own origin, and only after the owner's Android consent
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -95,6 +112,7 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
     }
 
     BackHandler {
+        if (talkOpen) { talkOpen = false; return@BackHandler }
         val w = webView
         if (w != null && w.canGoBack()) w.goBack() else onBack()
     }
@@ -158,17 +176,27 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
             },
         )
     }
-    if (asTab) DeskMediaStrip(vm, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 44.dp))
+    if (asTab) {
+        // the whole former "Bicara" screen lives here now: a sheet over the canvas, opened from the strip
+        if (talkOpen) DeskTalkSheet(vm, { talkOpen = false }, onOpenServer, onOpenBackground, Modifier.align(Alignment.BottomCenter))
+        else {
+            DeskCaption(vm, { talkOpen = true }, Modifier.align(Alignment.TopCenter).padding(top = 104.dp, start = 16.dp, end = 16.dp))
+            DeskMediaStrip(vm, { talkOpen = true }, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 44.dp))
+        }
+    }
     }
 }
 
 /**
  * The desk's native tools (ADR-052): the phone's own microphone (with its on-phone voice detection and wake word), camera and screen sharing —
- * the same engine as the Bicara tab — as three buttons over the web page. The page itself shows only chat and the drafting tools here,
+ * the same engine that drove the old Bicara tab — as buttons over the web page, plus the Bicara sheet itself (TalkScreen, compact). The page shows only chat and the drafting tools here,
  * so nothing is captured twice.
  */
 @Composable
-private fun DeskMediaStrip(vm: JarvisViewModel, modifier: Modifier) {
+private fun DeskMediaStrip(vm: JarvisViewModel, onOpenTalk: () -> Unit, modifier: Modifier) {
+    val board by vm.board.collectAsStateWithLifecycle()
+    val busy = board.workers.count { it.active }
+    val waiting = board.openReports.size + board.stoppedWorkers.size
     val context = LocalContext.current
     val mic by vm.mic.collectAsStateWithLifecycle()
     val sharing by vm.screenSharing.collectAsStateWithLifecycle()
@@ -190,6 +218,9 @@ private fun DeskMediaStrip(vm: JarvisViewModel, modifier: Modifier) {
             CameraPreview(frontCamera, vm::setCameraFrameSource, Modifier.fillMaxSize())
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            StripButton(Icons.Filled.GraphicEq, "Bicara: percakapan, tugas, laporan, server", mic != MicState.Muted,
+                badge = if (waiting > 0) waiting.toString() else if (busy > 0) busy.toString() else null, alert = waiting > 0,
+                onClick = onOpenTalk)
             StripButton(if (mic == MicState.Muted) Icons.Filled.MicOff else Icons.Filled.Mic, "Mikrofon", mic != MicState.Muted) {
                 if (hasMic) vm.toggleMute()
                 else askMic.launch(buildList {
@@ -213,12 +244,57 @@ private fun DeskMediaStrip(vm: JarvisViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun StripButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, on: Boolean, onClick: () -> Unit) {
+private fun StripButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, on: Boolean,
+                        badge: String? = null, alert: Boolean = false, onClick: () -> Unit) {
+    Box {
     Box(Modifier.size(46.dp).clip(CircleShape).background(if (on) JarvisColors.Cyan.copy(alpha = 0.28f) else Color(0xCC0B1226))
         .border(1.5.dp, if (on) JarvisColors.Cyan else JarvisColors.Muted.copy(alpha = 0.5f), CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center) {
         Icon(icon, label, tint = if (on) JarvisColors.Cyan else JarvisColors.Text, modifier = Modifier.size(22.dp))
     }
+    badge?.let {
+        Text(it, color = Color.Black, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.align(Alignment.TopEnd).clip(CircleShape).background(if (alert) JarvisColors.Red else JarvisColors.Amber)
+                .padding(horizontal = 5.dp, vertical = 1.dp))
+    }
+    }
+}
+
+/** The conversation as a sheet over the canvas — everything the Bicara tab had (readiness, transcript, reports, workers, server, stage), unchanged. */
+@Composable
+private fun DeskTalkSheet(vm: JarvisViewModel, onClose: () -> Unit, onOpenServer: () -> Unit, onOpenBackground: () -> Unit, modifier: Modifier) {
+    Column(modifier.fillMaxWidth().fillMaxHeight(0.74f).clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+        .background(JarvisColors.Background.copy(alpha = 0.94f)).border(1.dp, JarvisColors.Border, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))) {
+        Row(Modifier.fillMaxWidth().clickable(onClick = onClose).padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.KeyboardArrowDown, "Tutup", tint = JarvisColors.Muted)
+            Text("Kembali ke meja", color = JarvisColors.Muted, fontSize = 12.sp)
+        }
+        Box(Modifier.weight(1f)) { TalkScreen(vm, onOpenServer, onOpenBackground, compact = true) }
+    }
+}
+
+/** What is being heard or answered, as one line over the canvas while the sheet is closed; tap to open the sheet. */
+@Composable
+private fun DeskCaption(vm: JarvisViewModel, onOpen: () -> Unit, modifier: Modifier) {
+    val turn by vm.turn.collectAsStateWithLifecycle()
+    val interim by vm.interim.collectAsStateWithLifecycle()
+    val mic by vm.mic.collectAsStateWithLifecycle()
+    var answerShown by remember { mutableStateOf(false) }
+    LaunchedEffect(turn.answer) {
+        answerShown = turn.answer.isNotBlank()
+        if (answerShown) { kotlinx.coroutines.delay(9_000); answerShown = false }
+    }
+    val line = when {
+        mic == MicState.Hearing && interim.isNotBlank() -> "“$interim”"
+        turn.phase == Phase.Thinking || turn.phase == Phase.Acting -> "JARVIS berpikir…"
+        answerShown -> turn.answer
+        turn.error != null && turn.phase == Phase.Failed -> turn.error
+        else -> null
+    } ?: return
+    Text(line.take(220), color = JarvisColors.Text, fontSize = 13.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = modifier
+        .clip(RoundedCornerShape(14.dp)).background(Color(0xDD0B1226)).border(1.dp, micColor(mic).copy(alpha = 0.6f), RoundedCornerShape(14.dp))
+        .clickable(onClick = onOpen).padding(horizontal = 12.dp, vertical = 8.dp))
 }
 
 /** ".../canvas/#t=<token>&app=1" — the viewer takes the token from the fragment and removes it (lib.js takeAppParams). */

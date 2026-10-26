@@ -11,7 +11,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.automirrored.filled.FactCheck
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material3.Icon
@@ -65,13 +64,11 @@ import online.cosger.jarvis.ui.console.VoiceprintScreen
 import online.cosger.jarvis.ui.screens.ChatScreen
 import online.cosger.jarvis.ui.screens.LOCATION_PERMISSIONS
 import online.cosger.jarvis.ui.screens.SettingsScreen
-import online.cosger.jarvis.ui.screens.TalkScreen
 import online.cosger.jarvis.ui.theme.JarvisColors
 import online.cosger.jarvis.ui.theme.JarvisTheme
 
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Desk("desk", "Meja", Icons.Filled.Public),
-    Talk("talk", "Bicara", Icons.Filled.GraphicEq),
     Chat("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
     Tasks("tasks", "Tugas", Icons.AutoMirrored.Filled.FactCheck),
     Meetings("meetings", "Rapat", Icons.Filled.Groups),
@@ -172,9 +169,9 @@ class MainActivity : FragmentActivity() {
                         modifier = Modifier.padding(padding),
                     ) {
                         val back: () -> Unit = { nav.popBackStack() }
-                        composable(Tab.Desk.route) { GalaxyScreen(vm, back, asTab = true) }
-                        composable(Tab.Talk.route) {
-                            TalkScreen(vm, onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
+                        composable(Tab.Desk.route) {
+                            GalaxyScreen(vm, back, asTab = true,
+                                onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
                                 onOpenBackground = { nav.navigate("console/${ConsoleRoute.Background.path}") })
                         }
                         composable(Tab.Chat.route) { ChatScreen(vm) }
@@ -206,7 +203,7 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Voice -> VoiceprintScreen(vm, back)
                                     ConsoleRoute.Phone -> PhoneSetupScreen(back)
                                     ConsoleRoute.Passwords -> PasswordsScreen(vm, back)
-                                    ConsoleRoute.App -> SettingsScreen(vm, onSaved = { nav.navigate(Tab.Talk.route) { launchSingleTop = true } })
+                                    ConsoleRoute.App -> SettingsScreen(vm, onSaved = { nav.navigate(Tab.Desk.route) { launchSingleTop = true } })
                                 }
                             }
                         }
