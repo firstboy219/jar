@@ -68,6 +68,9 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
         await modelrouter.default_task_budget(), company_id, runtime)
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
+    if kind == "owner" and not private:  # the task appears on the desk (the canvas) the moment it exists, not when it ends (ADR-051)
+        from . import canvas
+        await canvas.auto(f"task:{task['id']}", company_id)
     await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
     if kind not in ("owner", "meeting"):  # everything JARVIS starts by itself is listed for the owner
         from . import ops
@@ -164,6 +167,7 @@ async def _run(task_id: int, context: str) -> None:
             if kind == "owner" and not row["private"]:  # the result becomes a card in its galaxy (the company's own, or utama) — ADR-049
                 from . import canvas
                 await canvas.auto(f"task:{task_id}", row["company_id"])
+                await canvas.touch(f"task:{task_id}", row["company_id"])   # the card now shows the result
         except asyncio.CancelledError:
             stopped = task_id in _stopping
             await db.pool().execute(  # only a task still in flight: a cancel during report delivery must not undo "completed"

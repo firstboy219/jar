@@ -874,3 +874,31 @@ Acceptance (`test_v4_f6_*`): mail is sorted by the local model only and an OTP i
 only after approval posted — once; a refused or failed send never goes out; the calendar needs approval and a time zone; the flows are
 created inactive, once, behind random paths; watchers notify once, with the fixed wording, never buy; the agent can read, draft and
 propose but has no way to send.
+
+## ADR-051 — The canvas is the owner's main desk: everything JARVIS does, visible and live (2026-10-26)
+The owner (2026-10-26): the infinite canvas must not be decoration but the main table that shows everything JARVIS does — what the
+workers do, n8n, the results of the owner's requests, the list of storage — and when asked to check a website, JARVIS goes to a place
+on the canvas where one sees it operating the page: opening it, scrolling, filling in a form. Built on ADR-049/050.
+- **A station per task.** A worker task gets its card on the canvas the moment it exists (not when it ends) and, while it runs, the card
+  becomes a station: status and time, the page it is on, the screenshot of that page, the last steps ("🌐 Membuka …", "↕️ Menggulir",
+  "⌨️ Mengetik: …", read/write file, calculate…) and its current thought. When the owner's own task starts, the camera flies to
+  its station (toggle "Ikuti"; once per task; never while the owner touched the screen in the last 4 s; background chores never
+  steal the view). When it ends the card keeps the result (a version bump makes open viewers re-read it).
+- **Seeing the page for real: one shared browser.** Hermes now browses in a dedicated Chromium (`jarvis-browser`, pinned image
+  digest, internal network only, 2 GB) through its documented `BROWSER_CDP_URL`, and core attaches to the SAME browser over DevTools
+  to take screenshots (JPEG, about one a second, only while the task used a browser tool in the last 25 s, plus a last look when it
+  ends). Chromium refuses DevTools requests whose Host is not localhost or an IP, so a small nginx gateway (`jarvis-browser-gw`)
+  presents "localhost" and rewrites the advertised websocket address. The station's tab is the one on the host it was told to open
+  (else where it was last seen, else the newest real page) — with two browsing tasks at once the heuristic can pick a wrong tab.
+  Clicks and typing are not drawn on the screenshot; the step list says what was clicked or typed.
+- **The rest of the desk**, three panels around the core: *Permintaanmu* (the latest requests and JARVIS' answers; anything that looks
+  sensitive — OTP, password, card, a /privat message — is hidden), *Otomasi (n8n)* (the latest executions, read from n8n's API) and
+  *Simpanan* (counts by kind, the newest items, and a button that lays the whole library out as cards, idempotently).
+- **Privacy.** Private tasks never appear; a company's tasks only on that company's galaxy (and its frames only with that context);
+  the company desk has none of the owner's panels; frames live in memory only, are served with `no-store` to paired devices only,
+  and are dropped 10 minutes after the task ends. The desk only watches: it cannot act (the same rule as the canvas).
+- Mechanics: `hub.tap` (server-side listeners get every event the phone gets), `live.py` (stations, screenshots, panels data),
+  `GET /api/v1/canvas/live`, `GET /api/v1/canvas/live/{task}/frame`, `POST /api/v1/canvases/{id}/fill`. `live.py` is protected zone.
+Acceptance (`test_v4_f7_*`): a task becomes a station with its steps, thought, tab and growing screenshots, served only to paired
+devices and only to its own galaxy; private and company work never leaks onto the wrong desk and requests are masked; a new task is a
+card at once and storage can be laid out.

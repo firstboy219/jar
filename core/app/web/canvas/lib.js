@@ -115,3 +115,29 @@ export function takeAppParams(hash) {
   }
   return { token, embedded, rest: rest.length ? `#${rest.join('&')}` : '' };
 }
+
+/** Where the fixed desk panels (requests, n8n, storage) hang in the galaxy: a ring around the core, at table height. */
+export const PANELS = {
+  prompts: { x: -760, y: 140, z: -430, size: 1.9, title: 'Permintaanmu' },
+  n8n: { x: 760, y: 140, z: -430, size: 1.9, title: 'Otomasi (n8n)' },
+  storage: { x: 0, y: 140, z: 880, size: 1.9, title: 'Simpanan' },
+};
+
+/**
+ * Should the camera fly to a worker station that just showed up? Only for the owner's own task, once, while following is on and the
+ * owner is not in the middle of something (touched the screen within the last 4 s) — the desk never grabs the camera from a hand.
+ */
+export function shouldFollow({ follow, idleMs, kind, status, seen }) {
+  return !!follow && !seen && kind === 'owner' && (status === 'queued' || status === 'running') && idleMs > 4000;
+}
+
+/** A station whose screenshot changed (a new frame number) must fetch it; the same number never refetches. */
+export function frameNeedsFetch(shownSeq, seq, hasFrame) {
+  return !!hasFrame && seq > 0 && seq !== shownSeq;
+}
+
+/** "5 dtk", "2 mnt" — how long a station has been at work. */
+export function ago(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  return s < 90 ? `${s} dtk` : s < 5400 ? `${Math.round(s / 60)} mnt` : `${(s / 3600).toFixed(1)} jam`;
+}

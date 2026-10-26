@@ -46,3 +46,10 @@ async def create_inactive(workflow: dict) -> dict:
 async def activate(workflow_id: str) -> dict:
     w = await _call("POST", f"/workflows/{workflow_id}/activate")
     return {"id": w["id"], "name": w["name"], "active": w.get("active", True)}
+
+
+async def executions(limit: int = 12) -> list[dict]:
+    """The latest runs across all workflows (the desk shows what the automations are doing)."""
+    data = await _call("GET", "/executions", params={"limit": limit})
+    return [{"id": e["id"], "workflow_id": e.get("workflowId"), "status": e.get("status") or ("success" if e.get("finished") else "running"),
+             "started_at": e.get("startedAt"), "stopped_at": e.get("stoppedAt")} for e in (data or {}).get("data", [])]

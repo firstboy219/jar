@@ -22,11 +22,11 @@ import time
 from datetime import datetime
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, inbox, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI):
                 return
             await asyncio.sleep(30)
     warm = asyncio.create_task(warm_local_worker())
+    live.start()  # the desk listens to the events the phone gets (ADR-051)
 
     async def self_improvement():
         # Performance self-improvement (ADR-026): runner results, recurring-error repairs, weekly review.
@@ -564,6 +565,29 @@ async def canvases_open(c: CanvasIn, device: dict = Depends(owner_device_auth)):
     try:
         return jsonable(await canvas.ensure(c.context, c.title))
     except (canvas.CanvasError, companies.CompanyError) as e:
+        raise _canvas_error(e)
+
+
+@app.get("/api/v1/canvas/live")
+async def canvas_live(context: str = "utama", device: dict = Depends(device_auth)):
+    """The desk: stations (what each worker is doing, with the page it is on), n8n, latest requests, storage (ADR-051)."""
+    return jsonable(await live.snapshot(context[:80]))
+
+
+@app.get("/api/v1/canvas/live/{task_id}/frame")
+async def canvas_live_frame(task_id: int, context: str = "utama", device: dict = Depends(device_auth)):
+    got = live.frame(task_id, context[:80])
+    if not got:
+        raise HTTPException(404, "belum ada tampilan")
+    return Response(got[0], media_type="image/jpeg", headers={"Cache-Control": "no-store", "X-Frame-Seq": str(got[1])})
+
+
+@app.post("/api/v1/canvases/{canvas_id}/fill")
+async def canvases_fill(canvas_id: int, device: dict = Depends(owner_device_auth)):
+    try:
+        row = await canvas._canvas_row(canvas_id)
+        return jsonable(await canvas.fill(row["context"], "owner"))
+    except canvas.CanvasError as e:
         raise _canvas_error(e)
 
 

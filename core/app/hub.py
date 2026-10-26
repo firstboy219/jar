@@ -9,6 +9,7 @@ log = logging.getLogger("jarvis-core.hub")
 Sender = Callable[[dict], Awaitable[None]]
 
 _clients: dict[int, Sender] = {}
+_taps: list[Sender] = []  # server-side listeners (the desk, ADR-051): they see every event, with or without a device online
 _meta: dict[int, dict] = {}
 _next_id = 0
 _connected = asyncio.Event()
@@ -38,8 +39,18 @@ def online() -> bool:
     return bool(_clients)
 
 
+def tap(listener: Sender) -> None:
+    if listener not in _taps:
+        _taps.append(listener)
+
+
 async def broadcast(event: dict) -> int:
     """Send to every connected device; returns how many got it. Dead sockets are dropped."""
+    for t in _taps:
+        try:
+            await t(event)
+        except Exception:  # a listener must never stop an event reaching the owner
+            log.exception("hub tap failed")
     delivered = 0
     for cid, send in list(_clients.items()):
         try:

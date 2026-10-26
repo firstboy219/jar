@@ -3,7 +3,7 @@
 // what JARVIS showed, memories, company data); this page only lays them out in space. It can fly, select, place, move,
 // link and take cards off the canvas — it never approves, deletes data, sends or pays.
 import * as THREE from './vendor/three.module.min.js';
-import { cardScale, contextLabel, diffCards, ease, matchCards, spiralGalaxy, starField, takeAppParams } from './lib.js';
+import { PANELS, ago, cardScale, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -277,6 +277,138 @@ async function refresh(force = false) {
 
 setInterval(() => { if (!document.hidden && api.token) refresh().catch(() => {}); }, 3000);
 
+// ---------- the desk: what JARVIS is doing, live (ADR-051) ----------
+// Every worker task is a station on its card: what it is doing step by step and, when it browses, the page as it is right now
+// (screenshots of the shared browser, about one a second). n8n, the owner's latest requests and the storage hang around the core.
+let follow = (() => { try { return localStorage.getItem('jarvis_canvas_follow') !== 'off'; } catch { return true; } })();
+let lastTouch = performance.now();
+for (const t of ['pointerdown', 'wheel', 'keydown']) addEventListener(t, () => { lastTouch = performance.now(); }, true);
+const seenStations = new Set();
+const liveByRef = new Map();      // ref → {st, shownSeq, fetching}
+const deskPanels = {};            // name → {el, ...anchor}
+const STATUS_TEXT = { queued: 'menunggu giliran', running: 'bekerja', completed: 'selesai', failed: 'gagal', cancelled: 'dibatalkan', stopped: 'dihentikan' };
+
+function setFollow(on) {
+  follow = on;
+  try { localStorage.setItem('jarvis_canvas_follow', on ? 'on' : 'off'); } catch { /* private mode */ }
+  $('#follow').textContent = on ? 'Ikuti: nyala' : 'Ikuti: mati';
+}
+$('#follow').addEventListener('click', () => setFollow(!follow));
+setFollow(follow);
+
+function cardOfRef(ref) { for (const c of cards.values()) if (c.data.ref === ref) return c; return null; }
+
+function renderLive(card, l) {
+  const st = l.st;
+  card.el.classList.add('live');
+  let box = card.el.querySelector('.livebox');
+  if (!box) {
+    box = el('div', 'livebox');
+    box.append(el('div', 'livehead'), el('div', 'pageline'), el('img', 'frame'), el('ul', 'steps'), el('div', 'thought'));
+    box.querySelector('img').alt = '';
+    box.querySelector('img').hidden = true;
+    card.el.insertBefore(box, card.el.querySelector('.actions'));
+  }
+  const head = box.querySelector('.livehead');
+  head.replaceChildren(el('span', `dot ${st.status}`), el('span', null, `${STATUS_TEXT[st.status] || st.status} · ${ago(st.seconds)}${st.browsing ? ' · di browser' : ''}`));
+  box.querySelector('.pageline').textContent = st.page_title || st.url || '';
+  box.querySelector('.pageline').hidden = !(st.page_title || st.url);
+  const ul = box.querySelector('.steps');
+  ul.replaceChildren(...st.steps.slice(-8).map((s) => el('li', s.status === 'running' ? 'now' : '', `${s.icon} ${s.text}`)));
+  box.querySelector('.thought').textContent = st.thought ? `💭 ${st.thought}` : '';
+  if (frameNeedsFetch(l.shownSeq, st.frame_seq, st.has_frame)) fetchFrame(card, l);
+}
+
+async function fetchFrame(card, l) {
+  if (l.fetching) return;
+  l.fetching = true;
+  try {
+    const r = await fetch(`/api/v1/canvas/live/${l.st.task_id}/frame?context=${encodeURIComponent(current.context)}`, { headers: { Authorization: `Bearer ${api.token}` } });
+    if (r.ok) {
+      const url = URL.createObjectURL(await r.blob());
+      const img = card.el.querySelector('.livebox img');
+      if (img) { const old = img.src; img.src = url; img.hidden = false; if (old.startsWith('blob:')) URL.revokeObjectURL(old); } else URL.revokeObjectURL(url);
+      l.shownSeq = Number(r.headers.get('X-Frame-Seq')) || l.st.frame_seq;
+    }
+  } catch { /* the next poll tries again */ } finally { l.fetching = false; }
+}
+
+function clearLive(ref) {
+  const card = cardOfRef(ref);
+  if (card) {
+    card.live = null;
+    card.el.classList.remove('live');
+    const box = card.el.querySelector('.livebox');
+    const img = box?.querySelector('img');
+    if (img?.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+    box?.remove();
+  }
+  liveByRef.delete(ref);
+}
+
+function panelFor(name) {
+  if (deskPanels[name]) return deskPanels[name];
+  const e = el('div', 'card panel');
+  e.style.setProperty('--c', '#67e8f9');
+  $('#cards').append(e);
+  return (deskPanels[name] = { el: e, ...PANELS[name] });
+}
+
+function renderPanels(d) {
+  const show = (name, on) => { if (on) panelFor(name); else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
+  show('prompts', !!d.prompts); show('n8n', !!d.n8n); show('storage', !!d.storage);
+  if (d.prompts) {
+    const e = panelFor('prompts').el;
+    e.replaceChildren(el('div', 'kind', 'meja · permintaanmu'), el('div', 'title', 'Permintaan terakhir'));
+    if (!d.prompts.length) e.append(el('div', 'snippet', 'Belum ada.'));
+    for (const p of d.prompts) { const row = el('div', 'deskrow'); row.append(el('b', null, `Kamu: ${p.asked}`)); if (p.answer) row.append(el('span', null, `Jarvis: ${p.answer}`)); e.append(row); }
+  }
+  if (d.n8n) {
+    const e = panelFor('n8n').el;
+    e.replaceChildren(el('div', 'kind', 'meja · otomasi'), el('div', 'title', 'Yang dijalankan n8n'));
+    if (!d.n8n.length) e.append(el('div', 'snippet', 'Belum ada eksekusi (atau n8n belum terhubung).'));
+    for (const x of d.n8n.slice(0, 8)) { const row = el('div', 'deskrow'); row.append(el('span', `dot ${x.status === 'success' ? 'completed' : x.status === 'error' ? 'failed' : 'running'}`), el('b', null, ` ${x.workflow}`), el('span', null, ` · ${x.status}`)); e.append(row); }
+  }
+  if (d.storage) {
+    const e = panelFor('storage').el;
+    e.replaceChildren(el('div', 'kind', 'meja · simpanan'), el('div', 'title', `Simpanan — ${d.storage.total} item`));
+    const chips = el('div', 'chips');
+    for (const [k, n] of Object.entries(d.storage.counts)) chips.append(el('span', 'chip', `${k} ${n}`));
+    e.append(chips);
+    for (const i of d.storage.latest) e.append(el('div', 'deskrow', `${i.kept ? '⭐ ' : ''}${i.title} · ${i.kind}`));
+    const b = el('button', null, 'Taruh semua di galaksi ini'); b.dataset.gesture = 'ok';
+    b.addEventListener('click', async (ev) => { ev.stopPropagation(); try { const r = await api.req('POST', `/api/v1/canvases/${current.id}/fill`); toast(`${r.added} kartu dari Simpanan ditaruh.`); await refresh(true); } catch (err) { toast(err.message, true); } });
+    e.append(b);
+  }
+}
+
+let pollingLive = false;
+async function pollLive() {
+  if (!current || document.hidden || !api.token || pollingLive) return;
+  pollingLive = true;
+  try {
+    const d = await api.req('GET', `/api/v1/canvas/live?context=${encodeURIComponent(current.context)}`);
+    const now = new Set(d.stations.map((s) => s.ref));
+    for (const ref of [...liveByRef.keys()]) if (!now.has(ref)) clearLive(ref);
+    for (const st of d.stations) {
+      const l = liveByRef.get(st.ref) || { shownSeq: 0 };
+      l.st = st; liveByRef.set(st.ref, l);
+      const card = cardOfRef(st.ref);
+      if (!card) { if (!l.asked) { l.asked = true; refresh(true).catch(() => {}); } continue; }   // its card is on the way
+      card.live = l;
+      renderLive(card, l);
+      const first = !seenStations.has(st.task_id);
+      seenStations.add(st.task_id);
+      if (first && shouldFollow({ follow, idleMs: performance.now() - lastTouch, kind: st.kind, status: st.status, seen: false })) {
+        flyTo(card.data, 620, 1400);
+        toast(`Jarvis mengerjakan: ${st.title}`);
+      }
+    }
+    renderPanels(d);
+  } catch { /* offline: the next poll tries again */ } finally { pollingLive = false; }
+}
+setInterval(pollLive, 1300);
+
 // ---------- pointer: orbit / pan / zoom, and dragging cards through space ----------
 const pointers = new Map();
 let gesture = null;   // {mode: 'orbit'|'pan'|'card', ...}
@@ -471,8 +603,8 @@ function frame(t) {
     return { c, d: camera.position.distanceTo(tmp), p: tmp.clone().project(camera) };
   }).sort((a, b) => a.d - b.d);
   list.forEach(({ c, d, p }, i) => {
-    const s = cardScale(d, c.data.size);
-    const visible = i < 140 && s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
+    const s = cardScale(d, c.live ? Math.max(c.data.size, 2.4) : c.data.size);
+    const visible = (i < 140 || c.live) && s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
     c.el.hidden = !visible;
     if (!visible) return;
     const x = (p.x + 1) / 2 * innerWidth, y = (1 - p.y) / 2 * innerHeight;
@@ -480,6 +612,17 @@ function frame(t) {
     c.el.style.zIndex = String(10000 - Math.round(d));
     c.el.style.opacity = String(Math.min(1, s * 1.6));
   });
+  for (const pn of Object.values(deskPanels)) {   // the fixed desk panels around the core
+    if (pn.el.hidden && !pn.hiddenByView) continue;
+    tmp.set(pn.x, pn.y, pn.z);
+    const d = camera.position.distanceTo(tmp), p = tmp.clone().project(camera), s = cardScale(d, pn.size);
+    const vis = s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
+    pn.hiddenByView = !vis; pn.el.style.visibility = vis ? 'visible' : 'hidden';
+    if (!vis) continue;
+    pn.el.style.transform = `translate(-50%, -50%) translate(${(p.x + 1) / 2 * innerWidth}px, ${(1 - p.y) / 2 * innerHeight}px) scale(${s})`;
+    pn.el.style.zIndex = String(10000 - Math.round(d));
+    pn.el.style.opacity = String(Math.min(1, s * 1.6));
+  }
   for (const label of $('#labels').children) {
     tmp.set(+label.dataset.x, +label.dataset.y + 230, +label.dataset.z).project(camera);
     const vis = tmp.z < 1 && Math.abs(tmp.x) < 1.1 && Math.abs(tmp.y) < 1.1;

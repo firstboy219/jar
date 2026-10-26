@@ -40,3 +40,21 @@ test('the app passes its device token in the fragment and the viewer takes it ou
   assert.deepEqual(takeAppParams('#kartu=7'), { token: '', embedded: false, rest: '#kartu=7' });
   assert.deepEqual(takeAppParams(''), { token: '', embedded: false, rest: '' });
 });
+
+test('the desk follows the owner\'s new task once, and never grabs the camera from a hand', async () => {
+  const { shouldFollow, frameNeedsFetch, ago, PANELS } = await import('../lib.js');
+  const base = { follow: true, idleMs: 9000, kind: 'owner', status: 'running', seen: false };
+  assert.equal(shouldFollow(base), true);
+  assert.equal(shouldFollow({ ...base, seen: true }), false);          // once per task
+  assert.equal(shouldFollow({ ...base, idleMs: 1500 }), false);        // the owner just touched the screen
+  assert.equal(shouldFollow({ ...base, follow: false }), false);
+  assert.equal(shouldFollow({ ...base, kind: 'routine' }), false);     // background chores do not steal the view
+  assert.equal(shouldFollow({ ...base, status: 'completed' }), false);
+  assert.equal(frameNeedsFetch(3, 4, true), true);
+  assert.equal(frameNeedsFetch(4, 4, true), false);
+  assert.equal(frameNeedsFetch(0, 0, false), false);
+  assert.equal(ago(5), '5 dtk');
+  assert.equal(ago(150), '3 mnt');
+  assert.equal(ago(7200), '2.0 jam');
+  assert.deepEqual(Object.keys(PANELS).sort(), ['n8n', 'prompts', 'storage']);
+});
