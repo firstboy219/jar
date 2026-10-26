@@ -14,10 +14,10 @@ const check = (label) => { const w = el('label', 'mcheck'), c = el('input'); c.t
 
 // ---------------------------------------------------------------- player
 
-export function createPlayerCard({ box, api, send, toast }) {
+export function createPlayerCard({ box, api, send, toast, label = 'pemutar', hint = '' }) {
   let id = null, mediaUrl = null, watcher = null, ended = false;
   box.replaceChildren();
-  const kind = el('div', 'kind', 'meja · pemutar'), head = el('div', 'title'), sub = el('div', 'snippet'), body = el('div', 'pbody'), ctl = el('div', 'pctl');
+  const kind = el('div', 'kind', `meja · ${label}`), head = el('div', 'title'), sub = el('div', 'snippet'), body = el('div', 'pbody'), ctl = el('div', 'pctl');
   box.append(kind, head, sub, body, ctl);
 
   function teardown() {
@@ -59,9 +59,12 @@ export function createPlayerCard({ box, api, send, toast }) {
   return {
     /** The server's player (or null). Returns whether the card should be on the desk. */
     update(p) {
-      if (!p) { if (id) teardown(); return false; }
+      if (!p) {   // the card stays on the desk, empty, saying how to fill it (ADR-056)
+        if (id !== '') { teardown(); id = ''; head.textContent = label[0].toUpperCase() + label.slice(1); sub.textContent = hint; box.classList.add('empty'); }
+        return true;
+      }
       if (p.id !== id) {
-        teardown(); id = p.id;
+        teardown(); id = p.id; box.classList.remove('empty');
         head.textContent = p.title || '(tanpa judul)'; sub.textContent = p.artist || p.caption || '';
         const pl = p.playlist, pos = pl && Number.isFinite(pl.index) && Number.isFinite(pl.total) ? `${pl.index + 1}/${pl.total}` : '';
         if (pl) ctl.append(button('⏮', 'pbtn', () => event('prev')), el('span', 'plabel', `${pl.name || 'Playlist'} ${pos}`.trim()), button('⏭', 'pbtn', () => event('next')));
@@ -237,12 +240,22 @@ export function createMeetingCard({ box, api, toast, embedded }) {
     /** The server's meeting card state (or null) and the server clock. Returns {show, key} — key changes when there is something new to look at. */
     update(next, now) {
       if (Number.isFinite(now)) skew = now - Date.now() / 1000;
-      if (!next || dismissed.has(next.key)) { m = null; key = null; return { show: false, key: null }; }
+      if (!next || dismissed.has(next.key)) {
+        if (m || key !== '') {   // nothing to record: the card waits, empty, with a way to begin (ADR-056)
+          m = null; key = '';
+          kind.textContent = 'meja · rapat'; kind.classList.remove('rec'); head.textContent = 'Rapat';
+          body.replaceChildren(el('div', 'snippet', 'Bilang "mulai rapat", atau siapkan dari sini. Notulen dibuat otomatis setelah selesai.'),
+            button('● Siapkan rapat', 'mgo', async () => { try { await api.req('POST', '/api/v1/meetings/want'); } catch (err) { toast(err.message, true); } }));
+          box.classList.add('empty');
+        }
+        return { show: true, key: null };
+      }
+      box.classList.remove('empty');
       if (seenStop == null) seenStop = next.stop_seq;
       else if (stopRaised(seenStop, next.stop_seq)) { seenStop = next.stop_seq; if (recorder.active) stopNow(); }
       m = next;
       if (m.state === 'recording' || m.state === 'processing') busy = false;
-      const fresh = next.key !== key || (m.state === 'recording' && !!body.querySelector('.mmeter') !== recorder.active);
+      const fresh = next.key !== key || !body.querySelector('.mfield, .mtimer, .mstatus') || (m.state === 'recording' && !!body.querySelector('.mmeter') !== recorder.active);
       if (fresh) { if (next.key !== key) draft = null; key = next.key; render(); }
       return { show: true, key };
     },

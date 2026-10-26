@@ -68,7 +68,18 @@ export const PANELS = {
   storage: { x: -165, y: 700, w: 330, title: 'Simpanan' },
   player: { x: -1130, y: 110, w: 330, title: 'Pemutar' },
   meeting: { x: 800, y: 110, w: 330, title: 'Rapat' },
+  // ADR-056: one card for every other thing JARVIS shows — a row above and a row below the middle
+  video: { x: -1400, y: -1180, w: 480, title: 'Video' },
+  image: { x: -860, y: -1180, w: 400, title: 'Gambar' },
+  doc: { x: -400, y: -1180, w: 420, title: 'Dokumen' },
+  map: { x: 80, y: -1180, w: 440, title: 'Peta' },
+  web: { x: -860, y: 1300, w: 380, title: 'Halaman web' },
+  text: { x: -420, y: 1300, w: 400, title: 'Catatan' },
+  draft: { x: 40, y: 1300, w: 400, title: 'Draf balasan' },
+  google: { x: 860, y: -430, w: 340, title: 'Akun Google' },   // ADR-057
 };
+/** The feature cards (ADR-054/056): what each of them is called on the server's desk poll. */
+export const FEATURE_CARDS = ['player', 'video', 'image', 'doc', 'map', 'web', 'text', 'draft', 'meeting', 'google'];
 
 /**
  * Should the camera fly to a worker station that just showed up? Only for the owner's own task, once, while following is on and the

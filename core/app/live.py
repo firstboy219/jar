@@ -72,6 +72,7 @@ class Station:
     driver: "Driver | None" = None
     driver_checked: float = 0.0
     marked_at: float = 0.0
+    paused: bool = False                     # the worker was told to keep its hands off the browser until the owner hands it back
 
 
 stations: dict[int, Station] = {}
@@ -424,7 +425,8 @@ def station_view(st: Station) -> dict:
             "seconds": int((st.finished or time.time()) - st.started), "steps": st.steps[-MAX_STEPS:], "thought": st.thought,
             "url": st.url, "page_title": st.page_title, "frame_seq": st.frame_seq, "has_frame": bool(st.frame),
             "browsing": time.time() < st.browser_until and not st.finished,
-            "controlled": controlled(st), "control_by": st.control_by if controlled(st) else ""}
+            "controlled": controlled(st), "control_by": st.control_by if controlled(st) else "",
+            "paused": controlled(st) and st.paused}
 
 
 _n8n_cache: dict = {"at": 0.0, "value": []}
@@ -489,7 +491,7 @@ async def snapshot(context: str = "utama") -> dict:
     if company is None:  # the owner's own desk; a company galaxy shows only that company's tasks
         from . import meetings, stage
         out |= {"n8n": await n8n_recent(), "prompts": await prompts(), "storage": await storage(),
-                "player": stage.desk_player(), "meeting": await meetings.desk_card()}
+                "player": stage.desk_player(), "cards": stage.desk_cards(), "meeting": await meetings.desk_card()}
     return out
 
 
@@ -635,9 +637,12 @@ async def take(task_id: int, context: str, actor: str) -> dict:
     """The owner takes the wheel of the station's browser tab."""
     from . import audit
     st = _station_for(task_id, context)
-    if not controlled(st):
+    fresh = not controlled(st)
+    if fresh:
         await audit.record(actor, "live.takeover", f"task:{task_id}")
     st.control_until, st.control_by = time.time() + CONTROL_TTL_S, actor
+    if fresh:   # the owner never has to wait for the worker to ask: the worker is told to stand still right away
+        st.paused = await pause_worker(task_id)
     st.browser_until = max(st.browser_until, time.time() + CONTROL_TTL_S)
     if st.capture is None or st.capture.done():
         st.capture = asyncio.create_task(_capture_loop(st))
@@ -682,6 +687,30 @@ async def send_input(task_id: int, context: str, ev: dict) -> bool:
     return True
 
 
+PAUSE_TEXT = ("PEMILIK SEDANG MENGAMBIL ALIH BROWSER untuk [tugas #{n}]. Berhenti memakai browser SEKARANG (jangan klik, ketik, "
+              "pindah halaman atau ambil alih tab). Panggil tool wait_for_owner(task_id={n}) dan tunggu sampai hasilnya 'handed_back'; "
+              "setelah itu ambil dulu pandangan halaman yang sekarang terbuka, lalu lanjutkan tugasnya.")
+
+
+async def pause_worker(task_id: int) -> bool:
+    """Tell the worker's running Hermes turn to keep its hands off the browser (a steer: read before its next step). False when the task
+    has no live Hermes run (OpenJarvis, finished, or Hermes refused) — the owner still has the wheel, the worker just was not told."""
+    from . import hermes
+    try:
+        run_id = await db.pool().fetchval("SELECT hermes_run FROM tasks WHERE id = $1", task_id)
+    except Exception:
+        return False
+    return bool(run_id) and await hermes.steer(run_id, PAUSE_TEXT.format(n=task_id))
+
+
+def hold_state(task_id: int) -> dict:
+    """What wait_for_owner sees: is the owner still driving this task's browser?"""
+    st = stations.get(task_id)
+    if st and controlled(st):
+        return {"status": "owner_driving", "seconds_left": int(st.control_until - time.time())}
+    return {"status": "handed_back", "note": HANDED_BACK}
+
+
 HANDED_BACK = ("Pemilik sudah membantu langsung di browser (login / captcha / langkah yang kamu tunggu). "
                "Lanjutkan dari halaman yang sekarang terbuka; ambil dulu pandangan halamannya.")
 
@@ -693,7 +722,7 @@ async def release(task_id: int, context: str, actor: str, done: bool) -> dict:
     if not st or st.company_id != context_company(context):
         raise ControlError("tugas ini tidak ada di meja")
     was = controlled(st)
-    st.control_until = 0.0
+    st.control_until, st.paused = 0.0, False
     if st.driver:
         await st.driver.close()
         st.driver = None

@@ -298,3 +298,23 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 .mmeter i { display: block; height: 100%; width: 3%; background: var(--green); transition: width .12s; }
 .mstatus { font-size: 13px; color: var(--amber, #fbbf24); }
 .mstatus.ok { color: var(--green); } .mstatus.bad { color: var(--red); }
+
+/* ADR-056: the desk's feature cards for everything JARVIS shows (video, pictures, documents, maps, web pages, notes, drafts) */
+.card.panel.empty { opacity: .78; border-style: dashed; }
+.card.panel.empty .title { color: var(--muted); }
+.showcard .sbody { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.showcard .sgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.showcard .sone .spic { width: 100%; max-height: 300px; }
+.showcard .spic { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: rgba(255, 255, 255, .04); cursor: zoom-in; display: block; }
+.showcard .sone .spic { aspect-ratio: auto; object-fit: contain; }
+.showcard .sread { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow: auto; max-height: 300px; padding: 8px 10px;
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--line); border-radius: 8px; user-select: text; overscroll-behavior: contain; }
+.showcard .ssub { font-size: 12px; } .showcard .slabel { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.showcard .sdraft { display: flex; flex-direction: column; gap: 6px; } .showcard .sdraft button { align-self: flex-start; }
+.showcard .smap { height: 280px; border-radius: 8px; overflow: hidden; background: rgba(255, 255, 255, .04); }
+.showcard .sroutes { display: flex; flex-direction: column; gap: 4px; } .showcard .sroute { text-align: left; font-size: 12px; }
+.showcard .sweb { font-size: 15px; font-weight: 600; } .showcard .sdim { word-break: break-all; max-height: 3em; }
+.plink { text-decoration: none; display: inline-flex; align-items: center; }
+.lightbox { position: fixed; inset: 0; z-index: 26000; background: rgba(2, 3, 10, .94); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; cursor: zoom-out; }
+.lightbox img { max-width: 94vw; max-height: 86vh; object-fit: contain; border-radius: 6px; }
+.lightbox .lbcap { color: var(--muted); font-size: 13px; padding: 0 16px; text-align: center; }

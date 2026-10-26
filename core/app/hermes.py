@@ -164,6 +164,17 @@ async def answer_approval(run_id: str, approve: bool, request_id: str | None = N
         return False
 
 
+async def steer(run_id: str, text: str) -> bool:
+    """Slip a message into a running turn; the agent reads it before its next step (POST /v1/runs/{id}/steer)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"{settings.hermes_url}/v1/runs/{run_id}/steer", json={"input": text},
+                             headers={"Authorization": f"Bearer {settings.hermes_api_key}"})
+        return r.status_code == 200 and bool(r.json().get("accepted"))
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
 async def stop(run_id: str) -> None:
     try:
         async with httpx.AsyncClient(timeout=10) as c:

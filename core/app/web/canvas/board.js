@@ -12,7 +12,7 @@ const sv = (tag, attrs = {}) => { const e = document.createElementNS(SVGNS, tag)
 export const SWATCHES = ['#fde68a', '#fdba74', '#fca5a5', '#f9a8d4', '#c4b5fd', '#93c5fd', '#67e8f9', '#86efac', '#e5e7eb', '#1e293b'];
 export const SHAPE_LABEL = { rect: 'Persegi', round: 'Persegi tumpul', ellipse: 'Elips', diamond: 'Belah ketupat' };
 const NOTE_DEFAULT = '#fde68a';
-const INTERACTIVE = 'button, input, textarea, select, a, audio, video, iframe, label, [contenteditable="true"], .nodrag';
+const INTERACTIVE = 'button, input, textarea, select, a, audio, video, iframe, label, [contenteditable="true"], .nodrag, .sread, .smap';
 const GRID = 24;
 
 /** Black or white ink, whichever reads better on a fill. */
@@ -618,7 +618,7 @@ export function createBoard(ctx) {
 
   stage.addEventListener('wheel', (e) => {
     if (e.target.closest('.palette, .inspector, .menu, .minimap')) return;
-    if (e.target.closest('.widget .pbody, .widget .mbody, .editing')) return;
+    if (e.target.closest('.widget .pbody, .widget .mbody, .widget .sread, .widget .smap, .editing')) return;
     e.preventDefault();
     cancelFlight();
     const p = stagePoint(e);

@@ -1594,6 +1594,114 @@ async def test_v4_f7_live_video_reaches_a_viewer_over_a_websocket_only_for_its_o
     assert live.subscribers == []                                                                    # a closed viewer leaves nothing behind
 
 
+async def _async(v):
+    return v
+
+
+async def test_v4_f12_logging_in_to_google_from_the_phone_puts_the_account_into_n8n_and_switches_the_inbox_on(pool, monkeypatch):
+    from app import google_auth, inbox, main, n8n
+    monkeypatch.setenv("VAULT_KEY", "11" * 32)
+    monkeypatch.setenv("PUBLIC_ORIGIN", "https://vis1.example")
+    monkeypatch.delenv("GOOGLE_OAUTH_CLIENT_ID", raising=False)
+    calls = []
+
+    async def put_credential(cred_id, name, cred_type, data):
+        calls.append(("cred", cred_id, cred_type, data["oauthTokenData"]["refresh_token"], data["clientSecret"]))
+        return {"id": f"{cred_type}-{len(calls)}", "name": name}
+
+    async def create_inactive(flow):
+        calls.append(("create", flow["name"], [n.get("credentials") for n in flow["nodes"] if "credentials" in n]))
+        return {"id": f"w{len(calls)}", "name": flow["name"], "active": False}
+
+    async def activate(wid):
+        calls.append(("activate", wid))
+        return {"id": wid, "name": "x", "active": True}
+
+    async def exchange(code, cid, sec):
+        assert (code, cid, sec) == ("kode-sekali", "9-j.apps.googleusercontent.com", "GOCSPX-rahasia123")
+        return {"access_token": "at", "refresh_token": "rt-rahasia", "expires_in": 3599, "email": "pemilik@gmail.com",
+                "scope": " ".join(google_auth.SCOPES)}
+    monkeypatch.setattr(n8n, "put_credential", put_credential)
+    monkeypatch.setattr(n8n, "create_inactive", create_inactive)
+    monkeypatch.setattr(n8n, "activate", activate)
+    monkeypatch.setattr(n8n, "list_workflows", lambda: _async([]))
+    monkeypatch.setattr(google_auth, "_exchange", exchange)
+
+    assert (await google_auth.status())["configured"] is False
+    with pytest.raises(google_auth.GoogleError):
+        await google_auth.start("device:hp")                                              # no client yet: the card asks for it
+    await google_auth.set_client("9-j.apps.googleusercontent.com", "GOCSPX-rahasia123", "device:hp")
+    stored = json.dumps(await pool.fetchval("SELECT value FROM settings_kv WHERE key = 'google:client'"))
+    assert "GOCSPX-rahasia123" not in stored                                              # the secret is kept encrypted
+    url = (await google_auth.start("device:hp"))["url"]
+    state = url.split("state=")[1].split("&")[0]
+    page = await main.google_callback(code="kode-sekali", state="salah")
+    assert page.status_code == 400                                                        # a made-up state gets nothing
+    page = await main.google_callback(code="kode-sekali", state=state)
+    assert page.status_code == 200 and "pemilik@gmail.com" in page.body.decode()
+    assert [c[2] for c in calls if c[0] == "cred"] == ["gmailOAuth2", "googleCalendarOAuth2Api"]
+    created = [c for c in calls if c[0] == "create"]
+    assert len(created) == 3 and all(c[2] for c in created)                               # every flow's Google node has the account
+    assert len([c for c in calls if c[0] == "activate"]) == 3                              # the login is the consent: the flows are on
+    assert await pool.fetchval("SELECT count(*) FROM approvals WHERE kind = 'n8n_activate_workflow'") == 0
+    st = await google_auth.status()
+    assert st["connected"] and st["email"] == "pemilik@gmail.com" and st["flows_on"]
+    assert "rt-rahasia" not in json.dumps(await pool.fetchval("SELECT value FROM settings_kv WHERE key = 'google:account'"))
+    assert set((await inbox.hooks()).keys()) == {"list", "send", "calendar"}
+    again = await main.google_callback(code="kode-sekali", state=state)
+    assert again.status_code == 400                                                       # a state works once
+
+
+async def test_v4_f12_every_thing_jarvis_shows_has_its_own_card_on_the_desk(pool, monkeypatch):
+    from app import hub, live, stage
+
+    async def quiet(ev):
+        return 1
+    monkeypatch.setattr(hub, "broadcast", quiet)
+    song = await stage.show("music", {"title": "Lagu", "url": "https://x.test/a.mp3"})
+    pic = await stage.show("image", {"title": "Foto", "url": "https://x.test/p.jpg"})
+    d = await live.snapshot("utama")
+    assert d["player"]["id"] == song["id"]                                              # a picture never stops the music
+    assert d["cards"]["image"]["id"] == pic["id"] and d["cards"]["image"]["items"][0]["url"] == "https://x.test/p.jpg"
+    assert d["cards"]["doc"] is None and d["cards"]["video"] is None                     # the other cards wait, empty
+    vid = await stage.show("video", {"title": "Klip", "url": "https://www.youtube.com/watch?v=abcdefghijk"})
+    assert (await live.snapshot("utama"))["cards"]["video"]["url"].startswith("https://www.youtube.com/")
+    await stage.show_any([{"text": "beli susu", "title": "Belanja"}, {"lat": -6.2, "lon": 106.8, "label": "Monas"},
+                          {"url": "https://x.test/q.png", "title": "Q"}], "Semua sekaligus")
+    c = (await live.snapshot("utama"))["cards"]
+    assert c["text"]["items"][0]["text"] == "beli susu" and c["map"]["items"][0]["markers"][0]["label"] == "Monas"
+    assert c["image"]["items"][0]["url"] == "https://x.test/q.png"                         # a board's blocks go to their own cards
+    await stage.on_event(c["text"]["id"], "closed")                                        # the card's ✕
+    c = (await live.snapshot("utama"))["cards"]
+    assert c["text"] is None and c["map"] is not None and c["video"]["id"] == vid["id"]
+    await stage.on_event(song["id"], "closed")
+    assert (await live.snapshot("utama"))["player"] is None
+
+
+async def test_v4_f12_the_owner_can_step_in_unasked_and_the_worker_stands_still_until_handed_back(pool, monkeypatch):
+    from app import hermes, live
+    await _station_env(pool, monkeypatch)
+    steered = []
+
+    async def fake_steer(run_id, text):
+        steered.append((run_id, text))
+        return True
+    monkeypatch.setattr(hermes, "steer", fake_steer)
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, hermes_run)
+                                 VALUES ('s-t', 'Cari lowongan', 'x', 'owner', 'web', 'running', 'run_abc') RETURNING id""")
+    await live.on_event({"type": "task", "id": tid, "title": "Cari lowongan", "status": "running", "kind": "owner"})
+    assert (await live.take(tid, "utama", "device:1"))["ok"]                             # no question from the worker needed
+    assert steered and steered[0][0] == "run_abc" and f"wait_for_owner(task_id={tid})" in steered[0][1]
+    snap = await live.snapshot("utama")
+    assert snap["stations"][0]["controlled"] and snap["stations"][0]["paused"]
+    assert live.hold_state(tid)["status"] == "owner_driving"
+    await live.take(tid, "utama", "device:1")
+    assert len(steered) == 1                                                             # renewing the wheel does not nag the worker again
+    await live.release(tid, "utama", "device:1", done=False)
+    assert live.hold_state(tid)["status"] == "handed_back"
+    assert not (await live.snapshot("utama"))["stations"][0]["paused"]
+
+
 async def test_v4_f9_the_owner_can_take_the_wheel_of_a_workers_browser_and_hand_it_back(pool, monkeypatch):
     import asyncio
 
@@ -1691,10 +1799,12 @@ async def test_v4_f10_a_song_on_the_stage_is_a_player_card_on_the_desk_and_leave
     assert p["title"] == "Bunga" and p["panel"] == "music" and p["url"] == "/api/v1/media/abc" and p["playlist"]["total"] == 5
     first = p["id"]
     await stage.show("video", {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Klip"}, "Klip", "jarvis")
-    assert (await live.snapshot("utama"))["player"]["id"] != first                                     # a new song is a new player
+    d = await live.snapshot("utama")
+    assert d["player"]["id"] == first and d["cards"]["video"]["title"] == "Klip"                     # ADR-056: a video has its own card
     await stage.show("map", {"title": "Rute", "markers": [{"lat": -6.2, "lon": 106.8, "label": "x"}]}, "Rute", "jarvis")
-    assert (await live.snapshot("utama"))["player"] is None                                          # a map is not a player
+    assert (await live.snapshot("utama"))["player"]["id"] == first                                   # a map never stops the music
     await stage.show("audio", {"url": "https://cdn.example.com/a.mp3", "title": "Suara"}, "Suara", "jarvis")
+    assert (await live.snapshot("utama"))["player"]["id"] != first                                   # a new sound is a new player
     await stage.on_event(stage.current()["id"], "closed")
     assert (await live.snapshot("utama"))["player"] is None
     r, _ = await _two_companies(pool, monkeypatch)

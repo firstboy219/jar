@@ -43,6 +43,38 @@ async def create_inactive(workflow: dict) -> dict:
     return {"id": created["id"], "name": created["name"], "active": created.get("active", False)}
 
 
+async def update_workflow(workflow_id: str, workflow: dict) -> dict:
+    body = {k: workflow[k] for k in ("name", "nodes", "connections") if k in workflow}
+    body["settings"] = workflow.get("settings") or {"executionOrder": "v1"}
+    w = await _call("PUT", f"/workflows/{workflow_id}", json=body)
+    return {"id": w["id"], "name": w["name"], "active": w.get("active", False)}
+
+
+async def put_credential(cred_id: str | None, name: str, cred_type: str, data: dict) -> dict:
+    """Create a credential, or replace the one with this id (a new login). n8n keeps it encrypted; JARVIS never reads it back."""
+    if cred_id:
+        try:
+            c = await _call("PATCH", f"/credentials/{cred_id}", json={"name": name, "type": cred_type, "data": data})
+            return {"id": c["id"], "name": c["name"]}
+        except N8nError as e:
+            if "404" not in str(e):
+                raise
+    c = await _call("POST", "/credentials", json={"name": name, "type": cred_type, "data": data})
+    return {"id": c["id"], "name": c["name"]}
+
+
+async def delete_credential(cred_id: str) -> None:
+    try:
+        await _call("DELETE", f"/credentials/{cred_id}")
+    except N8nError as e:
+        if "404" not in str(e):
+            raise
+
+
+async def deactivate(workflow_id: str) -> None:
+    await _call("POST", f"/workflows/{workflow_id}/deactivate")
+
+
 async def activate(workflow_id: str) -> dict:
     w = await _call("POST", f"/workflows/{workflow_id}/activate")
     return {"id": w["id"], "name": w["name"], "active": w.get("active", True)}

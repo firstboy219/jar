@@ -3,11 +3,13 @@
 // data) plus the owner's own notes, text, shapes and frames; this page lays them out. It can select, place, move, resize, link and take
 // cards off the board — it never approves, deletes data, sends or pays.
 import { createTakeover } from './takeover.js';
-import { PANELS, ago, parseFrameHeader, contextLabel, frameNeedsFetch, shouldFollow, takeAppParams } from './lib.js';
+import { PANELS, FEATURE_CARDS, ago, parseFrameHeader, contextLabel, frameNeedsFetch, shouldFollow, takeAppParams } from './lib.js';
 import { createBoard } from './board.js';
 import { createChrome } from './chrome.js';
 import { initDock } from './dock.js';
 import { createMeetingCard, createPlayerCard } from './deskcards.js';
+import { SHOW_CARDS, createShowCard } from './showcards.js';
+import { createGoogleCard } from './googlecard.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -196,8 +198,8 @@ function renderLive(card, l) {
   if (!box) {
     box = el('div', 'livebox nodrag');
     const help = el('div', 'helpline'); help.hidden = true;
-    const grab = el('button', 'takebtn', '🖱 Ambil alih');
-    grab.title = 'Kendalikan browser pekerja ini sendiri — untuk captcha atau login';
+    const grab = el('button', 'takebtn', '✋ Intervensi');
+    grab.title = 'Kendalikan browser pekerja ini sendiri kapan saja — Jarvis diminta diam sampai Anda selesai';
     grab.addEventListener('click', (ev) => { ev.stopPropagation(); if (l.st) takeover.open(l.st); });
     box.append(el('div', 'livehead'), el('div', 'pageline'), help, el('canvas', 'frame'), grab, el('ul', 'steps'), el('div', 'thought'));
     box.querySelector('canvas').hidden = true;
@@ -209,11 +211,11 @@ function renderLive(card, l) {
     ...(performance.now() - (l.liveAt || -1e9) < 3000 ? [el('span', 'livebadge', '● LANGSUNG')] : []));
   const help = box.querySelector('.helpline'), grab = box.querySelector('.takebtn');
   help.hidden = !(st.asking || st.controlled);
-  help.textContent = st.controlled ? `🖱 ${st.control_by || 'Seseorang'} sedang mengendalikan browser ini` : (st.asking ? `❓ Jarvis butuh bantuanmu: ${st.asking}` : '');
+  help.textContent = st.controlled ? `✋ ${st.control_by || 'Seseorang'} sedang mengendalikan browser ini${st.paused ? ' · Jarvis menunggu' : ''}` : (st.asking ? `❓ Jarvis butuh bantuanmu: ${st.asking}` : '');
   help.classList.toggle('ask', !!st.asking && !st.controlled);
-  grab.hidden = !(st.has_frame && !['completed', 'failed', 'cancelled', 'stopped'].includes(st.status));
+  grab.hidden = !((st.has_frame || st.browsing) && !['completed', 'failed', 'cancelled', 'stopped'].includes(st.status));
   grab.classList.toggle('urgent', !!st.asking && !st.controlled);
-  if (st.asking && !l.askToasted && !st.controlled) { l.askToasted = st.asking; toast(`Jarvis butuh bantuanmu di "${st.title}" — klik Ambil alih di kartunya.`); }
+  if (st.asking && !l.askToasted && !st.controlled) { l.askToasted = st.asking; toast(`Jarvis butuh bantuanmu di "${st.title}" — klik Intervensi di kartunya.`); }
   if (!st.asking) l.askToasted = '';
   box.querySelector('.pageline').textContent = st.page_title || st.url || '';
   box.querySelector('.pageline').hidden = !(st.page_title || st.url);
@@ -308,13 +310,15 @@ function panelFor(name) {
 }
 
 // The player and the meeting recorder (ADR-054): feature cards at fixed places; the camera flies to one when it shows up.
-let dockApi = null, playerCard = null, meetingCard = null;
+let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null;
+const showCards = {};
 const arrived = {};   // card → the key of what it last showed (undefined until the first poll after loading)
 
 function renderFeatureCards(d) {
   if (!('player' in d) || current.context !== 'utama') return;   // only the main board is the desk; a company board has neither
   const pp = panelFor('player'), mp = panelFor('meeting');
-  playerCard ||= createPlayerCard({ box: pp.el, api, send: (o) => dockApi?.raw(o), toast });
+  const send = (o) => dockApi?.raw(o);
+  playerCard ||= createPlayerCard({ box: pp.el, api, send, toast, label: 'musik', hint: 'Bilang: "putar lagu …" — lagunya diputar di sini.' });
   meetingCard ||= createMeetingCard({ box: mp.el, api, toast, embedded: !!fromApp.embedded });
   pp.el.hidden = !playerCard.update(d.player);
   const m = meetingCard.update(d.meeting, d.now);
@@ -326,6 +330,18 @@ function renderFeatureCards(d) {
   };
   arrive('player', d.player?.id ?? null, pp);
   arrive('meeting', m.show && ['waiting', 'recording'].includes(d.meeting?.state) ? m.key : null, mp);
+  const cards = d.cards || {}, vp = panelFor('video');
+  videoCard ||= createPlayerCard({ box: vp.el, api, send, toast, label: 'video', hint: 'Bilang: "putar video …" atau "putar YouTube …" — videonya diputar di sini.' });
+  vp.el.hidden = !videoCard.update(cards.video);
+  arrive('video', cards.video?.id ?? null, vp);
+  for (const slot of Object.keys(SHOW_CARDS)) {
+    const pn = panelFor(slot);
+    showCards[slot] ||= createShowCard({ box: pn.el, api, slot, send, toast, embedded: !!fromApp.embedded });
+    pn.el.hidden = false;
+    arrive(slot, showCards[slot].update(cards[slot]), pn);
+  }
+  googleCard ||= createGoogleCard({ box: panelFor('google').el, api, toast, embedded: !!fromApp.embedded });
+  panelFor('google').el.hidden = !googleCard.allowed;   // only the owner's own device sees it
 }
 
 function renderPanels(d) {
@@ -333,7 +349,7 @@ function renderPanels(d) {
   renderFeatureCards(d);
   const show = (name, on) => { if (on && desk) panelFor(name).el.hidden = false; else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
   show('prompts', !!d.prompts); show('n8n', !!d.n8n); show('storage', !!d.storage);
-  if (!desk) { for (const n of ['player', 'meeting']) if (deskPanels[n]) deskPanels[n].el.hidden = true; return; }
+  if (!desk) { for (const n of FEATURE_CARDS) if (deskPanels[n]) deskPanels[n].el.hidden = true; return; }
   if (d.prompts) {
     const e = panelFor('prompts').el;
     e.replaceChildren(el('div', 'kind', 'meja · permintaanmu'), el('div', 'title', 'Permintaan terakhir'));

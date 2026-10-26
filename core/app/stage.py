@@ -20,6 +20,11 @@ MAX_TEXT = 20_000
 MAX_PAYLOAD = 64_000
 _HTTPS = re.compile(r"^https://", re.IGNORECASE)
 _current: dict | None = None
+# The desk keeps one card per kind of thing (ADR-056): showing a picture never stops the music, and each card stays where it is on the
+# board. slot → {"id", "stage_id", "items": [{"panel", ...payload}], "caption", "at"}. A board's blocks go to their own cards.
+SLOTS = {"music": "music", "audio": "music", "video": "video", "image": "image", "gallery": "image", "doc": "doc", "map": "map",
+         "web": "web", "text": "text", "draft": "draft"}
+_desk: dict[str, dict] = {}
 
 
 class StageError(ValueError):
@@ -125,12 +130,37 @@ async def show_any(items: list[dict], caption: str = "", actor: str = "jarvis") 
     return await show("board", {"title": caption, "blocks": [{"kind": k, **p} for k, p in parts]}, caption, actor)
 
 
+def place(event: dict) -> list[str]:
+    """Put what is shown on its desk card(s) (pure apart from the module's state). Returns the slots it filled."""
+    panel, p = event["panel"], event["payload"] or {}
+    groups: dict[str, list[dict]] = {}
+    if panel == "board":
+        for b in p.get("blocks") or []:
+            if b.get("kind") in SLOTS:
+                groups.setdefault(SLOTS[b["kind"]], []).append({"panel": b["kind"], **{k: v for k, v in b.items() if k != "kind"}})
+    elif panel in SLOTS:
+        groups[SLOTS[panel]] = [{"panel": panel, **p}]
+    for slot, items in groups.items():
+        _desk[slot] = {"id": event["id"] if panel != "board" else f"{event['id']}-{slot}", "stage_id": event["id"],
+                       "items": items[:12], "caption": event.get("caption", ""), "at": event.get("at", time.time())}
+    return list(groups)
+
+
+def unplace(stage_id: str, slot: str | None = None) -> bool:
+    """A card's ✕, or JARVIS closing what it showed: the card goes back to empty."""
+    gone = [k for k, v in _desk.items() if (slot is None or k == slot) and stage_id in (v["id"], v["stage_id"])]
+    for k in gone:
+        del _desk[k]
+    return bool(gone)
+
+
 async def show(panel: str, payload: dict, caption: str = "", actor: str = "jarvis", drafts: bool = False) -> dict:
     global _current
     payload = validate(panel, payload, drafts)
     event = {"type": "stage", "id": uuid.uuid4().hex[:12], "panel": panel, "mode": "show",
              "payload": payload, "caption": caption[:200], "at": time.time()}
     _current = event
+    place(event)
     delivered = await hub.broadcast(event)
     from . import library
     shown = await library.record(panel, payload, caption)  # Simpanan: shown again later
@@ -148,6 +178,8 @@ async def update(stage_id: str, payload: dict) -> dict:
     drafts = any(b.get("kind") == "draft" for b in _current["payload"].get("blocks") or [])
     payload = validate(_current["panel"], {**_current["payload"], **payload}, drafts)
     _current = {**_current, "payload": payload, "mode": "update"}
+    if any(v["stage_id"] == stage_id for v in _desk.values()):
+        place({**_current, "at": _current.get("at", time.time())})
     return {"delivered": await hub.broadcast(_current)}
 
 
@@ -155,6 +187,7 @@ async def close(stage_id: str | None = None) -> dict:
     global _current
     if _current and (stage_id is None or _current["id"] == stage_id):
         event = {"type": "stage", "id": _current["id"], "panel": _current["panel"], "mode": "close"}
+        unplace(_current["id"])
         _current = None
         return {"delivered": await hub.broadcast(event)}
     return {"delivered": 0}
@@ -164,18 +197,45 @@ def current() -> dict | None:
     return _current
 
 
-def desk_player() -> dict | None:
-    """What the desk's player card shows (ADR-054): the music / sound / video panel that is up, else nothing. The id changes with each
-    song, so a viewer builds a new player only then; the rest of the fields describe it."""
-    cur = _current
-    if not cur or cur["panel"] not in ("music", "audio", "video"):
-        return None
-    p = cur["payload"] or {}
+def _media_view(card: dict) -> dict:
+    p = card["items"][0]
     pl = p.get("playlist") if isinstance(p.get("playlist"), dict) else None
-    return {"id": cur["id"], "panel": cur["panel"], "title": str(p.get("title") or "")[:200],
+    return {"id": card["id"], "panel": p["panel"], "title": str(p.get("title") or "")[:200],
             "artist": str(p.get("artist") or p.get("channel") or "")[:200], "url": str(p.get("url") or ""),
-            "cover_url": str(p.get("cover_url") or ""), "caption": cur.get("caption", ""), "playlist": pl,
-            "license": str(p.get("license") or ""), "at": cur.get("at")}
+            "cover_url": str(p.get("cover_url") or p.get("thumbnail_url") or ""), "caption": card.get("caption", ""), "playlist": pl,
+            "license": str(p.get("license") or ""), "at": card.get("at")}
+
+
+def desk_player() -> dict | None:
+    """What the desk's music card shows (ADR-054/056): the song or sound on it, else nothing. The id changes with each song, so a
+    viewer builds a new player only then; the rest of the fields describe it."""
+    card = _desk.get("music")
+    return _media_view(card) if card else None
+
+
+def desk_cards() -> dict:
+    """Every other desk card (ADR-056): video, image, doc, map, web, text, draft — {slot: {"id", "items", "caption", "at"} | None}.
+    The music card is desk_player()."""
+    out: dict = {}
+    for slot in ("video", "image", "doc", "map", "web", "text", "draft"):
+        card = _desk.get(slot)
+        if not card:
+            out[slot] = None
+        elif slot == "video":
+            out[slot] = _media_view(card)
+        else:
+            out[slot] = {"id": card["id"], "items": card["items"], "caption": card.get("caption", ""), "at": card.get("at")}
+    return out
+
+
+def _find(stage_id: str) -> dict | None:
+    """The shown thing a viewer acts on: the phone's current panel, or a desk card (which may outlive it)."""
+    if _current and _current["id"] == stage_id:
+        return _current
+    for v in _desk.values():
+        if stage_id in (v["id"], v["stage_id"]):
+            return {"id": v["stage_id"], "panel": v["items"][0]["panel"], "payload": v["items"][0], "desk": True}
+    return None
 
 
 def describe() -> str | None:
@@ -201,14 +261,20 @@ def describe() -> str | None:
 async def on_event(stage_id: str, event: str, detail: dict | None = None) -> None:
     """The owner acted on a panel: closed it, finished logging in, picked a route, paused the music."""
     global _current
-    if not _current or _current["id"] != stage_id:
+    found = _find(stage_id)
+    if not found:
         return
     if event == "closed":
-        _current = None
+        unplace(stage_id)
+        if _current and _current["id"] == stage_id:
+            _current = None
         return
-    if (_current["payload"] or {}).get("playlist") and event in ("ended", "next", "prev"):
+    if (found["payload"] or {}).get("playlist") and event in ("ended", "next", "prev"):
         from . import playlists
         playlists.on_stage_event(event)  # a playlist is playing: the following (or previous) song comes next
+    if found.get("desk"):   # a desk card the phone no longer shows: nothing else to keep
+        await audit.record("owner", "stage.event", None, panel=found["panel"], event=event[:40])
+        return
     _current = {**_current, "last_event": {"event": event[:40], "detail": detail or {}, "at": time.time()}}
     if event == "route_selected" and isinstance((detail or {}).get("index"), int):
         _current["payload"] = {**_current["payload"], "selected": detail["index"]}
