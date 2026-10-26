@@ -1482,7 +1482,7 @@ async def test_v4_f7_the_shared_browser_gets_the_hands_overlay_in_every_page(poo
     for sid in ("S-T1", "S-T2"):
         mine = [m for m in sent if m.get("sessionId") == sid]
         assert [m["method"] for m in mine] == ["Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]   # later pages of the tab, and the one open now
-        assert "__jarvisHands" in mine[0]["params"]["source"]
+        assert "__jarvisHands" in mine[1]["params"]["source"]
     js = live.CURSOR_JS
     assert "mode: 'closed'" in js and "pointer-events:none" in js and "aria-hidden" in js     # draws, never touches or answers the page
     assert "fetch(" not in js and "XMLHttpRequest" not in js and "sendBeacon" not in js        # and sends nothing anywhere
