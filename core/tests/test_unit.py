@@ -1290,3 +1290,13 @@ def test_v4_f9_owner_input_becomes_devtools_commands_and_nothing_else():
     assert live.input_commands({"t": "key", "k": "down", "key": "F5"}, view) == []
     assert live.input_commands({"t": "formatc"}, view) == [] and live.input_commands({}, view) == []
     assert "selectAll" in json.dumps(live.input_commands({"t": "key", "k": "down", "key": "a", "ctrl": True}, view))
+
+
+def test_v4_f9_no_module_has_two_functions_of_the_same_name():
+    """A second `_core` once silently replaced the first: ask_owner, notify_owner, the stage and music tools all failed in the worker's hands."""
+    import ast
+    import collections
+    from pathlib import Path
+    for path in sorted((Path(__file__).parent.parent / "app").glob("*.py")):
+        seen = collections.Counter(n.name for n in ast.parse(path.read_text()).body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+        assert [k for k, v in seen.items() if v > 1] == [], path.name
