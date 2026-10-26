@@ -58,3 +58,67 @@ test('the desk follows the owner\'s new task once, and never grabs the camera fr
   assert.equal(ago(7200), '2.0 jam');
   assert.deepEqual(Object.keys(PANELS).sort(), ['n8n', 'prompts', 'storage']);
 });
+
+test('standard views, fitting and the command line', async () => {
+  const { VIEWS, shortestAngle, boundsOf, fitDistance, orthoHeight, snapValue, distance3, cssCubeMatrix, parseCommand, clampPhi } = await import('../lib.js');
+  assert.deepEqual(Object.keys(VIEWS).sort(), ['back', 'bottom', 'front', 'iso', 'left', 'right', 'top']);
+  assert.ok(VIEWS.top.phi > 0 && VIEWS.bottom.phi < Math.PI);                      // never exactly on the pole (the up vector would flip)
+  assert.equal(clampPhi(-1), 0.02);
+  assert.ok(Math.abs(shortestAngle(0.1, 2 * Math.PI - 0.1) - (-0.1)) < 1e-9);       // back round the short side
+  const b = boundsOf([{ x: 0, y: 0, z: 0 }, { x: 1000, y: 0, z: 0 }]);
+  assert.equal(b.x, 500); assert.equal(b.radius, 500);
+  assert.equal(boundsOf([]).radius, 600);
+  assert.ok(fitDistance(500, 60, 1.6) > 500 && fitDistance(500, 60, 0.5) > fitDistance(500, 60, 1.6));   // a narrow screen needs more room
+  assert.ok(Math.abs(orthoHeight(1000, 60) - 2 * 1000 * Math.tan(Math.PI / 6)) < 1e-9);
+  assert.equal(snapValue(137, 50), 150); assert.equal(snapValue(137, 0), 137);
+  assert.equal(distance3({ x: 0, y: 0, z: 0 }, { x: 3, y: 4, z: 0 }).d, 5);
+  assert.equal(cssCubeMatrix([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), 'matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)');
+  assert.deepEqual(parseCommand('top'), { name: 'view', view: 'top' });
+  assert.deepEqual(parseCommand('  Depan '), { name: 'view', view: 'front' });
+  assert.deepEqual(parseCommand('zoom e'), { name: 'extents' });
+  assert.deepEqual(parseCommand('ortho'), { name: 'projection', mode: 'ortho' });
+  assert.deepEqual(parseCommand('layer tugas off'), { name: 'layer', layer: 'tugas', on: false });
+  assert.deepEqual(parseCommand('layer yang ditampilkan'), { name: 'layer', layer: 'yang ditampilkan', on: null });
+  assert.deepEqual(parseCommand('view save kerja'), { name: 'saveView', as: 'kerja' });
+  assert.deepEqual(parseCommand('view kerja'), { name: 'namedView', as: 'kerja' });
+  assert.deepEqual(parseCommand('ukur'), { name: 'tool', tool: 'measure' });
+  assert.deepEqual(parseCommand('cari laporan bulanan'), { name: 'find', query: 'laporan bulanan' });
+  assert.equal(parseCommand('ngawur').name, 'unknown'); assert.equal(parseCommand('').name, 'none');
+});
+
+test('voice: resample, PCM16 and the voice activity detector', async () => {
+  const { downsample, floatToPcm16, pcm16ToBase64, Vad } = await import('../lib.js');
+  assert.equal(downsample(new Float32Array(48000), 48000, 16000).length, 16000);
+  assert.equal(downsample(new Float32Array(100), 16000, 16000).length, 100);
+  const pcm = floatToPcm16(Float32Array.from([0, 1, -1, 2]));
+  assert.deepEqual([...pcm], [0, 32767, -32768, 32767]);                              // clipped, never wrapped
+  assert.equal(pcm16ToBase64(Int16Array.from([1, 2])), Buffer.from(new Uint8Array(Int16Array.from([1, 2]).buffer)).toString('base64'));
+  const vad = new Vad();
+  const tone = (secs, amp) => Float32Array.from({ length: Math.round(16000 * secs) }, (_, i) => amp * Math.sin(i / 8));
+  const quiet = (secs) => Float32Array.from({ length: Math.round(16000 * secs) }, () => (Math.random() - 0.5) * 0.002);
+  const out = [];
+  for (const chunk of [quiet(1), tone(1, 0.3), quiet(1.2), quiet(0.5)]) {
+    for (let i = 0; i < chunk.length; i += 1700) { const u = vad.push(chunk.subarray(i, i + 1700)); if (u) out.push(u); }   // odd chunk size on purpose
+  }
+  assert.equal(out.length, 1);
+  const secs = out[0].length / 16000;
+  assert.ok(secs > 1.0 && secs < 1.7, `utterance ${secs}s`);                           // the second of speech + pre-roll, not the silence
+  const clicks = new Vad(); const got = [];
+  for (const chunk of [quiet(1), tone(0.1, 0.4), quiet(1.5)]) { const u = clicks.push(chunk); if (u) got.push(u); }
+  assert.equal(got.length, 0);                                                          // a 100 ms click is not an utterance
+});
+
+test('the view cube shows the face you are looking at: each standard view puts its face toward the viewer', async () => {
+  const THREE = await import('../vendor/three.module.min.js');
+  const { VIEWS, cssCubeMatrix } = await import('../lib.js');
+  const normals = { top: [0, -1, 0], bottom: [0, 1, 0], front: [0, 0, 1], back: [0, 0, -1], right: [1, 0, 0], left: [-1, 0, 0] };   // CSS space (y down)
+  const cam = new THREE.PerspectiveCamera(60, 1.6, 1, 80000);
+  for (const [view, n] of Object.entries(normals)) {
+    const { theta, phi } = VIEWS[view], r = 1000;
+    cam.position.set(r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.cos(theta));
+    cam.lookAt(0, 0, 0); cam.updateMatrixWorld(); cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+    const m = cssCubeMatrix(cam.matrixWorldInverse.elements).replace('matrix3d(', '').replace(')', '').split(',').map(Number);
+    const z = m[2] * n[0] + m[6] * n[1] + m[10] * n[2];                       // the z component of the face normal after the cube's rotation
+    assert.ok(z > 0.95, `${view}: face normal z = ${z.toFixed(3)}`);          // pointing at the viewer
+  }
+});

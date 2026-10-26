@@ -141,3 +141,161 @@ export function ago(seconds) {
   const s = Math.max(0, Math.round(seconds));
   return s < 90 ? `${s} dtk` : s < 5400 ? `${Math.round(s / 60)} mnt` : `${(s / 3600).toFixed(1)} jam`;
 }
+
+// ---------- the drafting toolkit (ADR-052): views, projection, commands ----------
+
+/** Standard views as orbit angles: theta around the vertical axis, phi from straight up (0) to straight down (π). */
+export const VIEWS = {
+  top: { theta: 0, phi: 0.02 }, bottom: { theta: 0, phi: Math.PI - 0.02 },
+  front: { theta: 0, phi: Math.PI / 2 }, back: { theta: Math.PI, phi: Math.PI / 2 },
+  right: { theta: Math.PI / 2, phi: Math.PI / 2 }, left: { theta: -Math.PI / 2, phi: Math.PI / 2 },
+  iso: { theta: Math.PI / 4, phi: 0.955 },
+};
+export const VIEW_LABEL = { top: 'Atas', bottom: 'Bawah', front: 'Depan', back: 'Belakang', right: 'Kanan', left: 'Kiri', iso: 'Isometrik' };
+export const clampPhi = (phi) => Math.min(Math.max(phi, 0.02), Math.PI - 0.02);
+
+/** Smallest turn from angle a to b (so a flight to "back" does not spin the long way round). */
+export function shortestAngle(a, b) {
+  const d = ((b - a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  return a + d;
+}
+
+/** Centre and radius of a cloud of points (zoom extents / zoom to selection). */
+export function boundsOf(points) {
+  if (!points.length) return { x: 0, y: 0, z: 0, radius: 600 };
+  const c = points.reduce((s, p) => ({ x: s.x + p.x / points.length, y: s.y + p.y / points.length, z: s.z + p.z / points.length }), { x: 0, y: 0, z: 0 });
+  const radius = Math.max(...points.map((p) => Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z)), 120);
+  return { ...c, radius };
+}
+
+/** Camera distance that fits a sphere of `radius` in view (vertical fov in degrees, with a little margin). */
+export function fitDistance(radius, fovDeg, aspect) {
+  const v = (fovDeg * Math.PI) / 180, h = 2 * Math.atan(Math.tan(v / 2) * aspect);
+  return (radius / Math.sin(Math.min(v, h) / 2)) * 1.12;
+}
+
+/** Height of the orthographic frustum that shows the same picture as a perspective camera at distance r. */
+export const orthoHeight = (r, fovDeg) => 2 * r * Math.tan((fovDeg * Math.PI) / 360);
+
+export const snapValue = (v, step) => (step > 0 ? Math.round(v / step) * step : v);
+
+export function distance3(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+  return { dx, dy, dz, d: Math.hypot(dx, dy, dz) };
+}
+
+/** CSS matrix3d for the view cube from a camera's matrixWorldInverse (column-major 16 numbers); CSS has y pointing down. */
+export function cssCubeMatrix(e) {
+  const f = [1, -1, 1];
+  const m = [];
+  for (let j = 0; j < 3; j++) { for (let i = 0; i < 3; i++) m.push(f[i] * e[j * 4 + i] * f[j]); m.push(0); }
+  m.push(0, 0, 0, 1);
+  return `matrix3d(${m.map((x) => (Math.abs(x) < 1e-9 ? 0 : +x.toFixed(5))).join(',')})`;
+}
+
+const VIEW_WORDS = { top: 'top', atas: 'top', bottom: 'bottom', bawah: 'bottom', front: 'front', depan: 'front', back: 'back', belakang: 'back',
+  left: 'left', kiri: 'left', right: 'right', kanan: 'right', iso: 'iso', isometrik: 'iso', isometric: 'iso' };
+const TOOL_WORDS = { orbit: 'orbit', putar: 'orbit', pan: 'pan', geser: 'pan', zoom: 'zoom', select: 'select', pilih: 'select',
+  measure: 'measure', ukur: 'measure', link: 'link', hubung: 'link', hubungkan: 'link' };
+
+/** The command line (like AutoCAD's): "top", "zoom e", "ortho", "layer tugas off", "view save A", "cari laporan"… → {name, ...}. */
+export function parseCommand(text) {
+  const t = String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!t) return { name: 'none' };
+  const [w, ...rest] = t.split(' ');
+  const arg = rest.join(' ');
+  if (VIEW_WORDS[t]) return { name: 'view', view: VIEW_WORDS[t] };
+  if (['home', 'inti'].includes(t)) return { name: 'home' };
+  if (['ze', 'extents', 'zoom e', 'zoom extents', 'semua', 'zoom semua'].includes(t)) return { name: 'extents' };
+  if (['zs', 'zoom s', 'zoom selection', 'zoom pilihan', 'pilihan'].includes(t)) return { name: 'selection' };
+  if (['ortho', 'orto'].includes(t)) return { name: 'projection', mode: 'ortho' };
+  if (['persp', 'perspective', 'perspektif'].includes(t)) return { name: 'projection', mode: 'persp' };
+  if (['grid', 'kisi'].includes(t)) return { name: 'grid' };
+  if (['snap'].includes(t)) return { name: 'snap' };
+  if (['help', '?', 'bantuan'].includes(t)) return { name: 'help' };
+  if (TOOL_WORDS[t]) return { name: 'tool', tool: TOOL_WORDS[t] };
+  if (w === 'layer' || w === 'lapisan') {
+    const m = /^(.+?)(?: (on|off|nyala|mati))?$/.exec(arg);
+    return m && m[1] ? { name: 'layer', layer: m[1], on: m[2] ? ['on', 'nyala'].includes(m[2]) : null } : { name: 'unknown' };
+  }
+  if (w === 'view' || w === 'tampilan') {
+    const m = /^save (.+)$/.exec(arg) || /^simpan (.+)$/.exec(arg);
+    if (m) return { name: 'saveView', as: m[1] };
+    return arg ? { name: 'namedView', as: arg } : { name: 'unknown' };
+  }
+  if (['find', 'cari'].includes(w) && arg) return { name: 'find', query: arg };
+  return { name: 'unknown' };
+}
+
+// ---------- voice in the browser (ADR-052): resample, voice activity, PCM16 ----------
+
+/** Resample mono Float32 audio by linear interpolation (the microphone runs at 44.1/48 kHz, the server wants 16 kHz). */
+export function downsample(input, fromRate, toRate) {
+  if (toRate >= fromRate) return Float32Array.from(input);
+  const ratio = fromRate / toRate, n = Math.floor(input.length / ratio), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const pos = i * ratio, i0 = Math.floor(pos), i1 = Math.min(i0 + 1, input.length - 1), f = pos - i0;
+    out[i] = input[i0] * (1 - f) + input[i1] * f;
+  }
+  return out;
+}
+
+export function floatToPcm16(input) {
+  const out = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) { const s = Math.max(-1, Math.min(1, input[i])); out[i] = s < 0 ? s * 0x8000 : s * 0x7fff; }
+  return out;
+}
+
+export function pcm16ToBase64(pcm) {
+  const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+/**
+ * Voice activity: feed 16 kHz mono Float32 chunks of any size; push() returns the finished utterance (Int16Array) or null.
+ * Adaptive: the start threshold follows the room's noise floor, speech needs a few loud frames in a row, an utterance ends after
+ * `hangMs` of quiet, with a short pre-roll so the first syllable is not cut; shorter than `minMs` is dropped as a click.
+ */
+export class Vad {
+  constructor({ rate = 16000, frameMs = 20, startRms = 0.02, hangMs = 700, minMs = 350, maxMs = 15000, preMs = 300, needFrames = 3 } = {}) {
+    Object.assign(this, { rate, frame: Math.round((rate * frameMs) / 1000), startRms, hangFrames: Math.round(hangMs / frameMs), minFrames: Math.round(minMs / frameMs),
+      maxFrames: Math.round(maxMs / frameMs), preFrames: Math.round(preMs / frameMs), needFrames });
+    this.pending = new Float32Array(0); this.pre = []; this.speech = null; this.loud = 0; this.quiet = 0; this.noise = 0.004; this.level = 0;
+  }
+  get active() { return this.speech !== null; }
+  push(chunk) {
+    const merged = new Float32Array(this.pending.length + chunk.length);
+    merged.set(this.pending); merged.set(chunk, this.pending.length);
+    let done = null, at = 0;
+    for (; at + this.frame <= merged.length; at += this.frame) done = this.#frame(merged.subarray(at, at + this.frame)) || done;
+    this.pending = merged.slice(at);
+    return done;
+  }
+  #frame(f) {
+    let e = 0;
+    for (let i = 0; i < f.length; i++) e += f[i] * f[i];
+    const rms = Math.sqrt(e / f.length);
+    this.level = rms;
+    const on = rms > Math.max(this.startRms, this.noise * 3);
+    if (this.speech === null) {
+      if (!on) this.noise = this.noise * 0.95 + rms * 0.05;
+      this.pre.push(Float32Array.from(f)); if (this.pre.length > this.preFrames) this.pre.shift();
+      this.loud = on ? this.loud + 1 : 0;
+      if (this.loud >= this.needFrames) { this.speech = [...this.pre]; this.pre = []; this.quiet = 0; }
+      return null;
+    }
+    this.speech.push(Float32Array.from(f));
+    this.quiet = on ? 0 : this.quiet + 1;
+    if (this.quiet >= this.hangFrames || this.speech.length >= this.maxFrames) {
+      const frames = this.speech.length - this.quiet;
+      const keep = this.speech.length - Math.max(0, this.quiet - 10);   // keep 200 ms of the trailing quiet, not the whole hang time
+      const out = frames >= this.minFrames ? floatToPcm16(concat(this.speech.slice(0, keep))) : null;
+      this.speech = null; this.loud = 0; this.quiet = 0;
+      return out;
+    }
+    return null;
+  }
+}
+function concat(list) { const n = list.reduce((s, a) => s + a.length, 0), out = new Float32Array(n); let o = 0; for (const a of list) { out.set(a, o); o += a.length; } return out; }

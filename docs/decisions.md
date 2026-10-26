@@ -911,3 +911,35 @@ card at once and storage can be laid out.
   "full" profile browses through one `browser_exec` tool, so steps read "Menjalankan di halaman: <what it was asked to do>" rather than
   separate click/scroll lines; separate lines appear when it uses the individual browser tools. Not covered: fonts for some scripts (Thai
   shows as boxes in screenshots), clicks drawn on the screenshot, two browsing tasks at once.
+
+## ADR-052 — The desk is the main page: drafting-style 3D tools, and the conversation panels on it (2026-10-26)
+The owner (2026-10-26): make the infinite canvas the main page of the web AND the app, complete with chat, screen sharing, camera and
+audio panels, and a tools panel like AutoCAD's so the 3D can be explored with the mouse.
+- **Front door.** `/` on the server opens the desk (`/canvas/`); the app starts on it (new first tab "Meja", the start destination when
+  signed in; the other tabs are unchanged, the older console entry "Galaksi 3D" stays). The admin page stays the control point; the desk
+  has an "Admin" link (hidden in the app).
+- **Drafting toolkit (`cad.js`, tested in `lib.js`).** Mouse as in a drafting program: wheel zooms toward the cursor, middle button pans,
+  Shift + middle orbits, right button pans; the left button follows the active tool — a palette (Pilih, Orbit, Geser, Zoom seret, Ukur,
+  Hubungkan; one-letter keys V O P Z M L). A **view cube** (top right) turns to the face you click (Atas, Bawah, Depan, Belakang, Kanan, Kiri,
+  isometric, ±90° turns; its orientation is checked numerically for every standard view), a navigation bar (Home, Zoom semua, Zoom ke
+  pilihan, perspective/orthographic, grid, snap), **layers** (every constellation, live stations, desk panels, links, card stars, galaxy
+  particles, floor grid), a **properties** palette (a card's X/Y/Z, size, pin — edited numerically; or the view's), a **measure** tool (two
+  cards → distance and ΔX/ΔY/ΔZ), snap-to-50 while dragging a card (F9), a floor grid (F7), saved views, and a **command line** with a status
+  bar (`top`, `front`, `iso`, `ortho`, `ze`, `layer tugas off`, `view save A`, `cari …`, `?`). Orthographic mode swaps the camera with the
+  frustum of the same picture at the target's depth, and points get a pixel size (they have no distance to shrink by). Successive view
+  commands keep the aim of the flight in progress. All of it changes how the owner LOOKS or moves a card the owner drags — it never
+  approves, deletes, sends or pays.
+- **Panels (`dock.js`)** over the phone's own WebSocket (`/ws`, authenticated by a first message since browsers cannot set headers): a chat
+  (streamed answers, tool/thought status, reports and proactive messages, the conversation kept in this browser), a **microphone** (Web Audio →
+  16 kHz → an adaptive voice-activity detector → one utterance per phrase, the server does the hearing — same path as the phone, so the
+  voice complements and the owner's engine choice apply; the mic is ignored while Jarvis talks), a **camera** and a **screen share**
+  (the latest frame, ≤ 1024 px JPEG, travels with what is typed or said — exactly the app's protocol; a red-framed preview tile with
+  "dibagikan ke Jarvis" and a stop button is always visible while sharing), and spoken replies with the browser's own voice (toggle). The
+  site now sends `Permissions-Policy: camera=(self), microphone=(self), display-capture=(self)` for the desk only.
+- **In the app** the page runs embedded: only chat and the drafting tools, because the phone's native microphone (on-phone VAD, wake word),
+  camera and screen sharing are better and must not be captured twice; three native buttons (mic, camera with a small preview, screen) sit
+  over the page and drive the same engine as the Bicara tab. Android WebView has no screen capture anyway.
+Acceptance (`test_v4_f8_*`): `/` opens the desk, the desk may use its own microphone/camera/screen and nothing else; a wrong token on the
+WebSocket is refused with 4401; a chat message with a camera frame reaches the brain with the frame and source and streams back to its
+session; an utterance is transcribed, answered and carries a shared screen; too-short audio is refused. JS tests cover the views, command
+parsing, fitting, the cube's orientation, resampling, PCM16 and the voice detector.

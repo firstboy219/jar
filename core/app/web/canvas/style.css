@@ -108,3 +108,79 @@ button.danger { border-color: rgba(248, 113, 113, 0.5); color: #fecaca; }
 .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .card.panel button { margin-top: 8px; font-size: 11px; padding: 4px 8px; }
 @media (max-width: 700px) { .card.live { width: 300px; } .card.panel { width: 240px; } }
+
+/* ---------- the drafting toolkit and the docks (ADR-052) ---------- */
+#hud, #help { display: none; }
+#toasts { bottom: 52px; }
+#gesture-box { top: auto; right: auto; left: 64px; bottom: 48px; text-align: left; }
+.cad button.tb, .cad .chip { cursor: pointer; }
+.palette { position: fixed; left: 8px; top: 64px; z-index: 20000; display: flex; flex-direction: column; gap: 4px; padding: 6px;
+  background: var(--glass); border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(8px); }
+.tb { width: 38px; height: 38px; padding: 0; display: grid; place-items: center; font-size: 18px; border-radius: 8px; line-height: 1; }
+.tb.on, .chip.on { border-color: var(--cyan); background: rgba(103, 232, 249, 0.2); color: var(--cyan); }
+.sep { height: 1px; background: var(--line); margin: 2px 0; }
+body[data-tool="select"] #space canvas { cursor: default; } body[data-tool="orbit"] #space canvas { cursor: grab; }
+body[data-tool="pan"] #space canvas { cursor: move; } body[data-tool="zoom"] #space canvas { cursor: ns-resize; }
+body[data-tool="measure"] #space canvas, body[data-tool="link"] #space canvas, body[data-tool="measure"] .card, body[data-tool="link"] .card { cursor: crosshair; }
+
+.navcluster { position: fixed; right: 12px; top: 56px; z-index: 20000; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.viewcube { position: relative; width: 112px; height: 112px; }
+.vc-scene { position: absolute; inset: 0; perspective: 340px; pointer-events: none; }
+.vc-cube { position: absolute; left: 24px; top: 24px; width: 64px; height: 64px; transform-style: preserve-3d; }
+.vc-face { position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; letter-spacing: 1px; color: var(--text); pointer-events: auto;
+  background: rgba(10, 16, 34, 0.88); border: 1px solid var(--line); cursor: pointer; user-select: none; }
+.vc-face:hover { background: rgba(103, 232, 249, 0.3); color: #fff; }
+.vc-top { transform: rotateX(90deg) translateZ(32px); } .vc-bottom { transform: rotateX(-90deg) translateZ(32px); }
+.vc-front { transform: translateZ(32px); } .vc-back { transform: rotateY(180deg) translateZ(32px); }
+.vc-right { transform: rotateY(90deg) translateZ(32px); } .vc-left { transform: rotateY(-90deg) translateZ(32px); }
+.vc-btn { position: absolute; width: 22px; height: 22px; padding: 0; font-size: 11px; border-radius: 50%; line-height: 1; }
+.vc-rl { left: 0; bottom: 0; } .vc-rr { right: 0; bottom: 0; } .vc-iso { right: 0; top: 0; }
+.navbar { display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--glass); border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(8px); }
+
+.cadpanel { position: fixed; left: 62px; top: 64px; width: 250px; max-height: 60vh; overflow: auto; z-index: 20000; padding: 10px 12px; font-size: 12px;
+  background: var(--glass); border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(10px); }
+.propspanel { left: auto; right: 140px; width: 240px; }
+.cadpanel h4 { margin: 0 0 8px; font-size: 13px; color: var(--cyan); letter-spacing: 1px; }
+.layerrow, .prow { display: flex; align-items: center; gap: 8px; padding: 3px 0; color: var(--muted); }
+.layerrow input { width: auto; } .ldot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.prow span:first-child { width: 58px; flex: none; } .prow input[type=number] { width: 100%; padding: 3px 6px; } .prow input[type=range] { padding: 0; }
+.pline { color: var(--muted); font-size: 11px; } .ptitle { font-weight: 600; margin: 2px 0 6px; }
+.measurelabel { position: fixed; left: 0; top: 0; z-index: 20000; padding: 3px 8px; border-radius: 6px; font-size: 12px; background: rgba(250, 204, 21, .92); color: #111; pointer-events: none; white-space: nowrap; }
+
+.statusbar { position: fixed; left: 0; right: 0; bottom: 0; height: 36px; z-index: 20002; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 62px;
+  background: rgba(6, 10, 24, 0.92); border-top: 1px solid var(--line); font-size: 12px; }
+.coords { font-family: ui-monospace, monospace; color: var(--cyan); white-space: pre; min-width: 236px; }
+.cmdline { flex: 1; min-width: 80px; padding: 4px 10px; border-radius: 6px; font-family: ui-monospace, monospace; font-size: 12px; background: rgba(2, 3, 10, 0.8); }
+.chips { display: flex; gap: 4px; align-items: center; }
+.chip { padding: 2px 9px; border-radius: 999px; font-size: 11px; color: var(--muted); border: 1px solid var(--line); background: transparent; white-space: nowrap; }
+.chip.static { border-color: transparent; }
+
+.dock { position: fixed; right: 12px; bottom: 44px; width: 372px; max-height: min(56vh, 520px); z-index: 20001; display: flex; flex-direction: column;
+  background: var(--glass); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(10px); overflow: hidden; }
+.dock.closed .dockmsgs, .dock.closed .dockform, .dock.closed .dockstatus, .dock.closed .meter { display: none; }
+.dockhead { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.dockhead b { flex: 1; font-size: 13px; letter-spacing: .5px; } .dockbtns { display: flex; gap: 3px; }
+.dbtn { padding: 2px 6px; border-radius: 8px; font-size: 14px; line-height: 1.2; } .dbtn.on { border-color: var(--cyan); background: rgba(103, 232, 249, .2); }
+.dockmsgs { flex: 1; overflow: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; min-height: 120px; }
+.msg { max-width: 88%; padding: 6px 10px; border-radius: 12px; font-size: 13px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
+.msg.user { align-self: flex-end; background: rgba(103, 232, 249, .16); border: 1px solid rgba(103, 232, 249, .35); }
+.msg.jarvis { align-self: flex-start; background: rgba(120, 140, 255, .12); border: 1px solid var(--line); }
+.dockstatus { padding: 2px 12px; font-size: 11px; color: var(--muted); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter { height: 4px; margin: 0 10px 4px; background: rgba(255,255,255,.08); border-radius: 2px; overflow: hidden; } .meter i { display: block; height: 100%; width: 0; background: var(--green); }
+.meter.hot i { background: var(--cyan); }
+.dockform { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line); } .dockform input { flex: 1; }
+.previews { position: fixed; right: 396px; bottom: 44px; z-index: 20001; display: flex; gap: 8px; align-items: flex-end; }
+.tile { position: relative; width: 210px; border: 2px solid var(--red); border-radius: 10px; overflow: hidden; background: #000; }
+.tile video { display: block; width: 100%; } .tile.camera video { transform: scaleX(-1); }
+.tile .tag { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 6px; font-size: 10px; color: #fecaca; background: rgba(0,0,0,.6); }
+.tile button { position: absolute; top: 3px; right: 3px; padding: 0 6px; font-size: 11px; }
+@media (max-width: 700px) {
+  .palette { top: 96px; left: 4px; padding: 4px; gap: 3px; } .tb { width: 34px; height: 34px; font-size: 16px; }
+  .navcluster { top: 96px; right: 4px; transform: scale(.8); transform-origin: top right; }
+  .cmdline, .coords { display: none; } .statusbar { padding-left: 8px; justify-content: flex-end; }
+  .dock { left: 8px; right: 8px; width: auto; bottom: 40px; max-height: 46vh; } .previews { right: 8px; bottom: calc(40px + 46vh + 4px); }
+  .cadpanel { left: 52px; width: 210px; top: 96px; } .propspanel { left: auto; right: 4px; }
+}
+.btnlink { font: inherit; color: var(--text); background: rgba(30, 44, 80, 0.75); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; text-decoration: none; }
+.btnlink:hover { border-color: var(--cyan); } .in-app .btnlink { display: none; }
+@media (max-width: 700px) { .in-app .dock { left: 62px; } .in-app .previews { display: none; } }

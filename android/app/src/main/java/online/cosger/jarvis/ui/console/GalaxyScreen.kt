@@ -12,6 +12,26 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.app.Activity
+import android.media.projection.MediaProjectionManager
+import android.os.Build
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.NoPhotography
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.ScreenShare
+import androidx.compose.material.icons.filled.StopScreenShare
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import online.cosger.jarvis.camera.CameraPreview
+import online.cosger.jarvis.screen.ScreenShareService
+import online.cosger.jarvis.voice.MicState
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +53,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
@@ -57,7 +78,7 @@ import online.cosger.jarvis.ui.theme.JarvisColors
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit) {
+fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false) {
     val appSettings by vm.settings.collectAsState()
     val context = LocalContext.current
     val url = remember(appSettings.serverUrl, appSettings.deviceToken) { galaxyUrl(appSettings.serverUrl, appSettings.deviceToken) }
@@ -79,8 +100,9 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { webView?.destroy(); webView = null } }
 
-    Column(Modifier.fillMaxSize().background(JarvisColors.Background)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(Modifier.fillMaxSize().background(JarvisColors.Background)) {
+    Column(Modifier.fillMaxSize()) {
+        if (!asTab) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clickable(onClick = onBack), contentAlignment = Alignment.Center) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali", tint = JarvisColors.Text)
             }
@@ -135,6 +157,67 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit) {
                 }
             },
         )
+    }
+    if (asTab) DeskMediaStrip(vm, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 44.dp))
+    }
+}
+
+/**
+ * The desk's native tools (ADR-052): the phone's own microphone (with its on-phone voice detection and wake word), camera and screen sharing —
+ * the same engine as the Bicara tab — as three buttons over the web page. The page itself shows only chat and the drafting tools here,
+ * so nothing is captured twice.
+ */
+@Composable
+private fun DeskMediaStrip(vm: JarvisViewModel, modifier: Modifier) {
+    val context = LocalContext.current
+    val mic by vm.mic.collectAsStateWithLifecycle()
+    val sharing by vm.screenSharing.collectAsStateWithLifecycle()
+    val cameraOn by vm.cameraOn.collectAsStateWithLifecycle()
+    var hasMic by remember { mutableStateOf(context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
+    var frontCamera by remember { mutableStateOf(false) }
+    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        hasMic = it[Manifest.permission.RECORD_AUDIO] == true || hasMic
+        if (hasMic) vm.toggleMute()
+    }
+    val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) vm.setCamera(true) }
+    val askScreen = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == Activity.RESULT_OK && r.data != null) ScreenShareService.start(context, r.resultCode, r.data!!)
+    }
+    LaunchedEffect(Unit) { vm.prefetchVoice() }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (cameraOn) Box(Modifier.size(width = 96.dp, height = 128.dp).clip(RoundedCornerShape(12.dp)).border(2.dp, JarvisColors.Red, RoundedCornerShape(12.dp))
+            .clickable { frontCamera = !frontCamera }) {
+            CameraPreview(frontCamera, vm::setCameraFrameSource, Modifier.fillMaxSize())
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            StripButton(if (mic == MicState.Muted) Icons.Filled.MicOff else Icons.Filled.Mic, "Mikrofon", mic != MicState.Muted) {
+                if (hasMic) vm.toggleMute()
+                else askMic.launch(buildList {
+                    add(Manifest.permission.RECORD_AUDIO)
+                    if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                }.toTypedArray())
+            }
+            StripButton(if (cameraOn) Icons.Filled.NoPhotography else Icons.Filled.PhotoCamera, "Kamera", cameraOn) {
+                when {
+                    cameraOn -> vm.setCamera(false)
+                    context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED -> vm.setCamera(true)
+                    else -> askCamera.launch(Manifest.permission.CAMERA)
+                }
+            }
+            StripButton(if (sharing) Icons.Filled.StopScreenShare else Icons.Filled.ScreenShare, "Bagikan layar", sharing) {
+                if (sharing) vm.stopScreenShare()
+                else askScreen.launch(context.getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())
+            }
+        }
+    }
+}
+
+@Composable
+private fun StripButton(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, on: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(46.dp).clip(CircleShape).background(if (on) JarvisColors.Cyan.copy(alpha = 0.28f) else Color(0xCC0B1226))
+        .border(1.5.dp, if (on) JarvisColors.Cyan else JarvisColors.Muted.copy(alpha = 0.5f), CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        Icon(icon, label, tint = if (on) JarvisColors.Cyan else JarvisColors.Text, modifier = Modifier.size(22.dp))
     }
 }
 

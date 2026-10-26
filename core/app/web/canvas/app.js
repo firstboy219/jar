@@ -3,7 +3,9 @@
 // what JARVIS showed, memories, company data); this page only lays them out in space. It can fly, select, place, move,
 // link and take cards off the canvas — it never approves, deletes data, sends or pays.
 import * as THREE from './vendor/three.module.min.js';
-import { PANELS, ago, cardScale, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
+import { PANELS, ago, cardScale, clampPhi, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, orthoHeight, shortestAngle, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
+import { initCad } from './cad.js';
+import { initDock } from './dock.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -61,7 +63,12 @@ renderer.setClearColor(0x02030a);
 $('#space').append(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x02030a, 0.000035);
-const camera = new THREE.PerspectiveCamera(60, 1, 1, 80000);
+$('#admin').href = location.origin.replace('//vis1.', '//jar1.');   // the admin page stays the control point; the desk links to it
+let cad = null;   // the drafting toolkit (cad.js), created at the end of this file
+const perspCam = new THREE.PerspectiveCamera(60, 1, 1, 80000);
+const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -40000, 80000);   // same picture as the perspective one at the target's depth
+let camera = perspCam;
+let projection = 'persp';
 
 function glowTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,0)') {
   const c = document.createElement('canvas'); c.width = c.height = 64;
@@ -82,8 +89,9 @@ scene.add(galaxy);
 
 const starsGeo = new THREE.BufferGeometry();
 starsGeo.setAttribute('position', new THREE.BufferAttribute(starField(small ? 3000 : 7000), 3));
-scene.add(new THREE.Points(starsGeo, new THREE.PointsMaterial({ size: 26, map: GLOW, color: 0xbfd7ff, transparent: true, depthWrite: false,
-  blending: THREE.AdditiveBlending, opacity: 0.7, fog: false })));
+const starsPoints = new THREE.Points(starsGeo, new THREE.PointsMaterial({ size: 26, map: GLOW, color: 0xbfd7ff, transparent: true, depthWrite: false,
+  blending: THREE.AdditiveBlending, opacity: 0.7, fog: false }));
+scene.add(starsPoints);
 
 const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: 0xffc98a, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending }));
 core.scale.set(620, 620, 1);
@@ -96,24 +104,52 @@ const cardStars = new THREE.Points(cardStarGeo, new THREE.PointsMaterial({ size:
   depthWrite: false, blending: THREE.AdditiveBlending }));
 scene.add(cardStars);
 const edgeGeo = new THREE.BufferGeometry();
+const layers = { hiddenKinds: new Set(), live: true, panels: true, edges: true, grid: false, galaxy: true, stars: true };
+const grid = new THREE.GridHelper(24000, 96, 0x2f6f9f, 0x173a55);
+grid.material.transparent = true; grid.material.opacity = 0.45; grid.visible = false;
+scene.add(grid);
 const edges = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0.45 }));
 scene.add(edges);
 
 // ---------- camera: orbit around a target that can go anywhere (the space is infinite) ----------
+const raycaster = new THREE.Raycaster();
+function ndc(x, y) { return new THREE.Vector2((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1); }
 const view = { target: new THREE.Vector3(), r: 3600, theta: 0.6, phi: 0.95 };
 let flight = null;
 function placeCamera() {
   const { target, r, theta, phi } = view;
   camera.position.set(target.x + r * Math.sin(phi) * Math.sin(theta), target.y + r * Math.cos(phi), target.z + r * Math.sin(phi) * Math.cos(theta));
   camera.lookAt(target);
+  if (projection === 'ortho') fitOrtho();
+  camera.updateMatrixWorld();
+}
+function fitOrtho() {
+  const h = orthoHeight(view.r, 60), w = h * (innerWidth / innerHeight);
+  orthoCam.left = -w / 2; orthoCam.right = w / 2; orthoCam.top = h / 2; orthoCam.bottom = -h / 2;
+  orthoCam.updateProjectionMatrix();
+}
+function setProjection(mode) {
+  projection = mode === 'ortho' ? 'ortho' : 'persp';
+  camera = projection === 'ortho' ? orthoCam : perspCam;
+  // an orthographic camera has no distance to shrink points by: give them a fixed size in pixels instead
+  for (const [mat, base, px] of [[galaxy.material, 11, 1.8], [starsPoints.material, 26, 1.4], [cardStars.material, 46, 7]]) {
+    mat.sizeAttenuation = projection !== 'ortho'; mat.size = projection === 'ortho' ? px : base; mat.needsUpdate = true;
+  }
+  placeCamera();
 }
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-function flyTo(pos, r = 520, ms = 900) {
-  if (reducedMotion) { flight = null; view.target.set(pos.x, pos.y, pos.z); view.r = r; return; }   // jump, no flight
-  flight = { from: view.target.clone(), to: new THREE.Vector3(pos.x, pos.y, pos.z), r0: view.r, r1: r, t0: performance.now(), ms };
+/** Fly (or jump, with reduced motion) to a target / distance and, optionally, to an orbit angle (a standard view). */
+function flyView({ target, r, theta, phi, ms = 900 }) {
+  // what is not given stays what the flight in progress was heading for (so "front" then "zoom extents" does both)
+  const aim = flight ? { target: flight.to, r: flight.r1, theta: flight.th1, phi: flight.ph1 } : view;
+  const to = target ? new THREE.Vector3(target.x, target.y, target.z) : aim.target.clone();
+  const th1 = theta == null ? aim.theta : shortestAngle(view.theta, theta), ph1 = phi == null ? aim.phi : clampPhi(phi), r1 = r ?? aim.r;
+  if (reducedMotion) { flight = null; view.target.copy(to); view.r = r1; view.theta = th1; view.phi = ph1; return; }   // jump, no flight
+  flight = { from: view.target.clone(), to, r0: view.r, r1, th0: view.theta, th1, ph0: view.phi, ph1, t0: performance.now(), ms };
 }
-function home() { flyTo({ x: 0, y: 0, z: 0 }, small ? 4600 : 3600, 1100); view.phi = 0.95; }
-function orbit(dx, dy) { view.theta -= dx * 0.005; view.phi = Math.min(Math.max(view.phi - dy * 0.005, 0.08), Math.PI - 0.08); }
+function flyTo(pos, r = 520, ms = 900) { flyView({ target: pos, r, ms }); }
+function home() { flyView({ target: { x: 0, y: 0, z: 0 }, r: small ? 4600 : 3600, phi: 0.95, ms: 1100 }); }
+function orbit(dx, dy) { view.theta -= dx * 0.005; view.phi = clampPhi(view.phi - dy * 0.005); }
 function pan(dx, dy) {
   const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
   const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
@@ -121,6 +157,20 @@ function pan(dx, dy) {
   view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
 }
 function dolly(f) { view.r = Math.min(Math.max(view.r * f, 60), 30000); }
+/** The point under the cursor on the plane through the target facing the camera (what the wheel zooms toward). */
+function pointOnTargetPlane(x, y) {
+  camera.updateMatrixWorld();
+  raycaster.setFromCamera(ndc(x, y), camera);
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), view.target);
+  return raycaster.ray.intersectPlane(plane, new THREE.Vector3());
+}
+/** Zoom toward the cursor like a drafting program: the point under the mouse stays under the mouse. */
+function zoomAt(f, x, y) {
+  const before = pointOnTargetPlane(x, y);
+  dolly(f); placeCamera();
+  const after = pointOnTargetPlane(x, y);
+  if (before && after) view.target.add(before.sub(after));
+}
 
 // ---------- state ----------
 const KIND_COLOR = {};
@@ -129,7 +179,7 @@ let contexts = [], current = null, cards = new Map(), canvasEdges = [], selected
 function hex(c) { return new THREE.Color(c); }
 
 function rebuildStars() {
-  const list = [...cards.values()];
+  const list = [...cards.values()].filter((c) => !layers.hiddenKinds.has(c.data.kind));
   const pos = new Float32Array(list.length * 3), col = new Float32Array(list.length * 3);
   list.forEach((c, i) => {
     pos.set([c.data.x, c.data.y, c.data.z], i * 3);
@@ -142,13 +192,15 @@ function rebuildStars() {
   const seg = [];
   for (const e of canvasEdges) {
     const a = cards.get(e.a), b = cards.get(e.b);
-    if (a && b) seg.push(a.data.x, a.data.y, a.data.z, b.data.x, b.data.y, b.data.z);
+    if (a && b && !layers.hiddenKinds.has(a.data.kind) && !layers.hiddenKinds.has(b.data.kind)) seg.push(a.data.x, a.data.y, a.data.z, b.data.x, b.data.y, b.data.z);
   }
   edgeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
   edgeGeo.computeBoundingSphere();
 }
 
+let constellationList = [];
 function buildConstellations(list) {
+  constellationList = list;
   constellationGroup.clear();
   $('#labels').replaceChildren();
   for (const c of list) {
@@ -227,6 +279,7 @@ async function openUrl(url) {
 function select(id) {
   selected = id;
   cards.forEach((c, k) => c.el.classList.toggle('selected', k === id));
+  cad?.onSelect(id);
 }
 
 // ---------- data ----------
@@ -412,13 +465,10 @@ setInterval(pollLive, 1300);
 // ---------- pointer: orbit / pan / zoom, and dragging cards through space ----------
 const pointers = new Map();
 let gesture = null;   // {mode: 'orbit'|'pan'|'card', ...}
-const raycaster = new THREE.Raycaster();
-
-function ndc(x, y) { return new THREE.Vector2((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1); }
-
 function startCardDrag(ev, id) {
   if (ev.target.closest('button')) return;
   ev.stopPropagation();
+  if (cad?.onCardPick(id)) return;   // measure / link tools: a click picks the card, it does not drag it
   const c = cards.get(id);
   const normal = camera.getWorldDirection(new THREE.Vector3());
   gesture = { mode: 'card', id, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3(c.data.x, c.data.y, c.data.z)),
@@ -432,7 +482,7 @@ function moveCard(x, y) {
   const hit = raycaster.ray.intersectPlane(gesture.plane, new THREE.Vector3());
   if (!hit) return;
   if (Math.hypot(x - gesture.sx, y - gesture.sy) > 6) gesture.moved = true;
-  if (gesture.moved) { c.data = { ...c.data, x: hit.x, y: hit.y, z: hit.z }; rebuildStars(); }
+  if (gesture.moved) { const p = cad ? cad.snapPoint(hit) : hit; c.data = { ...c.data, x: p.x, y: p.y, z: p.z }; rebuildStars(); }
 }
 
 async function endCardDrag() {
@@ -444,10 +494,18 @@ async function endCardDrag() {
 }
 
 const surface = renderer.domElement;
+/** Mouse like a drafting program: wheel zooms, middle button pans, Shift+middle orbits; the left button follows the active tool. */
+function dragMode(e) {
+  if (e.pointerType === 'touch') return cad?.tool === 'pan' ? 'pan' : 'orbit';
+  if (e.button === 1) return e.shiftKey ? 'orbit' : 'pan';
+  if (e.button === 2 || e.shiftKey) return 'pan';
+  return { orbit: 'orbit', pan: 'pan', zoom: 'zoom' }[cad?.tool || 'orbit'] || 'none';
+}
 surface.addEventListener('pointerdown', (e) => {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   surface.setPointerCapture(e.pointerId);
-  if (pointers.size === 1) gesture = { mode: e.button === 2 || e.shiftKey ? 'pan' : 'orbit', x: e.clientX, y: e.clientY };
+  if (e.button === 1) e.preventDefault();
+  if (pointers.size === 1) gesture = { mode: dragMode(e), x: e.clientX, y: e.clientY };
   else gesture = { mode: 'pinch', d: pinchDistance(), c: pinchCenter() };
 });
 window.addEventListener('pointermove', (e) => {
@@ -462,7 +520,7 @@ window.addEventListener('pointermove', (e) => {
   }
   const dx = e.clientX - gesture.x, dy = e.clientY - gesture.y;
   gesture.x = e.clientX; gesture.y = e.clientY;
-  if (gesture.mode === 'orbit') orbit(dx, dy); else if (gesture.mode === 'pan') pan(dx, dy);
+  if (gesture.mode === 'orbit') orbit(dx, dy); else if (gesture.mode === 'pan') pan(dx, dy); else if (gesture.mode === 'zoom') dolly(Math.exp(dy * 0.01));
 });
 window.addEventListener('pointerup', (e) => {
   pointers.delete(e.pointerId);
@@ -470,8 +528,9 @@ window.addEventListener('pointerup', (e) => {
   if (pointers.size === 0) gesture = null;
 });
 surface.addEventListener('contextmenu', (e) => e.preventDefault());
-surface.addEventListener('wheel', (e) => { e.preventDefault(); dolly(Math.exp(e.deltaY * 0.0012)); }, { passive: false });
+surface.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY); }, { passive: false });
 surface.addEventListener('dblclick', () => select(null));
+surface.addEventListener('pointermove', (e) => cad?.onPointer(e.clientX, e.clientY));
 function pinchDistance() { const [a, b] = [...pointers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; }
 function pinchCenter() { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 
@@ -591,20 +650,24 @@ function frame(t) {
     const k = ease((t - flight.t0) / flight.ms);
     view.target.lerpVectors(flight.from, flight.to, k);
     view.r = flight.r0 + (flight.r1 - flight.r0) * k;
+    view.theta = flight.th0 + (flight.th1 - flight.th0) * k;
+    view.phi = flight.ph0 + (flight.ph1 - flight.ph0) * k;
     if (k >= 1) flight = null;
   }
   flyKeys(dt);
   galaxy.rotation.y += dt * 0.000004;
+  galaxy.visible = layers.galaxy; cardStars.visible = layers.stars; edges.visible = layers.edges; grid.visible = layers.grid;
   placeCamera();
   renderer.render(scene, camera);
+  cad?.frame(dt);
   // HTML cards follow their 3D positions; the 140 nearest are drawn as cards, the rest are stars
   const list = [...cards.values()].map((c) => {
     tmp.set(c.data.x, c.data.y, c.data.z);
-    return { c, d: camera.position.distanceTo(tmp), p: tmp.clone().project(camera) };
+    return { c, d: projection === 'ortho' ? view.r : camera.position.distanceTo(tmp), p: tmp.clone().project(camera) };
   }).sort((a, b) => a.d - b.d);
   list.forEach(({ c, d, p }, i) => {
     const s = cardScale(d, c.live ? Math.max(c.data.size, 4.2) : c.data.size);
-    const visible = (i < 140 || c.live) && s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
+    const visible = !layers.hiddenKinds.has(c.data.kind) && (i < 140 || c.live) && s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
     c.el.hidden = !visible;
     if (!visible) return;
     const x = (p.x + 1) / 2 * innerWidth, y = (1 - p.y) / 2 * innerHeight;
@@ -613,9 +676,10 @@ function frame(t) {
     c.el.style.opacity = String(Math.min(1, s * 1.6));
   });
   for (const pn of Object.values(deskPanels)) {   // the fixed desk panels around the core
+    if (!layers.panels) { pn.el.style.visibility = 'hidden'; continue; }
     if (pn.el.hidden && !pn.hiddenByView) continue;
     tmp.set(pn.x, pn.y, pn.z);
-    const d = camera.position.distanceTo(tmp), p = tmp.clone().project(camera), s = cardScale(d, pn.size);
+    const d = projection === 'ortho' ? view.r : camera.position.distanceTo(tmp), p = tmp.clone().project(camera), s = cardScale(d, pn.size);
     const vis = s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
     pn.hiddenByView = !vis; pn.el.style.visibility = vis ? 'visible' : 'hidden';
     if (!vis) continue;
@@ -633,10 +697,19 @@ function frame(t) {
   requestAnimationFrame(frame);
 }
 
-function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+function resize() { renderer.setSize(innerWidth, innerHeight); perspCam.aspect = innerWidth / innerHeight; perspCam.updateProjectionMatrix(); if (projection === 'ortho') fitOrtho(); }
 window.addEventListener('resize', resize);
 resize();
 placeCamera();
 requestAnimationFrame(frame);
 if (fromApp.token) api.token = fromApp.token;
 if (api.token) loadContexts().catch((err) => toast(err.message, true)); else showLogin();
+
+// ---------- the drafting toolkit and the docks (ADR-052) ----------
+cad = initCad({
+  THREE, view, layers, grid, scene, KIND_COLOR,
+  camera: () => camera, projection: () => projection, setProjection, flyView, flyTo, home, placeCamera, raycaster, ndc,
+  cards: () => cards, selected: () => selected, select, current: () => current, api, toast, refresh, rebuildStars, linkFrom: () => linkFrom,
+  contexts: () => constellationList, openFind: (q) => { const f = $('#find'); f.value = q; f.dispatchEvent(new Event('input')); f.focus(); },
+});
+initDock({ api, toast, embedded: !!fromApp.embedded });

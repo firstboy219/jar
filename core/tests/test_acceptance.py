@@ -1338,3 +1338,87 @@ async def test_v4_f7_a_new_task_is_on_the_canvas_at_once_and_storage_can_be_laid
     assert (await canvas.fill("utama", "owner"))["added"] == 0                                              # idempotent
     r, _ = await _two_companies(pool, monkeypatch)
     assert (await canvas.fill(f"company:{r}", "owner"))["added"] == 0                            # a company galaxy takes none of the personal library
+
+
+class _FakeSocket:
+    """What a browser's WebSocket looks like to main.ws(): first-message auth (browsers cannot set headers), text frames in and out."""
+    def __init__(self):
+        import asyncio
+        self.headers, self.inbox, self.out = {}, asyncio.Queue(), []
+
+    async def accept(self):
+        pass
+
+    async def receive_text(self):
+        item = await self.inbox.get()
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def send_text(self, text):
+        self.out.append(json.loads(text))
+
+    async def close(self, code=1000):
+        self.out.append({"type": "closed", "code": code})
+
+
+async def test_v4_f8_the_desk_is_the_front_door_and_its_chat_voice_camera_and_screen_reach_the_same_brain(pool, monkeypatch):
+    import asyncio
+    import base64
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import WebSocketDisconnect
+    from app import chat, devices, main, stt, voice
+    # the front door: / opens the desk, and the desk may use this origin's microphone, camera and screen sharing (nothing else, nobody else)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.get("/", follow_redirects=False)
+        assert r.status_code in (302, 307) and r.headers["location"] == "/canvas/"
+        pp = (await c.get("/canvas/")).headers["permissions-policy"]
+        assert "camera=(self)" in pp and "microphone=(self)" in pp and "display-capture=(self)" in pp and "geolocation=()" in pp
+        for f in ("cad.js", "dock.js", "worklet.js"):
+            assert (await c.get(f"/canvas/{f}")).status_code == 200
+    seen = {}
+
+    async def handle(text, session_id, actor, device_id=None, emit=None, **kw):
+        seen.update(text=text, session=session_id, screen=kw.get("screen"), source=kw.get("image_source"))
+        await emit({"type": "delta", "text": "Ha"})
+        return SimpleNamespace(reply=f"Dengar: {text}", route="assistant", spoken=False)
+    monkeypatch.setattr(chat, "handle", handle)
+
+    async def hear(pcm):
+        return {"text": "cek harga emas", "engine": "test", "confidence": 0.9}
+    monkeypatch.setattr(stt, "transcribe_with_voice", hear)
+
+    async def process(heard, pcm, sid):
+        return heard
+    monkeypatch.setattr(voice, "process", process)
+    _, token = await devices.create("Browser meja", "test", scope="owner")
+    sock = _FakeSocket()
+    server = asyncio.create_task(main.ws(sock))
+
+    async def until(pred, tries=200):
+        for _ in range(tries):
+            if any(pred(e) for e in sock.out):
+                return True
+            await asyncio.sleep(0.02)
+        return False
+    await sock.inbox.put(json.dumps({"type": "auth", "token": "salah"}))
+    assert await until(lambda e: e.get("type") == "closed" and e["code"] == 4401)               # a wrong token is refused
+    server = asyncio.create_task(main.ws(sock := _FakeSocket()))
+    await sock.inbox.put(json.dumps({"type": "auth", "token": token}))
+    assert await until(lambda e: e["type"] == "auth_ok")
+    frame = base64.b64encode(b"\xff\xd8fakejpeg").decode()
+    await sock.inbox.put(json.dumps({"user_command": "tolong lihat ini", "session_id": "meja-1", "screen": frame, "image_source": "camera"}))
+    assert await until(lambda e: e["type"] == "reply" and e["text"] == "Dengar: tolong lihat ini")
+    assert seen["screen"] == frame and seen["source"] == "camera" and seen["session"] == "meja-1"   # the camera frame goes along with the words
+    assert any(e["type"] == "delta" and e["session_id"] == "meja-1" for e in sock.out)               # and the answer streams back to the same session
+    pcm = base64.b64encode(b"\x01\x00" * 16000).decode()                                              # one second of 16 kHz PCM16, as dock.js sends
+    await sock.inbox.put(json.dumps({"type": "utterance", "audio": pcm, "seq": 7, "session_id": "meja-1", "screen": frame, "image_source": "screen"}))
+    assert await until(lambda e: e["type"] == "transcript" and e["text"] == "cek harga emas" and e["seq"] == 7)
+    assert await until(lambda e: e["type"] == "reply" and e["text"] == "Dengar: cek harga emas")
+    assert seen["source"] == "screen"                                                                  # a shared screen is sent with what is said
+    await sock.inbox.put(json.dumps({"type": "utterance", "audio": base64.b64encode(b"\x00" * 100).decode(), "seq": 8, "session_id": "meja-1"}))
+    assert await until(lambda e: e["type"] == "error" and "tidak valid" in e["message"])               # audio that is too short is refused
+    await sock.inbox.put(WebSocketDisconnect())
+    await asyncio.wait_for(server, 3)
