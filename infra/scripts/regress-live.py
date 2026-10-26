@@ -98,7 +98,7 @@ async def main():
             oj = (await get("/admin/openjarvis", A)).json()
             rec("fase2-openjarvis", "kontainer menjawab, mati secara bawaan", oj["reachable"] and oj["configured"] and oj["enabled"] is False, oj["enabled"])
             # ---- workers, reports, budget ----
-            rep = await db.pool().fetchval("SELECT count(*) FROM reports WHERE attempts > 1 AND created_at > greatest(now() - interval '6 hours', timestamptz '2026-10-26 01:00+00')"); rec("laporan", "tidak ada laporan yang diulang (>1x)", rep == 0, rep)
+            rep = await db.pool().fetchval("SELECT count(*) FROM reports WHERE attempts > 2 AND created_at > greatest(now() - interval '6 hours', timestamptz '2026-10-26 01:00+00')"); rec("laporan", "tidak ada laporan yang diulang (>2x; 2 = HP + meja web yang membacakannya masing-masing sekali)", rep == 0, rep)
             unheard = await db.pool().fetchval("SELECT count(*) FROM reports WHERE status = 'unheard' AND created_at > greatest(now() - interval '6 hours', timestamptz '2026-10-26 01:00+00')"); rec("laporan", "tidak ada status 'tak terdengar' baru", unheard == 0, unheard)
             stuck = await db.pool().fetchval("SELECT count(*) FROM tasks WHERE status IN ('running','queued') AND coalesce(started_at, created_at) < now() - interval '2 hours'"); rec("pekerja", "tidak ada tugas macet >2 jam", stuck == 0, stuck)
             b = (await get("/admin/status", A)).json() if False else None

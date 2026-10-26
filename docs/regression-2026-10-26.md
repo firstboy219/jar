@@ -25,3 +25,7 @@ now only looks at reports created after the fix.
 
 Not covered by this run (needs the owner or an outside account): hand gestures on a real device, the owner's own voice at the desk, screen sharing,
 the APK on a phone, Gmail/Calendar with real Google credentials, a form-filling task on a real shop site.
+
+Addendum (same day, after the live-video change): the report check counts a report as repeated only above 2 deliveries, because the phone and
+the desk in the browser each report "spoken" once (attempts = 2 is one reading per device, not a repeat); three reports from the owner's own
+session at 05:31–05:35 UTC showed exactly that. The server never re-sends a delivered report (pinned by `test_a_spoken_report_is_never_repeated_or_chased`).
