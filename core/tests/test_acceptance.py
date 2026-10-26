@@ -66,6 +66,8 @@ async def test_02_a_new_task_is_told_how_to_find_methods_and_has_the_tools(pool,
     for tool in ("capability_search", "task_plan", "task_verify"):
         assert tool in workers.WORKER_BRIEF or tool.split("_")[0] in workers.WORKER_BRIEF
     assert "kemampuan yang sudah ada" in workers.WORKER_BRIEF and "bukti nyata" in workers.WORKER_BRIEF
+    for habit in ("MENGURANGI JUMLAH LANGKAH", "Rencana WAJIB", "<5 menit", "RINCI & EFEKTIF", "TIDAK ditemukan"):
+        assert habit in workers.WORKER_BRIEF                                             # speed and thoroughness are taught to every worker
 
 
 async def test_03_a_new_skill_is_tested_before_it_is_published(pool, monkeypatch, tmp_path):
