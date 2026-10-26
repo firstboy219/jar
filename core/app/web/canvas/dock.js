@@ -27,7 +27,12 @@ export function initDock({ api, toast, embedded }) {
   const scrBtn = embedded || !navigator.mediaDevices?.getDisplayMedia ? null : mk('🖥', 'Bagikan layar ke Jarvis', () => toggleScreen());
   const ttsBtn = mk('🔊', 'Suara balasan Jarvis (di browser ini)', () => setTts(!ttsOn));
   mk('⟳', 'Percakapan baru', () => newConversation());
-  const minBtn = mk('▾', 'Ciutkan / buka', () => setOpen(!wantOpen));
+  const minBtn = mk('💬', 'Ciutkan / buka', () => setOpen(!wantOpen));
+  minBtn.classList.add('minimizer');
+  // penanda pesan baru saat panel ditutup
+  const penandaDot = el('span', 'dot penanda');
+  minBtn.appendChild(penandaDot);
+  let penandaTimeout = null;
   head.append(dot, title, buttons);
   const log = el('div', 'dockmsgs');
   const statusLine = el('div', 'dockstatus');
@@ -50,7 +55,18 @@ export function initDock({ api, toast, embedded }) {
   log.scrollTop = log.scrollHeight;
 
   function setOpen(on) {
-    wantOpen = on; dock.classList.toggle('closed', !on); minBtn.textContent = on ? '▾' : '▴'; LS('jarvis_desk_dock', on ? 'open' : 'closed');
+    wantOpen = on;
+    const isClosed = !on;
+    dock.classList.toggle('closed', isClosed);
+    dock.classList.toggle('minimized', isClosed);
+    // saat panel ditutup (minimized), dot.penanda mungkin tetap terlihat jika ada pesan baru; biarkan saja
+    if (!on) {
+        // biarkan saja
+    } else {
+        // saat panel terbuka, sembunyikan penandaDot
+        penandaDot.classList.remove('visible', 'blink');
+    }
+    LS('jarvis_desk_dock', on ? 'open' : 'closed');
   }
   function setTts(on) {
     ttsOn = on; LS('jarvis_desk_tts', on ? 'on' : 'off'); ttsBtn.classList.toggle('on', on);
@@ -61,7 +77,14 @@ export function initDock({ api, toast, embedded }) {
   function addMsg(who, text, quiet = false) {
     const m = el('div', `msg ${who}`, text);
     log.append(m); log.scrollTop = log.scrollHeight; keep();
-    if (!quiet && !wantOpen) setOpen(true);
+    if (!quiet && !wantOpen) {
+        // tampilkan penandaDot saat pesan baru tiba saat panel ditutup
+        penandaDot.classList.add('visible', 'blink');
+        clearTimeout(penandaTimeout);
+        penandaTimeout = setTimeout(() => {
+            if (!wantOpen) penandaDot.classList.remove('visible', 'blink');
+        }, 5000);
+    }
     return m;
   }
   function setStatus(text) { statusLine.textContent = text || ''; statusLine.hidden = !text; }
