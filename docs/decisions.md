@@ -972,3 +972,36 @@ Found while testing it live (2026-10-26): `mcp_server.py` defined `_core` twice 
 Renamed the second to `_core_call`; `test_v4_f9_no_module_has_two_functions_of_the_same_name` now guards every module. Verified end to end in a
 second headless browser: the worker asked, the card showed the question and the pulsing button, the owner's click, keys and Backspace reached the
 worker's page, "Selesai" answered the question.
+
+## ADR-054 — Player and meeting recorder are cards on the desk (Blueprint v4 Fase 10)
+Owner (2026-10-26): "mulai rapat" showed nothing clear on the canvas; "putar lagu" must put the player on it and fly there. Every feature now has its
+card at a fixed place on the desk, driven by the server's state (the desk poll), so a reload, the app and a browser show the same thing.
+- **Player.** The stage's music / sound / video panel is `player` in the desk snapshot (`stage.desk_player()`); the card plays it itself — an
+  `<audio>`/`<video>` fed with the device token (a tag cannot send a header), or JARVIS' own `/embed/youtube/<id>` page (it reports `ended` in its
+  title, which the card reads, as the phone does). Previous / next / close go back as `stage_event`, so playlists keep working. In the app the
+  native stage no longer plays these panels (no double sound); other panels (map, document, draft…) still open the Bicara sheet.
+- **Meeting.** `mulai rapat [tentang X]` / `selesai rapat` are deterministic router intents (and an LLM tool `meeting`). Start does NOT record:
+  recording others needs everyone's consent, so it opens the card (`meetings.want_to_record`) with a consent tick and **Mulai rekam**. In the app the
+  card asks the phone (`POST /meetings/start-request` → `meeting_cmd` event → the phone's recorder, the usual flow); in a browser it records
+  itself (WebM/Opus, one independent file a minute, uploaded as made; the server now accepts `webm`). The card follows the meeting's row
+  (waiting → recording with a running clock and "Tandai penting" → processing → done with the .docx) whichever device holds the microphone.
+  "Selesai rapat" by voice raises `stop_seq` and sends `meeting_cmd stop`; the holder stops and the minutes are made as before.
+- The camera flies to a card when it appears (follow mode, not while the owner is touching the screen). Acceptance `test_v4_f10_*`.
+
+## ADR-055 — The canvas is a 2D board, like Miro / Figma (Blueprint v4 Fase 11)
+Owner (2026-10-26): replace the 3D infinite canvas with a 2D one "seperti Miro/Figma", toolkit adjusted, interactive and professional.
+- **Same data, flat view.** The board plane is the server's `x` (right) and `z` (down); `y` (the old height) is kept and ignored. No migration of
+  positions: the galaxy's disk becomes a map, its constellations become faint named areas. The three.js viewer, the view cube and the CAD command
+  line are gone (`vendor/`, `cad.js`); `lib.js` keeps only pure 2D helpers (world↔screen, fit, snap/guides, align/distribute, resize, connectors).
+- **Free objects.** The owner can draw notes, text, shapes (rect / rounded / ellipse / diamond) and frames. They are nodes `obj:<token>` whose
+  content lives in `canvas_nodes.props` (whitelisted keys and values — `canvas.clean_props`), with their own `w`/`h`. Deleting one really
+  deletes it (it is the owner's drawing; undo brings it back); a card that points at a task/document/memory only leaves the board — the thing
+  is never deleted from here. Any board (also a company's) may hold drawings; boards stay separate. Connectors carry a label, an arrow
+  (`style.to`), dash and colour. Multi-selection moves are ONE change (`POST /canvases/{id}/layout`), so the history stays readable.
+- **Interaction.** Pan (space / hand / middle / two fingers), zoom to the cursor (wheel, pinch, ± , fit all / selection, 100%), marquee,
+  shift-select, drag with smart guides (or grid snap), resize from eight handles (Shift keeps the shape, Alt grows from the middle), frames carry
+  what is inside, align / distribute, bring front / back, lock, duplicate / copy / paste, in-place text editing, connectors by dragging from the
+  side dots (or the C tool; dropping on empty paper makes a new note), right-click menu (long press on a touch screen), Ctrl+K search /
+  add-from-storage palette, minimap, undo / redo (client-side, each step is an API call; the history panel still restores whole versions).
+- The desk (stations with live video and takeover, n8n, requests, storage, player, meeting) is unchanged in behaviour; its panels sit on the
+  board as fixed widgets. Hand-tracking drives the same pointer events. Phone: tools on the left, zoom on the right, properties as a bottom sheet.

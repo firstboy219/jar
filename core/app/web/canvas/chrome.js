@@ -151,6 +151,8 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
 
   const TYPE_NAME = { note: 'Catatan', text: 'Teks', shape: 'Bentuk', frame: 'Bingkai' };
   function renderInspector() {
+    const a = document.activeElement;
+    if (a && insp.contains(a) && /^(INPUT|SELECT)$/.test(a.tagName) && a.type !== 'checkbox') return;   // never rebuild a field the owner is typing in
     insp.classList.toggle('open', inspOpen);
     document.body.classList.toggle('insp-open', inspOpen);
     board.insets.right = inspOpen && !small ? 288 : 0;

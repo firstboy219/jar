@@ -36,12 +36,13 @@ export function createBoard(ctx) {
   const defs = sv('defs');
   svg.append(defs);
   world.append(zonesEl, svg, cardsEl);
+  const dotsEl = el('div', 'dots');
   const guidesEl = sv('svg', { class: 'guides' }), marquee = el('div', 'marquee'), selBox = el('div', 'selbox'), ghost = el('div', 'ghost'), wire = sv('svg', { class: 'wire' });
   marquee.hidden = ghost.hidden = selBox.hidden = true;
   const sizeBadge = el('div', 'sizebadge');
   selBox.append(sizeBadge);
   for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) { const hd = el('i', `handle h-${h}`); hd.dataset.handle = h; selBox.append(hd); }
-  stage.append(world, guidesEl, wire, marquee, ghost, selBox);
+  stage.append(world, guidesEl, wire, marquee, ghost, dotsEl, selBox);
 
   // ------------------------------------------------------------ state
   let view = { cx: 0, cy: 0, k: 0.5 }, vp = { w: innerWidth, h: innerHeight };
@@ -58,7 +59,8 @@ export function createBoard(ctx) {
   let clip = null;                   // copied objects
 
   const rectOf = (c) => {
-    const d = c.data, w = d.w ?? (c.live ? 440 : 300), h = d.h ?? c.autoH ?? (d.type === 'text' ? 60 : 150);
+    const d = c.data, w = d.w ?? (c.live ? 440 : 300);
+    const h = d.type === 'text' ? (c.autoH ?? d.h ?? 60) : (d.h ?? c.autoH ?? 150);   // text grows with what is typed
     return { x: d.x, y: d.z, w, h };
   };
   const widgetRect = (w) => ({ x: w.x, y: w.y, w: w.w, h: w.autoH || 200 });
@@ -88,6 +90,7 @@ export function createBoard(ctx) {
     stage.style.setProperty('--gx', `${tx % step}px`); stage.style.setProperty('--gy', `${ty % step}px`);
     stage.classList.toggle('lod1', view.k < 0.5); stage.classList.toggle('lod2', view.k < 0.22);
     syncSel(); emit('view', view);
+    if (hoverCard) showDots();
     if (!cullQueued) { cullQueued = true; requestAnimationFrame(cull); }
   }
   function cull() {
@@ -119,7 +122,7 @@ export function createBoard(ctx) {
     setView(fitRect(rect, vp, { pad, maxK, inset: insets }), ms);
   }
   const allRects = () => [...cards.values()].filter((c) => !c.el.classList.contains('hidden-kind')).map(rectOf);
-  const fitAll = (ms) => fit(rectsBounds([...allRects(), ...[...widgets.values()].map(widgetRect)]) || { x: -400, y: -300, w: 800, h: 600 }, { maxK: 1, ms });
+  const fitAll = (ms) => fit(rectsBounds([...allRects(), ...[...widgets.values()].filter((w) => !w.el.hidden).map(widgetRect)]) || { x: -400, y: -300, w: 800, h: 600 }, { maxK: 1, ms });
   const fitSelection = (ms) => { const r = rectsBounds([...sel].map((id) => rectOf(cards.get(id))).filter(Boolean)); if (r) fit(r, { maxK: 1.5, ms }); };
   function focusRect(r, k = 0.9, ms = 700) { setView(fitRect(r, vp, { pad: 120, maxK: k, inset: insets }), ms); }
   function zoomBy(f, sx = vp.w / 2, sy = vp.h / 2, ms = 0) {
@@ -139,7 +142,7 @@ export function createBoard(ctx) {
     const r = rectOf(c), d = c.data;
     c.el.style.transform = `translate(${r.x}px, ${r.y}px)`;
     c.el.style.width = `${r.w}px`;
-    c.el.style.height = d.h != null ? `${d.h}px` : '';
+    c.el.style.height = d.h != null && d.type !== 'text' ? `${d.h}px` : '';
     c.el.style.zIndex = d.type === 'frame' ? 1 : String(3 + (zOrder.get(d.id) || 0) + (sel.has(d.id) ? 0 : 0));
   }
   function textOf(d) { return d.props?.text ?? ''; }
@@ -749,23 +752,34 @@ export function createBoard(ctx) {
 
   // ---- connectors: drag from a side dot (or from any card with the connector tool) to another card — or to empty paper for a new note
   function hoverConnectors(e) {
-    if (coarse || gesture || tool === 'hand') return;
+    if (coarse || gesture || tool === 'hand' || tool === 'connector') return;
+    if (e.target.closest?.('.dots')) return;
     const card = cardHit(e.target);
     if (hoverCard === card) return;
-    hoverCard?.querySelectorAll(':scope > .conn').forEach((n) => n.remove());
     hoverCard = card;
-    if (card && !card.classList.contains('editing') && tool !== 'connector') for (const s of ['n', 'e', 's', 'w']) { const d = el('i', `conn conn-${s}`); d.dataset.conn = s; card.append(d); }
+    showDots();
   }
   let hoverCard = null;
+  function showDots() {
+    dotsEl.replaceChildren();
+    const c = hoverCard?.__card;
+    if (!c || isObj(c) && c.data.type === 'frame' || editing || dragging.size) return;
+    const r = rectOf(c);
+    for (const s of ['n', 'e', 's', 'w']) {
+      const p = toScreen(view, vp, s === 'e' ? r.x + r.w : s === 'w' ? r.x : r.x + r.w / 2, s === 'n' ? r.y : s === 's' ? r.y + r.h : r.y + r.h / 2);
+      const d = el('i', 'conn'); d.dataset.conn = s; d.dataset.card = c.data.id; d.style.left = `${p.x}px`; d.style.top = `${p.y}px`;
+      dotsEl.append(d);
+    }
+  }
   stage.addEventListener('pointerdown', (e) => {
     const dot = e.target.closest?.('[data-conn]');
     if (!dot || e.button !== 0) return;
     e.stopImmediatePropagation(); e.preventDefault();
-    const card = dot.closest('.card');
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: e.pointerType });
     try { stage.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
     const p = stagePoint(e);
-    startWire({ id: e.pointerId, sx: p.x, sy: p.y, w0: worldAt(p.x, p.y), moved: false, t: e.pointerType }, card.__card.data.id);
+    dotsEl.replaceChildren();
+    startWire({ id: e.pointerId, sx: p.x, sy: p.y, w0: worldAt(p.x, p.y), moved: false, t: e.pointerType }, Number(dot.dataset.card));
   }, true);
   function startWire(base, fromId) { gesture = { ...base, mode: 'wire', from: fromId }; }
   function wireTo(p) {
@@ -850,7 +864,7 @@ export function createBoard(ctx) {
     finishEdit();
     tool = t; stage.dataset.tool = t;
     if (t !== 'select') { selBox.hidden = true; } else syncSel();
-    hoverCard?.querySelectorAll(':scope > .conn').forEach((n) => n.remove()); hoverCard = null;
+    hoverCard = null; dotsEl.replaceChildren();
     emit('tool', tool);
   }
 
