@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { diffCards, ease, matchCards, contextLabel } from '../lib.js';
+import { clearableIds, diffCards, ease, matchCards, contextLabel } from '../lib.js';
 
 test('search, diff, easing, labels', () => {
   const cards = [{ id: 1, title: 'Laporan omzet', x: 0, y: 0, z: 0 }, { id: 2, title: 'Rapat tim', snippet: 'bahas omzet', x: 1, y: 1, z: 1 }];
@@ -12,6 +12,17 @@ test('search, diff, easing, labels', () => {
   assert.equal(ease(0), 0); assert.equal(ease(1), 1); assert.equal(ease(0.5), 0.5);
   assert.equal(contextLabel({ context: 'company:renature', title: 'PT Renature' }), '🏢 PT Renature');
   assert.equal(contextLabel({ context: 'utama', title: 'Utama' }), 'Utama');
+});
+
+test('a layer can be cleared in one gesture — the same kind, never a locked card', () => {
+  const locked = (c) => !!c.locked;
+  const cards = [{ id: 1, kind: 'tampilan' }, { id: 2, kind: 'tampilan', locked: true }, { id: 3, kind: 'tugas' },
+    { id: 4, kind: 'tampilan' }, { id: 5, kind: 'papan', type: 'note' }];
+  assert.deepEqual(clearableIds(cards, 'tampilan', locked), [1, 4]);
+  assert.deepEqual(clearableIds(cards, 'tugas', locked), [3]);
+  assert.deepEqual(clearableIds(cards, 'papan', locked), [5]);   // the owner's own drawing goes only when its layer is the one picked
+  assert.deepEqual(clearableIds(cards, 'musik', locked), []);
+  assert.deepEqual(clearableIds(cards, 'tampilan', () => true), []);   // everything locked: nothing to clear
 });
 
 test('the app passes its device token in the fragment and the viewer takes it out', async () => {
