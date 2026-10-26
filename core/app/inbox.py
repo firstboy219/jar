@@ -38,23 +38,36 @@ async def hooks() -> dict:
     return v if isinstance(v, dict) else {}
 
 
-async def install() -> dict:
-    """Create the missing flows INACTIVE in n8n and ask the owner to activate each (the usual approval). Safe to repeat."""
+async def install(creds: dict | None = None) -> dict:
+    """Create the missing flows in n8n. Safe to repeat.
+    Without creds: INACTIVE, and the owner is asked to activate each (the usual approval).
+    With creds (the owner just signed in to Google from the phone, ADR-057 — that login is the consent): every flow gets the credential
+    on its Google node and is switched on."""
     have = await hooks()
     for kind in inbox_flows.KINDS:
-        if kind in have:
+        if kind in have and not creds:
             continue
-        path = "jarvis-" + kind + "-" + secrets.token_hex(16)
+        path = have[kind]["path"] if kind in have else "jarvis-" + kind + "-" + secrets.token_hex(16)
+        flow = inbox_flows.build(kind, path, creds)
         try:
-            created = await n8n.create_inactive(inbox_flows.build(kind, path))
+            if kind in have:
+                created = await n8n.update_workflow(have[kind]["workflow_id"], flow)
+            else:
+                created = await n8n.create_inactive(flow)
+            if creds:
+                await n8n.activate(created["id"])
         except n8n.N8nError as e:
             raise InboxError(str(e)) from e
-        await approvals.create("n8n_activate_workflow", f"Aktifkan workflow n8n: {created['name']}", {"workflow_id": created["id"]},
-                               "jarvis-core", "medium", idempotency_key=f"n8n_activate:{created['id']}")
+        if not creds:
+            await approvals.create("n8n_activate_workflow", f"Aktifkan workflow n8n: {created['name']}", {"workflow_id": created["id"]},
+                                   "jarvis-core", "medium", idempotency_key=f"n8n_activate:{created['id']}")
+        if kind not in have:
+            await audit.record("jarvis-core", "inbox.flow_created", f"n8n:{created['id']}", kind=kind)
+        if creds:
+            await audit.record("owner", "inbox.flow_connected", f"n8n:{created['id']}", kind=kind)
         have[kind] = {"path": path, "workflow_id": created["id"], "name": created["name"]}
         await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
                                 HOOKS_KEY, have)
-        await audit.record("jarvis-core", "inbox.flow_created", f"n8n:{created['id']}", kind=kind)
     return await status()
 
 

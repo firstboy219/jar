@@ -39,9 +39,11 @@ WORKER_BRIEF = (
     "pribadi (kirim lamaran/formulir, buat akun, bayar) dan minta persetujuan pemilik lewat ask_owner.\n"
     "Kalau terhalang LOGIN, CAPTCHA, kode OTP/verifikasi, atau langkah yang hanya bisa dilakukan manusia: JANGAN menebak, "
     "mengulang tanpa henti, atau memakai kata sandi yang tidak diberikan. Panggil ask_owner (wait_seconds 300) dengan "
-    "kalimat seperti: 'Aku butuh bantuanmu di halaman <nama situs>: <captcha/login>. Buka Meja, klik Ambil alih di kartu "
+    "kalimat seperti: 'Aku butuh bantuanmu di halaman <nama situs>: <captcha/login>. Buka Meja, klik Intervensi di kartu "
     "tugas ini, selesaikan, lalu tekan Selesai.' Lalu TUNGGU jawabannya (check_owner_answer) tanpa menyentuh halaman. "
-    "Setelah dijawab, ambil dulu pandangan halaman untuk melihat keadaan terbaru dan lanjutkan dari situ.\n\n"
+    "Setelah dijawab, ambil dulu pandangan halaman untuk melihat keadaan terbaru dan lanjutkan dari situ.\n"
+    "Pemilik juga bisa INTERVENSI kapan saja tanpa kamu minta. Kalau ada pesan bahwa pemilik mengambil alih browser, berhenti "
+    "memakai browser saat itu juga dan panggil wait_for_owner(task_id) sampai hasilnya 'handed_back'.\n\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",

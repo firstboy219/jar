@@ -80,6 +80,9 @@ services:
       - API_SERVER_KEY=${HERMES_API_KEY}
       # JARVIS' own tools (memory, the owner, the phone's screen, documents, approvals, n8n) via jarvis-tools
       - MCP_TOKEN=${MCP_TOKEN}
+      - PUBLIC_ORIGIN=https://${BACKEND_DOMAIN}
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
       - TZ=${TZ}
       # lean while Hermes runs on the local CPU (fewer prompt tokens), full with cloud models (ADR-031)
       - HERMES_PROFILE=${HERMES_PROFILE:-lean}

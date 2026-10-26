@@ -1,4 +1,4 @@
-// "Ambil alih" (ADR-053): the owner takes the wheel of a worker's browser from the desk — to solve a captcha or log in when the worker is stuck.
+// "Intervensi" (ADR-053, ADR-056: any time, the worker is told to stand still): the owner takes the wheel of a worker's browser from the desk — to solve a captcha or log in when the worker is stuck.
 // A full-window view of the live video; what the owner does on it (mouse, touch, wheel, keys, pasted text) goes to the same tab over the
 // desk's WebSocket. Nothing typed here is kept: it is sent and forgotten.
 import { fitSize, keyToInput, pageFraction, scrollDelta, touchIntent } from './lib.js';
@@ -14,7 +14,7 @@ export function createTakeover({ send, toast }) {
   const kb = el('button', null, '⌨ Keyboard'), paste = el('button', null, '📋 Tempel teks');
   const done = el('button', 'tk-done', 'Selesai — lanjutkan Jarvis'), back = el('button', null, 'Kembalikan tanpa memberi tahu');
   bar.append(title, url, badge, kb, paste, done, back);
-  const note = el('div', 'tk-note', 'Anda yang mengendalikan browser ini. Jarvis menunggu; klik dan ketikan Anda langsung masuk ke halaman.');
+  const note = el('div', 'tk-note', 'Anda yang mengendalikan browser ini. Klik dan ketikan Anda langsung masuk ke halaman.');
   const stage = el('div', 'tk-stage'), cv = el('canvas', 'tk-canvas');
   stage.append(cv);
   const pasteRow = el('form', 'tk-paste'); pasteRow.hidden = true;
@@ -159,6 +159,8 @@ export function createTakeover({ send, toast }) {
     update(st) {
       if (!st || st.task_id !== task) return;
       url.textContent = st.page_title || st.url || '';
+      note.textContent = st.paused ? 'Anda yang mengendalikan browser ini. Jarvis sudah diminta diam dan menunggu sampai Anda selesai.'
+        : 'Anda yang mengendalikan browser ini. Jarvis belum tentu berhenti (pekerja ini tidak bisa dijeda) — hindari langkah yang bertabrakan.';
       if (FINAL.includes(st.status)) { toast('Tugas ini sudah selesai.'); close(); }
     },
     close,

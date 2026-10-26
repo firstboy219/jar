@@ -21,11 +21,14 @@ import logging
 import time
 from datetime import datetime
 
+import httpx
+
 from fastapi import Body, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import assistant
+from . import google_auth
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -1281,6 +1284,13 @@ async def internal_ask(a: AskIn, request: Request):
     return {"question_id": q["id"]}
 
 
+@app.get("/internal/control/{task_id}")
+async def internal_control(task_id: int, request: Request):
+    """wait_for_owner: is the owner still driving this task's browser (ADR-056)?"""
+    _tools_auth(request)
+    return live.hold_state(task_id)
+
+
 class PlayIn(BaseModel):
     query: str = Field(min_length=1, max_length=200)
 
@@ -1412,6 +1422,12 @@ async def meeting_start_request(m: MeetingStartIn, device: dict = Depends(owner_
     return await meetings.request_start(m.title, m.confidential, m.participants, m.agenda, f"device:{device['name']}")
 
 
+@app.post("/api/v1/meetings/want")
+async def meeting_prepare(device: dict = Depends(owner_device_auth)):
+    """The empty meeting card's "Siapkan rapat": the same as saying "mulai rapat" (ADR-056)."""
+    return meetings.want_to_record()
+
+
 @app.delete("/api/v1/meetings/want")
 async def meeting_cancel_request(device: dict = Depends(owner_device_auth)):
     """The owner dismissed the meeting card without recording."""
@@ -1497,6 +1513,68 @@ async def document_get(doc_id: str, device: dict = Depends(device_auth)):
     row, path = found
     return FileResponse(path, media_type=documents.FORMATS[row["format"]],
                         filename=f"{row['title'][:60]}.{row['format']}")
+
+
+# ---------- the owner's Google account, connected from the phone (ADR-057) ----------
+
+class GoogleClientIn(BaseModel):
+    client_id: str = Field(min_length=10, max_length=200)
+    client_secret: str = Field(min_length=10, max_length=200)
+
+
+@app.get("/api/v1/google")
+async def google_status(device: dict = Depends(owner_device_auth)):
+    return await google_auth.status()
+
+
+@app.put("/api/v1/google/client")
+async def google_client(c: GoogleClientIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return await google_auth.set_client(c.client_id, c.client_secret, f"device:{device['name']}")
+    except google_auth.GoogleError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.post("/api/v1/google/start")
+async def google_start(device: dict = Depends(owner_device_auth)):
+    try:
+        return await google_auth.start(f"device:{device['name']}")
+    except google_auth.GoogleError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.get("/api/v1/google/callback", response_class=HTMLResponse)
+async def google_callback(code: str = "", state: str = "", error: str = ""):
+    """Google sends the owner's browser here after the login. No device token: the one-time state is the proof."""
+    if error or not code:
+        return HTMLResponse(google_auth.page("Login dibatalkan", "Akun Google tidak dihubungkan.", False), status_code=400)
+    try:
+        st = await google_auth.finish(code, state)
+    except (google_auth.GoogleError, n8n.N8nError, httpx.HTTPError) as e:
+        log.warning("google login failed: %s", e)
+        return HTMLResponse(google_auth.page("Gagal menghubungkan", str(e)[:300], False), status_code=400)
+    note = st["error"] or ("Gmail dan Kalender siap dipakai Jarvis lewat n8n. Mengirim email atau membuat acara tetap menunggu persetujuanmu."
+                           + (f" Izin yang belum diberikan: {', '.join(st['missing'])}." if st.get("missing") else ""))
+    return HTMLResponse(google_auth.page(f"Terhubung: {st['email']}", note, not st["error"]))
+
+
+@app.delete("/api/v1/google")
+async def google_disconnect(device: dict = Depends(owner_device_auth)):
+    return await google_auth.disconnect(f"device:{device['name']}")
+
+
+@app.get("/api/v1/documents/{doc_id}/preview")
+async def document_preview(doc_id: str, device: dict = Depends(device_auth)):
+    """The desk's document card (ADR-056): the text of a document, to read it on the board (a phone's WebView cannot show a PDF)."""
+    found = await documents.get(doc_id)
+    if not found:
+        raise HTTPException(404, "dokumen tidak ditemukan")
+    row, path = found
+    try:
+        kind, text, note = attachments.extract(path.name, documents.FORMATS[row["format"]], path.read_bytes())
+    except attachments.AttachmentError as e:
+        kind, text, note = row["format"], "", str(e)
+    return {"title": row["title"], "format": row["format"], "text": text[:30_000], "note": note}
 
 
 # ---------- admin API ----------

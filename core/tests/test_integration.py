@@ -40,6 +40,9 @@ async def pool(monkeypatch):
     monkeypatch.setattr(_composition, "_probe", no_probe)
     from app import workers as _w
     _w._background_turn = None  # an asyncio.Lock belongs to one event loop (one per test)
+    from app import stage as _stage
+    _stage._current = None
+    _stage._desk.clear()  # the desk's cards are module state: every test starts with an empty desk
     gateway.invalidate()
     budget.forget()
     budget._notified.clear()

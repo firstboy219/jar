@@ -1333,3 +1333,25 @@ def test_v4_f11_free_objects_keep_only_known_well_formed_properties():
     assert canvas.object_content({"type": "note", "text": "Judul\nisi panjang"})["title"] == "Judul"
     assert canvas.object_content({"type": "frame"})["title"] == "Bingkai"
     assert canvas.allowed("obj:abc123", "renature", None) and canvas.allowed("obj:abc123", None, None)
+
+
+def test_v4_f12_google_login_url_client_check_and_the_n8n_credential():
+    from urllib.parse import parse_qs, urlparse
+
+    from app import google_auth, inbox_flows
+    u = urlparse(google_auth.login_url("123-abc.apps.googleusercontent.com", "st8", "https://vis1.example/api/v1/google/callback"))
+    q = {k: v[0] for k, v in parse_qs(u.query).items()}
+    assert u.netloc == "accounts.google.com" and q["access_type"] == "offline" and q["prompt"] == "consent" and q["state"] == "st8"
+    assert "gmail.modify" in q["scope"] and "calendar.events" in q["scope"] and q["redirect_uri"].endswith("/api/v1/google/callback")
+    assert google_auth.check_client(" 1-x.apps.googleusercontent.com ", "GOCSPX-abcdefgh") == ("1-x.apps.googleusercontent.com", "GOCSPX-abcdefgh")
+    for bad in (("abc", "GOCSPX-abcdefgh"), ("1-x.apps.googleusercontent.com", "short"), ("1-x.apps.googleusercontent.com", "has space inside")):
+        with pytest.raises(google_auth.GoogleError):
+            google_auth.check_client(*bad)
+    d = google_auth._n8n_data("cid", "sec", {"access_token": "a", "refresh_token": "r", "expires_in": 3599, "scope": "s"})
+    assert d == {"clientId": "cid", "clientSecret": "sec", "oauthTokenData": {"access_token": "a", "refresh_token": "r", "token_type": "Bearer",
+                                                                              "expires_in": 3599, "scope": "s"}}
+    creds = {"gmailOAuth2": {"id": "g1", "name": "G"}, "googleCalendarOAuth2Api": {"id": "c1", "name": "C"}}
+    for kind, want in (("list", "gmailOAuth2"), ("send", "gmailOAuth2"), ("calendar", "googleCalendarOAuth2Api")):
+        google = [n for n in inbox_flows.build(kind, "p", creds)["nodes"] if n["type"].startswith("n8n-nodes-base.g")]
+        assert google and google[0]["credentials"] == {want: creds[want]}
+    assert all("credentials" not in n for n in inbox_flows.build("list", "p")["nodes"])     # without a login the owner picks it in n8n

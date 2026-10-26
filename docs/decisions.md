@@ -1005,3 +1005,29 @@ Owner (2026-10-26): replace the 3D infinite canvas with a 2D one "seperti Miro/F
   add-from-storage palette, minimap, undo / redo (client-side, each step is an API call; the history panel still restores whole versions).
 - The desk (stations with live video and takeover, n8n, requests, storage, player, meeting) is unchanged in behaviour; its panels sit on the
   board as fixed widgets. Hand-tracking drives the same pointer events. Phone: tools on the left, zoom on the right, properties as a bottom sheet.
+
+## ADR-056 — Every thing JARVIS shows has its own card on the desk; the owner can step in any time (Blueprint v4 Fase 12)
+Owner (2026-10-26): not only meetings and songs — video, YouTube, documents, pictures, etc. must appear on the desk, which already holds a card
+for every feature; and "Ambil alih" must not wait for Jarvis to ask: one click and the owner is in.
+- **One card per kind, always on the board.** `stage.place()` files what is shown into a desk slot (music, video, image incl. gallery, doc, map,
+  web, text, draft); a board's blocks go to their own cards. The slots outlive the phone's current panel, so a picture never stops the music.
+  The desk snapshot carries `player` (music) and `cards` (the rest); a card's ✕ is a `stage_event closed` that empties only that card.
+  Empty cards stay in place, dashed, saying what to say to fill them; the meeting card gets **Siapkan rapat** (`POST /meetings/want`).
+  Documents are read on the card through `GET /documents/{id}/preview` (text extracted as for attachments — a phone WebView cannot show a PDF);
+  maps use MapLibre + OpenFreeMap like the app. The camera flies to a card when new content lands on it.
+- **Intervensi.** The station button is now shown whenever the worker browses. Taking the wheel steers the worker's running Hermes turn
+  (`POST /v1/runs/{id}/steer`) to keep its hands off the browser and call the new MCP tool `wait_for_owner(task_id)`, which waits until
+  the owner hands back (`GET /internal/control/{id}`). Hermes reads a steer before its next step, so one action already in flight may still
+  land. OpenJarvis tasks cannot be steered; the overlay then says the worker was not paused.
+- OpenJarvis (ADR-043) was switched ON by the owner without a further trial. Acceptance `test_v4_f12_*`.
+
+## ADR-057 — The owner's Google account is connected by logging in from the phone (Blueprint v4 Fase 12)
+Owner (2026-10-26): "cukup berikan akses via login dari HP, otomatis kamu bisa gunakan kredensial tersebut untuk n8n".
+- Desk card **Akun Google** → `POST /google/start` (one-time state, 15 min) → Google's consent page in the phone's browser (the app sends
+  outside addresses there; Google refuses embedded WebViews) → `GET /google/callback` trades the code (offline + consent → refresh token).
+- Core writes two n8n credentials (`gmailOAuth2`, `googleCalendarOAuth2Api`, with `oauthTokenData`; n8n refreshes from then on), puts them on
+  the inbox flows and activates them: the owner's own login is the consent for those three flows. Sending an email or creating an event still
+  needs the owner's approval of that exact item (ADR-045). The refresh token and the client secret are stored encrypted (vault key).
+- Google requires an OAuth client the owner registers once (Web application, redirect `https://<BACKEND_DOMAIN>/api/v1/google/callback`,
+  Gmail + Calendar APIs on, consent screen "In production" so tokens do not expire after 7 days). Its id/secret come from `.env` or are pasted on
+  the card. **Putuskan** revokes the token, deletes the credentials and stops the flows.

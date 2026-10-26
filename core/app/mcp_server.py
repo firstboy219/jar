@@ -457,6 +457,23 @@ async def check_owner_answer(question_id: int, wait_seconds: int = 60) -> dict:
 
 
 @mcp.tool()
+async def wait_for_owner(task_id: int, wait_seconds: int = 240) -> dict:
+    """The owner took over your browser (you were told so): keep your hands off the browser and wait here until they hand it back.
+    Returns status 'handed_back' (carry on: look at the page first) or 'owner_driving' after wait_seconds (max 300) — then call again."""
+    for _ in range(max(1, min(wait_seconds, 300)) // 2):
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(f"http://jarvis-core:8000/internal/control/{task_id}", headers={"X-Internal-Token": settings.mcp_token})
+            state = r.json() if r.status_code == 200 else {"status": "handed_back"}
+        except (httpx.HTTPError, ValueError):
+            state = {"status": "owner_driving"}
+        if state.get("status") == "handed_back":
+            return state
+        await asyncio.sleep(2)
+    return {"status": "owner_driving", "note": "Pemilik masih memegang browser. Panggil wait_for_owner lagi; jangan sentuh browser."}
+
+
+@mcp.tool()
 async def notify_owner(text: str, task_id: int | None = None) -> dict:
     """Tell the owner something now (spoken on the phone, repeated until they confirm hearing it) —
     e.g. results of a scheduled job, a reminder, a warning. 1–3 sentences, Indonesian, no markdown."""
@@ -481,7 +498,8 @@ async def stage_show(panel: str, payload: dict, caption: str = "") -> dict:
     - image: {"title","url"} one picture, full size (zoomable)
     - text: {"title","text"} notes, a list, a summary, a recipe — plain text, newlines kept
     - board: {"title","blocks":[{"kind": <any panel above except draft>, ...its payload}]} several things at once
-    All URLs must be https. Returns the stage id (for stage_update / stage_close). Easier: show_anything."""
+    All URLs must be https. It also lands on its own card on the owner's desk (Meja): music, video, picture, document, map, web,
+    notes, draft — the desk flies to that card. Returns the stage id (for stage_update / stage_close). Easier: show_anything."""
     return await _core("/internal/stage", {"action": "show", "panel": panel, "payload": payload, "caption": caption})
 
 

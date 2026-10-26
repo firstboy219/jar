@@ -4,7 +4,8 @@ Three small flows, each behind a webhook whose path is a random secret (n8n's ad
   list      → Gmail: the newest unread messages, as {id, threadId, from, subject, snippet, date}
   send      → Gmail: send ONE email (JARVIS calls this only after the owner approved that exact email)
   calendar  → Google Calendar: create ONE event (same rule)
-The Google sign-in (OAuth) cannot be done by JARVIS: the owner picks the credential on each Google node inside n8n once.
+The Google sign-in is the owner's own login from the phone (ADR-057, google_auth.py): it makes the n8n credentials, and build() puts them
+on the Google nodes. Without it the owner picks the credential on each Google node inside n8n once.
 BELUM DIVERIFIKASI end to end against a live Google account — the node parameters follow n8n 2.x's Gmail / Google Calendar nodes.
 """
 
@@ -17,7 +18,11 @@ def _webhook(path: str) -> dict:
             "parameters": {"httpMethod": "POST", "path": path, "responseMode": "lastNode", "options": {}}}
 
 
-def build(kind: str, path: str) -> dict:
+CRED_TYPE = {"list": "gmailOAuth2", "send": "gmailOAuth2", "calendar": "googleCalendarOAuth2Api"}
+
+
+def build(kind: str, path: str, creds: dict | None = None) -> dict:
+    """creds: {credential type: {"id", "name"}} from the owner's Google login; the Google node of the flow uses it."""
     if kind not in KINDS:
         raise ValueError(kind)
     hook = _webhook(path)
@@ -58,4 +63,9 @@ def build(kind: str, path: str) -> dict:
                       {"id": "2", "name": "id", "type": "string", "value": "={{ $json.id }}"}]}}}]
         connections = {"Webhook": {"main": [[{"node": "Kalender", "type": "main", "index": 0}]]},
                        "Kalender": {"main": [[{"node": "Hasil", "type": "main", "index": 0}]]}}
+    cred = (creds or {}).get(CRED_TYPE[kind])
+    if cred:
+        for n in nodes:
+            if n["id"] in ("g", "k"):
+                n["credentials"] = {CRED_TYPE[kind]: {"id": cred["id"], "name": cred["name"]}}
     return {"name": NAMES[kind], "nodes": nodes, "connections": connections, "settings": {"executionOrder": "v1"}}
