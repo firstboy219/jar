@@ -10,7 +10,7 @@ import json
 import logging
 import re
 
-from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, memory, modelrouter, quick, reports, writer
+from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, memory, modelrouter, openjarvis, quick, reports, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -48,7 +48,7 @@ def _sem_() -> asyncio.Semaphore:
 
 async def spawn(title: str, instruction: str, session_id: str, actor: str, device_id=None,
                 location: Location | None = None, kind: str = "owner", image: str | None = None,
-                category: str | None = None, private: bool = False, company_id: str | None = None) -> dict:
+                category: str | None = None, private: bool = False, company_id: str | None = None, heavy: bool = False) -> dict:
     """kind: 'owner' (result spoken as a report) or an internal purpose handled by its module:
     'situation' (awareness), 'routine' (habits), 'selfcheck' (self-improvement).
     category: which AI does the work (gateway category); private tasks only ever use the local model."""
@@ -57,13 +57,15 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
         category = KIND_CATEGORY.get(kind) or ("analisis" if await composition.strong_mode() else "web")
     if private:
         category = "privat"
+    # a heavy owner task goes to OpenJarvis first — only while the owner has it on, never private, never with a picture
+    runtime = "openjarvis" if (heavy and kind == "owner" and not private and not image and await openjarvis.enabled()) else "hermes"
     row = await db.pool().fetchrow(
-        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd, company_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd, company_id, runtime)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            RETURNING id, title, status, kind, category, created_at""",
         session_id, device_id, title.strip()[:120] or "Tugas", instruction.strip()[:12000], kind, image,
         category, private, re.sub(r"\s+", " ", instruction.split(quick.CONTEXT_MARK)[0]).strip()[:500],
-        await modelrouter.default_task_budget(), company_id)
+        await modelrouter.default_task_budget(), company_id, runtime)
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
     await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
@@ -84,7 +86,7 @@ async def _run(task_id: int, context: str) -> None:
     async with _sem_():
         row = await db.pool().fetchrow(
             "UPDATE tasks SET status = 'running', started_at = now(), phase = 'executing' WHERE id = $1 AND status = 'queued' "
-            "RETURNING id, title, instruction, session_id, kind, image, category, private, goal, company_id", task_id)
+            "RETURNING id, title, instruction, session_id, kind, image, category, private, goal, company_id, runtime", task_id)
         if row is None:  # cancelled while queued
             return
         kind = row["kind"]
@@ -118,6 +120,8 @@ async def _run(task_id: int, context: str) -> None:
                                      "event": {"type": "thought", "text": "mencari cepat di web"}})
                 if text := await quick.answer(row["instruction"]):
                     result = hermes.HermesReply(text, None, None, 0)
+            if row["runtime"] == "openjarvis" and result is None:
+                result = await _try_openjarvis(task_id, row, OPENJARVIS_BRIEF.format(id=task_id) + context + row["instruction"])
             for attempt in range(HERMES_RETRIES + 1):
                 events = _nothing() if result else hermes.stream(
                     context + brief + row["instruction"], f"task-{task_id}", row["image"],
@@ -192,10 +196,30 @@ async def _run(task_id: int, context: str) -> None:
             waiting.discard(task_id)
 
 
+# OpenJarvis has no JARVIS tools (no memory, documents, n8n, approvals): it gets the task and what it can do, nothing about Hermes.
+OPENJARVIS_BRIEF = ("[tugas #{id}] Kerjakan sendiri sampai selesai, tanpa bertanya. Kamu hanya bisa membaca/menulis berkas di /work "
+                    "dan menjalankan Python; tidak ada internet. Jawab langsung dengan HASIL AKHIR yang bisa dipakai (bukan rencana, "
+                    "bukan janji). Jika tugas ini butuh hal di luar kemampuanmu, katakan apa yang kurang.\n\n")
 DRAFT_TITLE = "Menulis draf"
 BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine", "situation")
 RESUME_MARK = "\n\n---LANJUTAN---\n"
 HERMES_RETRIES, HERMES_RETRY_S = 6, 20  # up to 2 minutes for Hermes to come back
+
+
+async def _try_openjarvis(task_id: int, row, text: str):
+    """A heavy task on OpenJarvis (ADR-043). Anything but a usable answer → None, and Hermes does the task as usual."""
+    await hub.broadcast({"type": "task_event", "task_id": task_id, "event": {"type": "thought", "text": "mengerjakan dengan OpenJarvis"}})
+    try:
+        answer = await openjarvis.run(text, row["category"], f"task-{task_id}")
+    except openjarvis.OpenJarvisError as e:
+        log.warning("worker %s: OpenJarvis gave no answer (%s), Hermes takes over", task_id, e)
+        await db.pool().execute("UPDATE tasks SET runtime = 'hermes', runtime_note = $2 WHERE id = $1", task_id,
+                                f"OpenJarvis tidak memberi jawaban ({str(e)[:200]}); dikerjakan Hermes")
+        await audit.record("jarvis-core", "task.openjarvis_fallback", f"task:{task_id}", reason=str(e)[:200])
+        await hub.broadcast({"type": "task_event", "task_id": task_id,
+                             "event": {"type": "thought", "text": "OpenJarvis gagal, dialihkan ke Hermes"}})
+        return None
+    return hermes.HermesReply(answer, None, None, 0)
 
 
 async def _yield_to_owner(task_id: int, kind: str, row) -> asyncio.Lock | None:

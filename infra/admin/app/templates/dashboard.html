@@ -443,6 +443,28 @@
   {% if detail.decisions %}<h3>Decision Vault</h3>{% for x in detail.decisions %}<div class="item"><span class="pill">{{ x.kind }}</span> {{ x.text }}</div>{% endfor %}{% endif %}
 </section>
 {% endif %}
+{% elif tab == 'worker' %}
+<section class="card">
+  <h2>Pekerja berat — OpenJarvis</h2>
+  <p class="hint">Hermes tetap pekerja utama. OpenJarvis (kerangka agen Stanford, kontainer terpisah) hanya dicoba untuk tugas yang ditandai
+    <strong>berat</strong> oleh agen utama, dan hanya bila kamu menyalakannya di sini. Ia hanya bisa membaca/menulis berkas di folder kerjanya dan
+    menjalankan Python — tanpa alat Jarvis, tanpa memori, tanpa repo, tanpa internet — dan berpikir lewat gerbang AI Jarvis (anggaran dan aturan model
+    tetap berlaku; <code>/privat</code> tidak pernah dikirim ke sana). Kalau ia gagal atau tidak memberi jawaban, Hermes mengerjakan tugasnya.
+    <strong>Catatan uji (26 Okt 2026):</strong> dengan DeepSeek V4.1 Flash, 3 dari 3 percobaan berakhir tanpa hasil (panggilan alat keluar sebagai teks
+    mentah), jadi bisa jadi tugas berat sering jatuh ke Hermes dan biaya percobaan OpenJarvis terbuang.</p>
+  <table class="kv">
+    <tr><th>Kontainer</th><td>{{ 'menjawab' if reachable else 'TIDAK menjawab' }}{% if not configured %} · kunci belum disiapkan (infra/scripts/openjarvis-setup.sh){% endif %}</td></tr>
+    <tr><th>Status</th><td>{{ 'NYALA' if enabled else 'mati' }}
+      <form method="post" action="/worker/openjarvis" class="inline"><input type="hidden" name="enabled" value="{{ 'off' if enabled else 'on' }}">
+        <button type="submit">{{ 'Matikan' if enabled else 'Nyalakan' }}</button></form></td></tr>
+  </table>
+</section>
+<section class="card">
+  <h2>Tugas terakhir</h2>
+  <table class="kv"><tr><th>#</th><th>Tugas</th><th>Status</th><th>Pekerja</th><th>Biaya</th><th>Catatan</th></tr>
+  {% for t in recent %}<tr><td>{{ t.id }}</td><td>{{ t.title }}</td><td>{{ t.status }}</td><td>{{ t.runtime }}</td><td>{{ '$%.4f' % (t.cost_usd or 0) }}</td><td>{{ t.runtime_note or '' }}</td></tr>
+  {% else %}<tr><td colspan="6" class="hint">Belum ada tugas yang melewati OpenJarvis.</td></tr>{% endfor %}</table>
+</section>
 {% elif tab == 'voice' %}
 <section class="card">
   <h2>Suara JARVIS</h2>

@@ -903,3 +903,142 @@ async def test_v4_f4_viewer_is_served_safely_and_the_api_needs_the_owner(pool, m
         assert (await c.patch(f"/api/v1/canvas/cards/{card['id']}", json={"x": 1, "y": 2, "z": 3}, headers=h)).json()["z"] == 3
         view = (await c.get(f"/api/v1/canvases/{opened['id']}", headers=g)).json()      # anyone paired may look
         assert view["cards"][0]["title"] == "Desain logo toko" and view["constellations"]
+
+
+async def test_v4_f2_spike_keys_reach_only_the_spike_model_and_stop_at_its_budget(pool, monkeypatch):
+    import hashlib
+
+    import httpx
+    from app import billing, config, main, spike
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(billing, "_last_notified", 0.0)
+    monkeypatch.setattr(config.settings, "llm_gateway_key", "hermes-key")
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["model"])
+        return httpx.Response(200, content=_sse("ok", cost=0.3), headers={"content-type": "text/event-stream"})
+    # what migration 025 seeds (the test fixture points every category at the local model)
+    await pool.execute("""UPDATE llm_categories SET budget_usd = 1.00,
+                          routes = '[{"provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash"}]' WHERE name = 'spike'""")
+    _fake_providers(monkeypatch, handler)
+    for rt, key in (("hermes", "k-h"), ("openjarvis", "k-oj")):
+        await pool.execute("INSERT INTO settings_kv (key, value) VALUES ($1, to_jsonb($2::text)) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                           f"spike:key:{rt}", hashlib.sha256(key.encode()).hexdigest())
+    spike.forget_keys()
+    body = {"model": "jarvis-spike", "stream": True, "messages": [{"role": "user", "content": "halo"}]}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.post("/llm/v1/chat/completions", json=body, headers={"Authorization": "Bearer salah"})
+        assert r.status_code == 401
+        r = await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-web"}, headers={"Authorization": "Bearer k-oj"})
+        assert r.status_code == 403                                            # a spike key is good for the spike only
+        r = await c.get("/llm/v1/models", headers={"Authorization": "Bearer k-oj"})
+        assert [m["id"] for m in r.json()["data"]] == ["jarvis-spike"]
+        r = await c.post("/llm/v1/chat/completions", json=body, headers={"Authorization": "Bearer k-oj"})
+        assert r.status_code == 200 and "ok" in r.text
+        assert seen == ["deepseek/deepseek-v4.1-flash"]                      # the spike model, nothing else in front
+        row = await pool.fetchrow("SELECT caller, category FROM llm_usage ORDER BY id DESC LIMIT 1")
+        assert (row["caller"], row["category"]) == ("spike-openjarvis", "spike")   # cost is attributed per runtime
+        # past the $1 cap: no safety model, no local fallback — the call is refused
+        await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, cost_usd, ok) VALUES ('spike', 'spike-hermes', 'openrouter', 'x', 1.5, true)")
+        r = await c.post("/llm/v1/chat/completions", json=body, headers={"Authorization": "Bearer k-h"})
+        assert r.status_code == 502 and "anggaran" in r.text
+        assert seen == ["deepseek/deepseek-v4.1-flash"]
+        # the real Hermes key still works for everything
+        r = await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-web"}, headers={"Authorization": "Bearer hermes-key"})
+        assert r.status_code == 200
+    spike.forget_keys()
+
+
+async def _openjarvis_env(pool, monkeypatch, on=True, answer=None, error=None):
+    from app import hermes, memory, openjarvis
+    monkeypatch.setattr(memory, "search", _no_memory)
+    sent, prompts = [], []
+
+    async def run(text, category, session_id):
+        sent.append((text, category, session_id))
+        if error:
+            raise openjarvis.OpenJarvisError(error)
+        return answer
+    monkeypatch.setattr(openjarvis, "run", run)
+
+    async def hermes_stream(text, session_id, image=None, **kw):
+        prompts.append(text)
+        yield {"type": "done", "reply": hermes.HermesReply("Hasil dari Hermes.", 1, 1, 1)}
+    monkeypatch.setattr(hermes, "stream", hermes_stream)
+    await openjarvis.set_enabled(on)
+    return sent, prompts
+
+
+async def _heavy_task(workers, **kw):
+    return await workers.spawn("Analisis besar", "Analisis pemakaian AI seminggu dan beri saran konkret.", "s-oj", "test",
+                               heavy=True, category="analisis", **kw)
+
+
+async def test_v4_f2_a_heavy_task_goes_to_openjarvis_when_it_is_on(pool, monkeypatch):
+    from app import workers
+    sent, prompts = await _openjarvis_env(pool, monkeypatch, answer="Kategori web paling lambat; pindahkan ke model cepat untuk menghemat waktu.")
+    t = await _heavy_task(workers)
+    assert await _wait(lambda: _status(pool, t["id"], "completed"))
+    row = await pool.fetchrow("SELECT runtime, runtime_note, result FROM tasks WHERE id = $1", t["id"])
+    assert row["runtime"] == "openjarvis" and row["runtime_note"] is None and "Kategori web" in row["result"]
+    assert prompts == []                                                               # Hermes was never asked
+    assert sent[0][1] == "analisis" and sent[0][0].startswith(f"[tugas #{t['id']}]")   # the number ties the gateway's cost to the task
+    assert "capability_search" not in sent[0][0] and "task_plan" not in sent[0][0]      # no Hermes-only instructions leak to it
+
+
+async def test_v4_f2_a_failed_openjarvis_hands_the_task_to_hermes(pool, monkeypatch):
+    from app import workers
+    sent, prompts = await _openjarvis_env(pool, monkeypatch, error="model mengirim panggilan alat sebagai teks mentah, tidak dijalankan")
+    t = await _heavy_task(workers)
+    assert await _wait(lambda: _status(pool, t["id"], "completed"))
+    row = await pool.fetchrow("SELECT runtime, runtime_note, result FROM tasks WHERE id = $1", t["id"])
+    assert row["runtime"] == "hermes" and "teks mentah" in row["runtime_note"] and "Hasil dari Hermes." in row["result"]
+    assert len(prompts) == 1 and len(sent) == 1                                         # one try, then Hermes — the owner gets an answer
+    assert await pool.fetchval("SELECT count(*) FROM audit_events WHERE action = 'task.openjarvis_fallback'") >= 1
+
+
+async def test_v4_f2_openjarvis_is_off_by_default_and_never_gets_private_or_normal_tasks(pool, monkeypatch):
+    from app import openjarvis, workers
+    sent, prompts = await _openjarvis_env(pool, monkeypatch, on=False, answer="x" * 40)
+    t = await _heavy_task(workers)                                                      # heavy, but the owner has not switched it on
+    assert await _wait(lambda: _status(pool, t["id"], "completed"))
+    assert (await pool.fetchval("SELECT runtime FROM tasks WHERE id = $1", t["id"])) == "hermes" and sent == []
+    await openjarvis.set_enabled(True)
+    t = await _heavy_task(workers, private=True)                                        # /privat never leaves the local model
+    n = await workers.spawn("Biasa", "Cek harga emas hari ini dan ringkas.", "s-oj", "test")   # not marked heavy
+    for task in (t, n):
+        assert await _wait(lambda task=task: _status(pool, task["id"], "completed"))
+        assert (await pool.fetchval("SELECT runtime FROM tasks WHERE id = $1", task["id"])) == "hermes"
+    assert sent == []
+
+
+async def test_v4_f2_the_openjarvis_gateway_key_reaches_worker_categories_only(pool, monkeypatch):
+    import hashlib
+
+    import httpx
+    from app import billing, config, main
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(billing, "_last_notified", 0.0)
+    monkeypatch.setattr(config.settings, "llm_gateway_key", "hermes-key")
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content)["model"])
+        return httpx.Response(200, content=_sse("ok", cost=0.001), headers={"content-type": "text/event-stream"})
+    _fake_providers(monkeypatch, handler)
+    await pool.execute("UPDATE llm_categories SET routes = '[{\"provider\":\"openrouter\",\"model\":\"m/work\"}]' WHERE name IN ('analisis', 'ngobrol', 'privat')")
+    await pool.execute("INSERT INTO settings_kv (key, value) VALUES ('worker:key:openjarvis', to_jsonb($1::text)) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                       hashlib.sha256(b"oj-key").hexdigest())
+    body = {"stream": True, "messages": [{"role": "user", "content": "[tugas #7] halo"}]}
+    hdr = {"Authorization": "Bearer oj-key"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        assert (await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-analisis"}, headers=hdr)).status_code == 200
+        assert (await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-privat"}, headers=hdr)).status_code == 403
+        assert (await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-ngobrol"}, headers=hdr)).status_code == 403
+        assert (await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-spike"}, headers=hdr)).status_code == 200  # worker category too
+        assert (await c.post("/llm/v1/chat/completions", json={**body, "model": "jarvis-analisis"}, headers={"Authorization": "Bearer lain"})).status_code == 401
+        ids = [m["id"] for m in (await c.get("/llm/v1/models", headers=hdr)).json()["data"]]
+        assert "jarvis-analisis" in ids and "jarvis-privat" not in ids and "jarvis-ngobrol" not in ids
+    row = await pool.fetchrow("SELECT caller, category FROM llm_usage WHERE category = 'analisis' ORDER BY id DESC LIMIT 1")
+    assert row["caller"] == "openjarvis"                                                  # cost is attributed to the worker

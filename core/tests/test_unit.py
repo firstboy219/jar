@@ -1138,3 +1138,46 @@ def test_self_model_describes_every_stt_engine(monkeypatch):
         monkeypatch.setattr(composition, "stt_engine", lambda e=engine: asyncio.sleep(0, e))
         text = asyncio.run(self_model.describe())
         assert "Pendengaran:" in text
+
+
+def test_spike_review_grading_and_verdict():
+    from app.spike import grade_review, summarize, usage_truth
+    rows = ([{"model": "a", "category": "web", "cost_usd": 0.5, "latency_ms": 900, "ok": True}] * 5
+            + [{"model": "b", "category": "cepat", "cost_usd": 0.01, "latency_ms": 100, "ok": False}] * 2
+            + [{"model": "b", "category": "cepat", "cost_usd": 0.01, "latency_ms": 100, "ok": True}] * 4
+            + [{"model": "c", "category": "rapat", "cost_usd": 0.0, "latency_ms": 99999, "ok": False}])   # too few calls to count
+    truth = usage_truth(rows)
+    assert truth == {"most_expensive_model": "a", "slowest_category": "web", "most_failing_model": "b"}
+    good = {**truth, "recommendation": "Pindahkan kategori web ke model yang lebih murah; batasi panjang prompt."}
+    assert grade_review(good, truth)["quality"] == 1.0
+    assert grade_review({**good, "slowest_category": "rapat"}, truth)["quality"] == 0.75
+    assert grade_review(None, truth)["quality"] == 0.0
+
+    def run(rt, q, cost, s, status="done", v=()):
+        return {"runtime": rt, "status": status, "quality": q, "cost_usd": cost, "seconds": s, "violations": list(v)}
+    h = [run("hermes", 1, 0.05, 300), run("hermes", 0.5, 0.05, 300)]
+    better = summarize(h + [run("openjarvis", 1, 0.02, 200), run("openjarvis", 1, 0.02, 200)])
+    assert better["passed"] and set(better["wins"]) == {"quality", "cost", "time", "failure_rate"}
+    breach = summarize(h + [run("openjarvis", 1, 0.02, 200, v=[{"kind": "alat di luar izin"}]), run("openjarvis", 1, 0.02, 200)])
+    assert not breach["passed"] and "pelanggaran" in breach["verdict"]                      # zero violations, always
+    one = summarize(h + [run("openjarvis", 0.5, 0.02, 400), run("openjarvis", 0.5, 0.09, 400)])
+    assert not one["passed"]
+    assert summarize(h)["verdict"] == "belum lengkap"
+
+
+def test_selfdev_policy_protects_the_spike():
+    from app import selfdev_policy as p
+    for f in ("core/app/spike.py", "infra/spike/harness.py", "infra/spike/hidden/p1_test.py", "infra/openjarvis/Dockerfile"):
+        assert not p.judge([{"file": f, "added": 1, "deleted": 0}], "", [], 2)["ok"]   # JARVIS cannot grade itself
+
+
+def test_openjarvis_answer_must_be_an_answer():
+    from app.openjarvis import usable
+    assert usable("Hasil analisis: kategori web paling lambat (median 9 dtk), saran: pindah ke model cepat.")[0]
+    assert not usable("")[0] and not usable("ok")[0]
+    for raw in ('<｜DSML｜ calls>\n<｜DSML｜ invoke name="file_read">... dan seterusnya sampai cukup panjang',
+                "Mari baca: <tool_call>{\"name\": \"file_read\"}</tool_call> menunggu hasilnya ya ya ya"):
+        ok, why = usable(raw)
+        assert not ok and "teks mentah" in why                                      # the failure the spike saw 3 of 3 times
+    from app import selfdev_policy as p
+    assert not p.judge([{"file": "core/app/openjarvis.py", "added": 1, "deleted": 0}], "", [], 2)["ok"]

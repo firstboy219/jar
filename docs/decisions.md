@@ -762,3 +762,64 @@ and the canvas holds references only (a renamed task shows its new title; a priv
 links, focus, version restore, and hiding a card never deletes the task; the viewer is served with its CSP, path traversal is
 refused, and changes need the owner's device while any paired device may look.
 
+
+## ADR-043 — OpenJarvis spike: measured against Hermes-Brain, same problems, same model (2026-10-26)
+Blueprint v4 Fase 2 (D3: OpenJarvis inside Hermes as a heavy worker — a proposal pending this spike). The owner chose the
+test task ("rekonstruksi / peningkatan performa diri", K7) and capped the spike at **$1** (K8, 2026-10-26).
+- **Fairness.** Both runtimes get the same three problems, the same prompt, the same caps (60 turns, 25 min) and the same
+  model — category `spike` (migration 025: `deepseek/deepseek-v4.1-flash`, the cheapest tool-capable model that fits $1 for
+  18 agent runs at the catalog price of 26 Oct; changeable in Komposisi AI) — reached through JARVIS' gateway, so the
+  budget, the model rules and the usage log hold. `spike` is a STRICT category: no safety model, no budget reordering, no
+  local fallback (a failure is a measured failure, not a slow success), refused once its $1 is spent (fresh budget state).
+- **Isolation.** Each runtime has its own gateway key, valid for `spike` only (403 elsewhere; `/v1/models` lists only
+  `jarvis-spike`); the DB keeps only their SHA-256 (`settings_kv spike:key:<runtime>`), which also attributes cost per runtime
+  (`llm_usage.caller = spike-hermes | spike-openjarvis`). "Hermes" is a second container from jarvis-brain's image and init
+  script with `JARVIS_SPIKE=1`: no JARVIS tools (MCP), no shared memory, no schedules, toolsets file + code + todo — the same
+  agent loop with none of JARVIS' reach (the real jarvis-brain could message the owner mid-test). OpenJarvis (commit 40092da,
+  Apache-2.0; built with Rust 1.89 — upstream's image pins 1.88 and fails) runs `orchestrator` on engine `vllm` pointed at the
+  gateway, tools `file_read,file_write,apply_patch,code_interpreter,think`, `allowed_dirs=/work`, no memory context, analytics
+  off. Both containers are started by `infra/spike/spike.sh` with `docker run` (never from docker-compose.yml), no published
+  ports, 2 GB, no-new-privileges, and see only the workspace. Neither touches the repo: they work on a snapshot copy.
+- **Problems** (real, from `error_log`), each graded by a test the runtimes never see, validated first (`spike.sh reference`:
+  the real fix scores 1, the untouched snapshot 0):
+  p1 chat failing with KeyError 'openrouter' (25 Oct; snapshot 2f300ca, fix 88e8cce);
+  p2 owner tasks failing with Hermes 429 "max 10 runs" after deploys — two causes: orphaned runs after a core restart and no
+  wait when Hermes is full (23 Oct; snapshot a4c8a10, fix dc0dfb1; hidden tests split per cause, Hermes full 3× so the one
+  automatic second attempt does not pass for a fix);
+  p3 the weekly efficiency review of 7 days of `llm_usage` (no prompts, answers or sessions): costliest model, slowest category
+  (median), most failing model + a concrete recommendation, checked against values computed from the same export.
+  Patch quality = hidden tests passed × (1 if the snapshot's own suite still passes, flaky failures rerun once, else 0.5);
+  the runtime's `core/app` is graded on the snapshot with the ORIGINAL tests, so a test it weakened cannot help it.
+- **Metrics** (blueprint): quality, cost (gateway), time, failure rate (failed or quality < 1); violations: writes outside its
+  own run folder, tools outside its list, model calls outside `spike`; Hermes approval requests are denied and noted.
+  OpenJarvis passes only with ≥ 2 of 4 metrics better AND zero violations. 3 attempts × 3 problems × 2 runtimes, sequential,
+  interleaved (who goes first alternates); a run never starts when the month's `spike` spend is ≥ $0.95.
+- `spike.py`, `infra/spike/`, `infra/openjarvis/` are in the protected zone (JARVIS must not grade itself).
+- **Batch 1 (spike1, 2026-10-26) is void as a comparison; recorded as is.** 6 runs, $0.75 of the $1. Hermes lost every run to
+  the harness, not its ability: `HERMES_WRITE_SAFE_ROOT` pointed at its own data dir (writes to /work refused — p3's numbers
+  were right but could not be saved), code execution waited for an approval nobody could give, and p1 started before the
+  container was ready (0 s, $0). Fixed (`HERMES_WRITE_SAFE_ROOT=/work`, approvals off inside the spike, readiness wait;
+  `tool_search` only loads schemas and is allowed — its "violation" in p2 was a false alarm). A real finding about OpenJarvis
+  with this model: all three runs ended after 24–41 s with the model's tool calls as raw text (`<｜DSML｜ ... >`) that
+  OpenJarvis did not execute (it does send native `tools`; Hermes got structured calls from the same model), so OpenJarvis
+  scored 0 on p1, p2 and p3 — but cheaper and ~10× faster per attempt ($0.02–0.05, 30–40 s vs $0.12–0.34, 5–17 min).
+- **Decision (owner, 2026-10-26): no further testing — implement.** The spike stops after batch 1 ($0.75 of $1 spent; no
+  OpenJarvis-vs-Hermes verdict on quality exists, and none of the four metrics is claimed). OpenJarvis is adopted as an
+  **optional heavy worker with Hermes-Brain as default and fallback** (D3 as proposed, minus the proof):
+  - `openjarvis.py` + service `openjarvis` (compose profile `openjarvis`, set up with `infra/scripts/openjarvis-setup.sh`,
+    jarvis-network only, 2 GB, no published port, sees `/work` and nothing else). It thinks through the LLM gateway with its own
+    key (SHA-256 in `settings_kv worker:key:openjarvis`, caller `openjarvis`): worker categories only — never `privat`/`ngobrol`
+    — so budget, model rules and cost-per-task (`[tugas #N]`) hold; it has no JARVIS tools, no memory, no repo.
+  - A task runs there only if (a) the owner switched it on (admin → "Pekerja berat", **off by default**), (b) the main agent
+    marked it `berat` (spawn_task), (c) it is an owner task, not private, with no picture. Handover: in = `[tugas #N]` + a short
+    brief (not Hermes' WORKER_BRIEF) + the instruction; out = the answer text. `tasks.runtime` / `runtime_note` show who did it.
+  - **Fallback:** anything but a usable answer (unreachable, HTTP error, empty, or the model's raw tool-call markup as seen
+    in 3 of 3 spike runs) → `runtime='hermes'`, the reason in `runtime_note`, an audit event, and Hermes does the task as if
+    nothing happened. The owner always gets an answer; the cost of a failed attempt is the price of finding out.
+  - Why off by default: with DeepSeek V4.1 Flash OpenJarvis produced no answer in any of 3 attempts, so with that model most heavy
+    tasks would pay for a failed try first. Turn it on when a worker-category model that returns structured tool calls to it is
+    chosen (Komposisi AI) — or leave it off; nothing else depends on it.
+  - `spike.py`, `openjarvis.py`, `infra/spike/`, `infra/openjarvis/` are in the protected zone.
+Acceptance (`test_v4_f2_*`): a heavy task goes to OpenJarvis when it is on and Hermes is never asked; a failed OpenJarvis hands
+the task to Hermes with the reason and an audit event; off by default, and private / not-heavy tasks never reach it; its gateway
+key reaches worker categories only (403 for privat/ngobrol, 401 for others) and its cost is attributed to it.

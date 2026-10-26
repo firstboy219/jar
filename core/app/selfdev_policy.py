@@ -21,9 +21,9 @@ import sys
 FORBIDDEN = re.compile(
     r"^(infra/admin/|infra/\.env|infra/scripts/|infra/systemd/|infra/docker-compose\.yml|infra/postgres/|"
     r"infra/android-builder/|infra/hermes/03-jarvis-config|infra/hermes/SOUL\.md|infra/hermes/plugins/|"
-    r"infra/ears/Dockerfile|infra/ears/requirements\.txt|core/Dockerfile|core/requirements-dev|core/config/|"
+    r"infra/ears/Dockerfile|infra/ears/requirements\.txt|infra/spike/|infra/openjarvis/|core/Dockerfile|core/requirements-dev|core/config/|"
     r"core/app/(main|approvals|devices|vault|sensitive|dev|perf|auditor|ops|composition|budget|errors|config|db|"
-    r"selfdev_policy|modelrouter|chat_settings|skills_pipeline|gateway|kpi|companies|gm|voice|voice_quality|canvas)\.py|core/app/web/canvas/gestures\.js|"
+    r"selfdev_policy|modelrouter|chat_settings|skills_pipeline|gateway|kpi|companies|gm|voice|voice_quality|canvas|spike|openjarvis)\.py|core/app/web/canvas/gestures\.js|"
     r"android/(build\.gradle\.kts|settings\.gradle\.kts|gradle/|gradlew|app/build\.gradle\.kts|app/src/main/AndroidManifest\.xml)|"
     r"\.github/|\.claude/|BRD\.docx)")
 # Anything the owner SEES: locked for T2 until before/after screenshots can be shown with the approval.
