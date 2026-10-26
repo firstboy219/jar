@@ -1279,6 +1279,10 @@ async def test_v4_f7_a_worker_task_is_a_station_on_the_desk_with_steps_and_the_p
                                                                           "label": '{"output": "tak pernah dimulai"}', "status": "completed"}})
     steps = (await live.snapshot("utama"))["stations"][0]["steps"]
     assert len(steps) == 3 and steps[1]["status"] == "completed" and "hasil mentah" not in str(steps)   # paired by tool, results never shown as actions
+    for _ in range(3):                                                                         # the same call again and again: one line, counted
+        await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": f"e{_}", "name": "browser_exec", "label": "ambil teks halaman", "status": "running"}})
+    steps = (await live.snapshot("utama"))["stations"][0]["steps"]
+    assert len(steps) == 4 and steps[3]["n"] == 3 and steps[3]["text"] == "Menjalankan di halaman: ambil teks halaman"
     assert st["page_title"] == "Produk Jostreet" and st["has_frame"] and st["frame_seq"] >= 2
     assert {"n8n", "prompts", "storage"} <= set(snap)                                          # the owner's desk also has the panels
 

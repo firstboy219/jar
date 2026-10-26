@@ -902,3 +902,12 @@ on the canvas where one sees it operating the page: opening it, scrolling, filli
 Acceptance (`test_v4_f7_*`): a task becomes a station with its steps, thought, tab and growing screenshots, served only to paired
 devices and only to its own galaxy; private and company work never leaks onto the wrong desk and requests are masked; a new task is a
 card at once and storage can be laid out.
+- **Verified live (2026-10-26)** on the running server, after Hermes was restarted onto the shared browser: two real requests to the main
+  agent ("buka example.com/.org pakai browser, scroll, laporkan judulnya") each became a station within a second; the camera flew to it;
+  14 screenshots were served while it worked; the page title ("Example Domain"), URL and steps followed the real page; the task
+  completed and its card kept the result. Found and fixed in that run: Hermes' completion events carry their own ids and the tool's
+  result as label (now paired with the call that started and never shown as an action), repeated identical calls collapse into one
+  counted line, and the desk was invisible from the home view (panels and live cards are drawn from farther away now). Hermes in the
+  "full" profile browses through one `browser_exec` tool, so steps read "Menjalankan di halaman: <what it was asked to do>" rather than
+  separate click/scroll lines; separate lines appear when it uses the individual browser tools. Not covered: fonts for some scripts (Thai
+  shows as boxes in screenshots), clicks drawn on the screenshot, two browsing tasks at once.

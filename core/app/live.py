@@ -149,7 +149,11 @@ def _on_step(st: Station, e: dict) -> None:
             known = next((s for s in reversed(st.steps) if s["name"] == name and s["status"] == "running"), None)
             if known is None:
                 return  # a completion whose start we never saw: its label is a result, not an action
-        if known:
+        last = st.steps[-1] if st.steps else None
+        if known is None and last and status == "running" and last["name"] == name and last["text"] == text:
+            last["n"] = last.get("n", 1) + 1   # the same call again (a retry, a poll): one line with a count, not five identical ones
+            last["at"] = time.time()
+        elif known:
             known["status"] = status
         else:
             st.steps.append({"id": sid, "name": name, "icon": icon, "text": text, "status": status, "at": time.time()})

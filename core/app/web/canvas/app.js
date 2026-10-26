@@ -314,7 +314,7 @@ function renderLive(card, l) {
   box.querySelector('.pageline').textContent = st.page_title || st.url || '';
   box.querySelector('.pageline').hidden = !(st.page_title || st.url);
   const ul = box.querySelector('.steps');
-  ul.replaceChildren(...st.steps.slice(-8).map((s) => el('li', s.status === 'running' ? 'now' : '', `${s.icon} ${s.text}`)));
+  ul.replaceChildren(...st.steps.slice(-8).map((s) => el('li', s.status === 'running' ? 'now' : '', `${s.icon} ${s.text}${s.n > 1 ? ` ×${s.n}` : ''}`)));
   box.querySelector('.thought').textContent = st.thought ? `💭 ${st.thought}` : '';
   if (frameNeedsFetch(l.shownSeq, st.frame_seq, st.has_frame)) fetchFrame(card, l);
 }
