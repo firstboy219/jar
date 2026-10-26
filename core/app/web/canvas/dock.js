@@ -2,7 +2,7 @@
 // the same WebSocket the phone uses (/ws). The server does the hearing (speech recognition, voice complements) and the thinking;
 // this file only captures, sends and shows. In the Android app (embedded) the phone's own microphone, camera and screen sharing stay
 // native, so only the chat is shown here.
-import { Vad, downsample, pcm16ToBase64, panelOpen, panelValue } from './lib.js';
+import { ATTACH_ACCEPT, Vad, attachIcon, attachRefusal, downsample, fmtSize, panelOpen, panelValue, pcm16ToBase64 } from './lib.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { /* private mode */ } return null; };
@@ -39,8 +39,11 @@ export function initDock({ api, toast, embedded }) {
   const form = el('form', 'dockform');
   const input = el('input'); input.placeholder = 'Tulis ke Jarvis…'; input.autocomplete = 'off'; input.maxLength = 8000;
   const send = el('button', null, 'Kirim'); send.type = 'submit'; send.dataset.gesture = 'ok';
-  form.append(input, send);
-  dock.append(head, log, statusLine, meter, form);
+  const clip = el('button', 'dclip', '📎'); clip.type = 'button'; clip.title = 'Lampirkan gambar, PDF, dokumen, atau ZIP'; clip.dataset.gesture = 'ok';
+  const picker = el('input'); picker.type = 'file'; picker.multiple = true; picker.accept = ATTACH_ACCEPT; picker.hidden = true;
+  const files = el('div', 'dockfiles'); files.hidden = true;
+  form.append(clip, input, send, picker);
+  dock.append(head, log, statusLine, meter, files, form);
   const previews = el('div', 'previews');
   document.body.append(previews, dock);
   setTts(ttsOn);
@@ -119,11 +122,68 @@ export function initDock({ api, toast, embedded }) {
 
   function sendChat(text) {
     const frame = freshFrame();
-    if (!post({ user_command: text, session_id: sessionId, ...(frame ? { screen: frame.b64, image_source: frame.source } : {}) })) return;
-    addMsg('user', text + (frame ? `  ${frame.source === 'screen' ? '🖥' : '📷'}` : ''), true);
+    const ready = attached.filter((a) => a.id);
+    if (attached.some((a) => !a.id && !a.error)) { toast('Tunggu sebentar — lampiran masih diunggah.'); return false; }
+    const said = text || (ready.length ? 'Lihat lampiran ini.' : '');
+    if (!said) return false;
+    if (!post({ user_command: said, session_id: sessionId, ...(ready.length ? { attachments: ready.map((a) => a.id) } : {}),
+      ...(frame ? { screen: frame.b64, image_source: frame.source } : {}) })) return false;
+    addMsg('user', said + (frame ? `  ${frame.source === 'screen' ? '🖥' : '📷'}` : '') + ready.map((a) => `\n📎 ${a.name}`).join(''), true);
+    clearAttached();
     jarvisBubble = null; setTyping(true);
+    return true;
   }
-  form.addEventListener('submit', (e) => { e.preventDefault(); const t = input.value.trim(); if (t) { sendChat(t); input.value = ''; } });
+  form.addEventListener('submit', (e) => { e.preventDefault(); if (sendChat(input.value.trim())) input.value = ''; });
+
+  // ---------- attachments: picked, dropped on the panel, or pasted (ADR-060) ----------
+  const attached = [];   // {file, name, id?, error?, url?}
+  function drawFiles() {
+    files.hidden = !attached.length;
+    files.replaceChildren(...attached.map((a, i) => {
+      const c = el('div', `dfile${a.error ? ' bad' : a.id ? ' ok' : ' busy'}`);
+      if (a.url) { const img = el('img'); img.src = a.url; img.alt = ''; c.append(img); } else c.append(el('span', 'dficon', attachIcon(a.name, a.file.type)));
+      c.append(el('span', 'dfname', a.name), el('span', 'dfmeta', a.error || (a.id ? fmtSize(a.file.size) : 'mengunggah…')));
+      const x = el('button', 'dfx', '✕'); x.type = 'button'; x.title = 'Lepas lampiran';
+      x.addEventListener('click', () => { if (a.url) URL.revokeObjectURL(a.url); attached.splice(i, 1); drawFiles(); });
+      c.append(x);
+      return c;
+    }));
+    send.disabled = attached.some((a) => !a.id && !a.error);
+  }
+  function clearAttached() { for (const a of attached) if (a.url) URL.revokeObjectURL(a.url); attached.length = 0; drawFiles(); }
+  const asBase64 = (file) => new Promise((ok, fail) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',', 2)[1] || '');
+    r.onerror = () => fail(new Error('berkas tidak bisa dibaca'));
+    r.readAsDataURL(file);
+  });
+  async function addFiles(list) {
+    for (const file of list) {
+      const why = attachRefusal(file, attached.length);
+      if (why) { toast(why, true); continue; }
+      const a = { file, name: file.name || `tempelan-${Date.now()}.png`, url: file.type.startsWith('image/') ? URL.createObjectURL(file) : null };
+      attached.push(a); drawFiles();
+      if (!wantOpen) setOpen(true);
+      try {
+        const m = await api.req('POST', '/api/v1/attachments', { name: a.name, content_type: file.type || '', data: await asBase64(file) });
+        a.id = m.id;
+        if (m.note) toast(`${a.name}: ${m.note}`);
+      } catch (err) { a.error = err.message || 'gagal diunggah'; }
+      drawFiles();
+    }
+  }
+  clip.addEventListener('click', () => picker.click());
+  picker.addEventListener('change', () => { addFiles([...picker.files]); picker.value = ''; });
+  input.addEventListener('paste', (e) => {
+    const pasted = [...(e.clipboardData?.files || [])];
+    if (pasted.length) { e.preventDefault(); addFiles(pasted); }
+  });
+  dock.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); dock.classList.add('dropping'); } });
+  dock.addEventListener('dragleave', (e) => { if (!dock.contains(e.relatedTarget)) dock.classList.remove('dropping'); });
+  dock.addEventListener('drop', (e) => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault(); dock.classList.remove('dropping'); addFiles([...e.dataTransfer.files]);
+  });
   input.addEventListener('keydown', (e) => e.stopPropagation());   // typing never triggers a desk shortcut
 
   // ---------- voice out ----------

@@ -371,3 +371,14 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 .dtjob.awaiting_owner { border-color: var(--amber); } .dtjob.failed { border-color: var(--red); } .dtjob.done { opacity: .7; }
 .dtreview { max-height: 5em; overflow: hidden; }
 @media (max-width: 700px) { .dtmembers { grid-template-columns: 1fr; } }
+
+/* ADR-060: attachments in the desk chat */
+.dockform .dclip { flex: none; width: 40px; padding: 0; font-size: 17px; }
+.dockfiles { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px 0; max-height: 132px; overflow-y: auto; }
+.dfile { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 4px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255, 255, 255, .04); font-size: 12px; }
+.dfile img { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; } .dficon { width: 34px; text-align: center; font-size: 18px; }
+.dfname { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .dfmeta { color: var(--muted); white-space: nowrap; }
+.dfile.busy .dfmeta { color: var(--cyan); } .dfile.bad { border-color: rgba(248, 113, 113, .6); } .dfile.bad .dfmeta { color: var(--red); }
+.dfx { padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 13px; }
+.dock.dropping { outline: 2px dashed var(--cyan); outline-offset: -4px; }
+.dock .msg { white-space: pre-wrap; }
