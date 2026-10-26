@@ -943,3 +943,27 @@ Acceptance (`test_v4_f8_*`): `/` opens the desk, the desk may use its own microp
 WebSocket is refused with 4401; a chat message with a camera frame reaches the brain with the frame and source and streams back to its
 session; an utterance is transcribed, answered and carries a shared screen; too-short audio is refused. JS tests cover the views, command
 parsing, fitting, the cube's orientation, resampling, PCM16 and the voice detector.
+
+## ADR-053 — The owner takes the wheel of a worker's browser (Fase 9, 2026-10-26)
+Context: the worker meets a login or a captcha it cannot (and must not) solve; the owner watches it on the desk but could only watch.
+- **"Ambil alih" on every live station.** It opens a full-window view of the same live video; mouse (move, press, release, double click,
+  right button), the wheel, a touch tap (= click) or drag (= scroll), physical keys and pasted text are sent over the desk's WebSocket
+  (`take` / `input` / `release`) and played into the very tab on screen with DevTools `Input.dispatchMouseEvent`, `dispatchKeyEvent`,
+  `insertText`. Positions travel as fractions of the picture and are multiplied by the page size from the screencast metadata, so the view
+  may be any size. Phones type through a hidden field (`beforeinput`) and a "Tempel teks" row (masked) for codes and passwords.
+- **Only the owner's own device** (scope `owner`) may take the wheel; a company galaxy only steers its own stations; a station that ended
+  cannot be steered. The wheel returns by itself after 90 s without input, when the viewer closes or its socket drops, or on the buttons.
+- **Nothing typed is kept.** Keys and text go from the socket to the page and are not logged, stored or put in an event; the audit holds only
+  `live.takeover` and `live.handback` (whether the worker was told). Shortcuts (copy, cut, Ctrl+anything but select-all, function keys) are
+  not forwarded; text is capped at 500 characters per send.
+- **The worker waits, then carries on.** The worker brief says: on a login, captcha, OTP or a human-only step, do not guess — `ask_owner`
+  ("Buka Meja, klik Ambil alih, selesaikan, tekan Selesai"), wait without touching the page, then take a fresh look and continue. The card shows
+  the question as an amber line and a pulsing button (and a toast); **"Selesai — lanjutkan Jarvis"** answers that open question for the
+  worker; "Kembalikan tanpa memberi tahu" only hands the wheel back. The page's overlay marks the pointer **ANDA** (amber) instead of JARVIS
+  while the owner steers, so a shared screen never confuses the two.
+- Limit: the worker is not frozen by core. If the owner takes over without the worker having asked, both may act in the same tab; the brief and
+  the main agent's reply steer towards asking first.
+Acceptance (`test_v4_f9_*`): a basic device is refused; the owner's click lands at the right pixel, text and wheel reach the page, the page is
+stamped as the owner's, audit holds no typed text; "Selesai" answers the worker's question; after handing back, input is refused; a viewer that
+vanishes hands the wheel back. Unit: the mapping from owner input to DevTools commands (clamping, caps, no shortcuts, no blind click). JS: the
+position, fitting, key, touch and scroll helpers.

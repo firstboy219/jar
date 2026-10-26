@@ -1234,7 +1234,7 @@ async def _station_env(pool, monkeypatch):
     live.subscribers.clear()
     live.tab_activity.clear()
     live.tab_activity["P1"] = time.time()                                   # the hands moved in this tab a moment ago
-    looks = {"frames": 0, "acks": [], "started": 0}
+    looks = {"frames": 0, "acks": [], "started": 0, "sent": []}
 
     class FakeBrowser:
         async def __aenter__(self):
@@ -1251,7 +1251,7 @@ async def _station_env(pool, monkeypatch):
 
     class FakePage:
         def __init__(self, url):
-            self.url, self.q = url, asyncio.Queue()
+            self.url, self.q, self.resp = url, asyncio.Queue(), asyncio.Queue()
 
         async def __aenter__(self):
             return self
@@ -1261,8 +1261,18 @@ async def _station_env(pool, monkeypatch):
                 self.pusher.cancel()
             return False
 
+        def __aiter__(self):                                             # a second connection (the owner's hands) reads answers like this
+            return self
+
+        async def __anext__(self):
+            return await self.resp.get()
+
         async def send(self, raw):
             m = json.loads(raw)
+            if m["method"].startswith(("Input.", "Runtime.", "Page.getLayout")):
+                looks["sent"].append(m)
+            if m["method"] == "Page.getLayoutMetrics":
+                self.resp.put_nowait(json.dumps({"id": m["id"], "result": {"cssVisualViewport": {"clientWidth": 1280, "clientHeight": 800}}}))
             if m["method"] == "Page.startScreencast" and self.url.endswith("/page"):
                 looks["started"] += 1
 
@@ -1270,7 +1280,8 @@ async def _station_env(pool, monkeypatch):
                     for i in range(1, 400):
                         looks["frames"] += 1
                         self.q.put_nowait(json.dumps({"method": "Page.screencastFrame", "params": {
-                            "data": base64.b64encode(b"\xff\xd8JPEG" + bytes([i % 250])).decode(), "sessionId": i}}))
+                            "data": base64.b64encode(b"\xff\xd8JPEG" + bytes([i % 250])).decode(), "sessionId": i,
+                            "metadata": {"deviceWidth": 1280, "deviceHeight": 800}}}))
                         await asyncio.sleep(0.01)
                 self.pusher = asyncio.create_task(push())
             elif m["method"] == "Page.screencastFrameAck":
@@ -1581,3 +1592,88 @@ async def test_v4_f7_live_video_reaches_a_viewer_over_a_websocket_only_for_its_o
     srv2.cancel()
     await asyncio.gather(srv2, return_exceptions=True)
     assert live.subscribers == []                                                                    # a closed viewer leaves nothing behind
+
+
+async def test_v4_f9_the_owner_can_take_the_wheel_of_a_workers_browser_and_hand_it_back(pool, monkeypatch):
+    import asyncio
+
+    from app import audit, devices, hub, live, main, questions
+    looks = await _station_env(pool, monkeypatch)
+    _, owner = await devices.create("HP pemilik", "test", scope="owner")
+    _, basic = await devices.create("Tamu", "test", scope="basic")
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status)
+                                 VALUES ('s-t', 'Apply Jobstreet', 'x', 'owner', 'web', 'running') RETURNING id""")
+    await hub.broadcast({"type": "task", "id": tid, "title": "Apply Jobstreet", "status": "running", "kind": "owner"})
+    await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": "c1", "name": "browser_navigate",
+                                                                          "label": "https://www.jostreet.com/produk", "status": "running"}})
+    q = await questions.ask("Ada captcha di halaman login. Buka Meja dan klik Ambil alih.", tid)
+    snap = await live.snapshot("utama")
+    assert snap["stations"][0]["asking"].startswith("Ada captcha")                      # the card says what the worker needs
+    assert snap["stations"][0]["controlled"] is False
+
+    async def run(token, msgs):
+        sock = _FakeSocket()
+        srv = asyncio.create_task(main.canvas_live_ws(sock))
+        await sock.inbox.put(json.dumps({"type": "auth", "token": token}))
+        await sock.inbox.put(json.dumps({"type": "watch", "context": "utama"}))
+        for m in msgs:
+            await sock.inbox.put(json.dumps(m))
+            await asyncio.sleep(0.05)
+        return sock, srv
+    guest, srv0 = await run(basic, [{"type": "take", "task": tid}])
+    assert any(m.get("what") == "take" and m.get("ok") is False for m in guest.out) and not looks["sent"]       # only the owner's own device may steer
+    srv0.cancel()
+
+    sock, srv = await run(owner, [
+        {"type": "take", "task": tid},
+        {"type": "input", "task": tid, "ev": {"t": "mouse", "k": "down", "x": 0.5, "y": 0.25, "b": "left"}},
+        {"type": "input", "task": tid, "ev": {"t": "mouse", "k": "up", "x": 0.5, "y": 0.25, "b": "left"}},
+        {"type": "input", "task": tid, "ev": {"t": "text", "text": "kode-rahasia-123"}},
+        {"type": "input", "task": tid, "ev": {"t": "key", "k": "down", "key": "Enter", "code": "Enter"}},
+        {"type": "input", "task": tid, "ev": {"t": "wheel", "x": 0.5, "y": 0.5, "dx": 0, "dy": 240}},
+    ])
+    assert {"type": "control", "task": tid, "what": "take", "ok": True, "ttl": live.CONTROL_TTL_S} in sock.out
+    snap = await live.snapshot("utama")
+    assert snap["stations"][0]["controlled"] is True and snap["stations"][0]["control_by"].startswith("device:")
+    sent = [m for m in looks["sent"] if m["method"].startswith("Input.")]
+    press = next(m for m in sent if m["params"].get("type") == "mousePressed")
+    assert (press["params"]["x"], press["params"]["y"]) == (640.0, 200.0)               # a click at 50%/25% of the 1280x800 page
+    assert any(m["method"] == "Input.insertText" and m["params"]["text"] == "kode-rahasia-123" for m in sent)
+    assert any(m["params"].get("type") == "mouseWheel" and m["params"]["deltaY"] == 240 for m in sent)
+    assert any("__jarvisOwner" in json.dumps(m) for m in looks["sent"])                  # the page draws the pointer as the owner's ("ANDA")
+    trail = json.dumps([dict(r) for r in await pool.fetch("SELECT * FROM audit_events WHERE action LIKE 'live.%'")], default=str)
+    assert "live.takeover" in trail and "kode-rahasia" not in trail                      # taking over is audited; what was typed never is
+
+    await sock.inbox.put(json.dumps({"type": "release", "task": tid, "done": True}))
+    await asyncio.sleep(0.1)
+    assert any(m.get("what") == "release" and m.get("told") == 1 for m in sock.out)
+    row = await questions.get(q["id"])
+    assert row["status"] == "answered" and "sudah membantu" in row["answer"]              # the waiting worker is told to go on
+    assert (await live.snapshot("utama"))["stations"][0]["controlled"] is False
+    n = len(looks["sent"])
+    await sock.inbox.put(json.dumps({"type": "input", "task": tid, "ev": {"t": "text", "text": "x"}}))
+    await asyncio.sleep(0.1)
+    assert len(looks["sent"]) == n and any(m.get("what") == "input" and m.get("ok") is False for m in sock.out)   # once handed back, no more input gets in
+    srv.cancel()
+    await asyncio.gather(srv, srv0, return_exceptions=True)
+
+
+async def test_v4_f9_a_viewer_that_vanishes_hands_the_wheel_back(pool, monkeypatch):
+    import asyncio
+
+    from app import devices, hub, live, main
+    from starlette.websockets import WebSocketDisconnect
+    await _station_env(pool, monkeypatch)
+    _, owner = await devices.create("HP pemilik", "test", scope="owner")
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status)
+                                 VALUES ('s-t2', 'Cek', 'x', 'owner', 'web', 'running') RETURNING id""")
+    await hub.broadcast({"type": "task", "id": tid, "title": "Cek", "status": "running", "kind": "owner"})
+    sock = _FakeSocket()
+    srv = asyncio.create_task(main.canvas_live_ws(sock))
+    for m in ({"type": "auth", "token": owner}, {"type": "watch", "context": "utama"}, {"type": "take", "task": tid}):
+        await sock.inbox.put(json.dumps(m))
+    await asyncio.sleep(0.15)
+    assert live.controlled(live.stations[tid])
+    await sock.inbox.put(WebSocketDisconnect())                                           # the tab was closed with the wheel in hand
+    await asyncio.wait_for(srv, 3)
+    assert not live.controlled(live.stations[tid])

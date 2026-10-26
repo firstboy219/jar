@@ -613,14 +613,47 @@ async def canvas_live_ws(websocket: WebSocket):
                 await websocket.send_bytes(task_id.to_bytes(4, "big") + (seq & 0xFFFFFFFF).to_bytes(4, "big") + jpeg)
         pumper = asyncio.create_task(pump())
         try:
-            while True:  # the viewer may switch galaxy: a new "watch" replaces the subscription
-                msg = json.loads(await websocket.receive_text())
-                if msg.get("type") == "watch":
-                    unsubscribe()
-                    queue, unsubscribe = live.subscribe(str(msg.get("context") or "utama")[:80])
-                    for st in list(live.stations.values()):
-                        if st.frame and st.company_id == live.context_company(str(msg.get("context") or "utama")):
-                            queue.put_nowait((st.task_id, st.frame_seq, st.frame))
+            held: set[int] = set()   # the stations whose wheel this viewer holds: handed back when it goes away
+            try:
+                while True:  # the viewer may switch galaxy: a new "watch" replaces the subscription
+                    msg = json.loads(await websocket.receive_text())
+                    kind = msg.get("type")
+                    if kind == "watch":
+                        context = str(msg.get("context") or "utama")[:80]
+                        unsubscribe()
+                        queue, unsubscribe = live.subscribe(context)
+                        for st in list(live.stations.values()):
+                            if st.frame and st.company_id == live.context_company(context):
+                                queue.put_nowait((st.task_id, st.frame_seq, st.frame))
+                    elif kind in ("take", "input", "release"):   # the owner steers the worker's browser (ADR-053): owner devices only
+                        reply = {"type": "control", "task": msg.get("task"), "what": kind}
+                        try:
+                            if device.get("scope") != "owner":
+                                raise live.ControlError("perangkat ini tidak boleh mengambil alih")
+                            task_id, who = int(msg.get("task")), f"device:{device.get('name') or device['id']}"
+                            if kind == "take":
+                                reply |= await live.take(task_id, context, who)
+                                held.add(task_id)
+                            elif kind == "input":
+                                if not await live.send_input(task_id, context, msg.get("ev") or {}):
+                                    reply |= {"ok": False, "error": "kendali dikembalikan"}
+                                    await websocket.send_text(json.dumps(reply))
+                            else:
+                                reply |= await live.release(task_id, context, who, bool(msg.get("done")))
+                                held.discard(task_id)
+                        except (live.ControlError, TypeError, ValueError) as e:
+                            reply |= {"ok": False, "error": str(e)}
+                        except Exception:
+                            log.exception("takeover failed")
+                            reply |= {"ok": False, "error": "gagal menjangkau browser"}
+                        if kind != "input":
+                            await websocket.send_text(json.dumps(reply))
+            finally:
+                for task_id in held:
+                    try:
+                        await live.release(task_id, context, "device", False)
+                    except Exception:
+                        pass
         finally:
             pumper.cancel()
     except (WebSocketDisconnect, asyncio.TimeoutError, ValueError, RuntimeError):

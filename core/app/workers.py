@@ -36,7 +36,12 @@ WORKER_BRIEF = (
     "Kalau tugasnya MELAKUKAN sesuatu di sebuah situs (melamar, mendaftar, mengisi formulir, memesan), pakai alat browser "
     "(buka halamannya, klik, ketik, gulir) — bukan sekadar mencari atau membaca teksnya lewat web search — karena pemilik "
     "melihat browser itu langsung di mejanya. Berhenti sebelum tindakan yang tak bisa dibatalkan atau yang mengirim data "
-    "pribadi (kirim lamaran/formulir, buat akun, bayar) dan minta persetujuan pemilik lewat ask_owner.\n\n"
+    "pribadi (kirim lamaran/formulir, buat akun, bayar) dan minta persetujuan pemilik lewat ask_owner.\n"
+    "Kalau terhalang LOGIN, CAPTCHA, kode OTP/verifikasi, atau langkah yang hanya bisa dilakukan manusia: JANGAN menebak, "
+    "mengulang tanpa henti, atau memakai kata sandi yang tidak diberikan. Panggil ask_owner (wait_seconds 300) dengan "
+    "kalimat seperti: 'Aku butuh bantuanmu di halaman <nama situs>: <captcha/login>. Buka Meja, klik Ambil alih di kartu "
+    "tugas ini, selesaikan, lalu tekan Selesai.' Lalu TUNGGU jawabannya (check_owner_answer) tanpa menyentuh halaman. "
+    "Setelah dijawab, ambil dulu pandangan halaman untuk melihat keadaan terbaru dan lanjutkan dari situ.\n\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",

@@ -1266,3 +1266,27 @@ def test_the_station_follows_the_tab_the_hands_are_in_and_forgotten_tabs_are_clo
     assert closing == [str(i) for i in range(8, 12) if now - act[str(i)] > live.IDLE_CLOSE_S]               # only past the newest 8, and only idle ones
     assert live.idle_to_close(many[:8], {}, now) == []                                                      # a few tabs are never touched
     assert live.idle_to_close(many, {str(i): now - 10 for i in range(12)}, now) == []                       # nothing idle, nothing closed
+
+
+def test_v4_f9_owner_input_becomes_devtools_commands_and_nothing_else():
+    import json
+
+    from app import live
+    view = (1280.0, 800.0)
+    mouse = live.input_commands({"t": "mouse", "k": "down", "x": 0.5, "y": 0.5, "b": "right", "c": 2}, view)
+    assert mouse == [("Input.dispatchMouseEvent", {"type": "mousePressed", "x": 640.0, "y": 400.0, "button": "right", "buttons": 2, "clickCount": 2})]
+    assert live.input_commands({"t": "mouse", "k": "move", "x": 9, "y": -3}, view)[0][1]["x"] == 1280.0         # clamped to the page
+    assert live.input_commands({"t": "mouse", "k": "up", "x": 0.1, "y": 0.1, "b": "left"}, view)[0][1]["buttons"] == 0
+    assert live.input_commands({"t": "mouse", "k": "down", "x": 0.5, "y": 0.5}, (0.0, 0.0)) == []              # size unknown: no blind click
+    assert live.input_commands({"t": "wheel", "x": 0.5, "y": 0.5, "dy": 99999}, view)[0][1]["deltaY"] == 1500.0
+    assert live.input_commands({"t": "text", "text": "x" * 900}, view)[0][1]["text"] == "x" * live.MAX_TEXT
+    assert live.input_commands({"t": "text", "text": ""}, view) == []
+    typed = live.input_commands({"t": "key", "k": "down", "key": "A", "code": "KeyA", "shift": True}, view)[0][1]
+    assert typed["text"] == "A" and typed["modifiers"] == 8 and typed["type"] == "keyDown"
+    enter = live.input_commands({"t": "key", "k": "down", "key": "Enter", "code": "Enter"}, view)[0][1]
+    assert enter["windowsVirtualKeyCode"] == 13 and enter["text"] == "\r"
+    assert live.input_commands({"t": "key", "k": "up", "key": "Backspace", "code": "Backspace"}, view)[0][1]["type"] == "keyUp"
+    assert live.input_commands({"t": "key", "k": "down", "key": "c", "ctrl": True}, view) == []                  # no copy/cut/shortcuts into someone's page
+    assert live.input_commands({"t": "key", "k": "down", "key": "F5"}, view) == []
+    assert live.input_commands({"t": "formatc"}, view) == [] and live.input_commands({}, view) == []
+    assert "selectAll" in json.dumps(live.input_commands({"t": "key", "k": "down", "key": "a", "ctrl": True}, view))

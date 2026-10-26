@@ -3,6 +3,7 @@
 // what JARVIS showed, memories, company data); this page only lays them out in space. It can fly, select, place, move,
 // link and take cards off the canvas — it never approves, deletes data, sends or pays.
 import * as THREE from './vendor/three.module.min.js';
+import { createTakeover } from './takeover.js';
 import { PANELS, ago, parseFrameHeader, cardScale, clampPhi, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, orthoHeight, shortestAngle, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
 import { initCad } from './cad.js';
 import { initDock } from './dock.js';
@@ -358,7 +359,11 @@ function renderLive(card, l) {
   let box = card.el.querySelector('.livebox');
   if (!box) {
     box = el('div', 'livebox');
-    box.append(el('div', 'livehead'), el('div', 'pageline'), el('canvas', 'frame'), el('ul', 'steps'), el('div', 'thought'));
+    const help = el('div', 'helpline'); help.hidden = true;
+    const grab = el('button', 'takebtn', '🖱 Ambil alih');
+    grab.title = 'Kendalikan browser pekerja ini sendiri — untuk captcha atau login';
+    grab.addEventListener('click', (ev) => { ev.stopPropagation(); if (l.st) takeover.open(l.st); });
+    box.append(el('div', 'livehead'), el('div', 'pageline'), help, el('canvas', 'frame'), grab, el('ul', 'steps'), el('div', 'thought'));
     box.querySelector('canvas').hidden = true;
     if (l.last) drawBitmap(box.querySelector('canvas'), l.last);   // the newest frame we already have
     card.el.insertBefore(box, card.el.querySelector('.actions'));
@@ -366,6 +371,14 @@ function renderLive(card, l) {
   const head = box.querySelector('.livehead');
   head.replaceChildren(el('span', `dot ${st.status}`), el('span', null, `${STATUS_TEXT[st.status] || st.status} · ${ago(st.seconds)}${st.browsing ? ' · di browser' : ''}`),
     ...(performance.now() - (l.liveAt || -1e9) < 3000 ? [el('span', 'livebadge', '● LANGSUNG')] : []));
+  const help = box.querySelector('.helpline'), grab = box.querySelector('.takebtn');
+  help.hidden = !(st.asking || st.controlled);
+  help.textContent = st.controlled ? `🖱 ${st.control_by || 'Seseorang'} sedang mengendalikan browser ini` : (st.asking ? `❓ Jarvis butuh bantuanmu: ${st.asking}` : '');
+  help.classList.toggle('ask', !!st.asking && !st.controlled);
+  grab.hidden = !(st.has_frame && !['completed', 'failed', 'cancelled', 'stopped'].includes(st.status));
+  grab.classList.toggle('urgent', !!st.asking && !st.controlled);
+  if (st.asking && !l.askToasted && !st.controlled) { l.askToasted = st.asking; toast(`Jarvis butuh bantuanmu di "${st.title}" — klik Ambil alih di kartunya.`); }
+  if (!st.asking) l.askToasted = '';
   box.querySelector('.pageline').textContent = st.page_title || st.url || '';
   box.querySelector('.pageline').hidden = !(st.page_title || st.url);
   const ul = box.querySelector('.steps');
@@ -412,13 +425,16 @@ const liveVideo = (() => {
     ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: api.token }));
     ws.onmessage = (m) => {
       if (typeof m.data === 'string') {
-        if (JSON.parse(m.data).type === 'auth_ok') { ws.ready = true; retry = 0; if (want) watch(want); }
+        const msg = JSON.parse(m.data);
+        if (msg.type === 'auth_ok') { ws.ready = true; retry = 0; if (want) watch(want); }
+        else if (msg.type === 'control') takeover.reply(msg);
         return;
       }
       const h = parseFrameHeader(m.data);
       const l = [...liveByRef.values()].find((x) => x.st.task_id === h.task);
       if (!l) return;
       const frame = new Blob([m.data.slice(h.offset)], { type: 'image/jpeg' });
+      if (takeover.task() === h.task) takeover.frame(h.task, frame);
       l.last = frame; l.shownSeq = h.seq; l.liveAt = performance.now();
       const card = cardOfRef(l.st.ref), cv = card?.el.querySelector('.livebox canvas');
       if (cv && !l.drawing) { l.drawing = true; drawBitmap(cv, frame).catch(() => {}).finally(() => { l.drawing = false; }); }
@@ -426,8 +442,14 @@ const liveVideo = (() => {
     ws.onclose = () => { if (ws) ws.ready = false; setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000)); };
     ws.onerror = () => ws.close();
   }
-  return { open, watch, connect };
+  /** Tell the server something (taking the wheel, an input); false when the video link is down. */
+  const sendJson = (obj) => { if (!open()) return false; ws.send(JSON.stringify(obj)); return true; };
+  return { open, watch, connect, send: sendJson };
 })();
+const takeover = createTakeover({
+  send: (obj) => { if (!liveVideo.send(obj) && obj.type !== 'input') toast('Siaran langsung belum tersambung — coba lagi sebentar.', true); },
+  toast,
+});
 setInterval(() => liveVideo.connect(), 2000);
 
 function clearLive(ref) {
@@ -491,6 +513,7 @@ async function pollLive() {
       if (!card) { if (!l.asked) { l.asked = true; refresh(true).catch(() => {}); } continue; }   // its card is on the way
       card.live = l;
       renderLive(card, l);
+      takeover.update(st);
       const first = !seenStations.has(st.task_id);
       seenStations.add(st.task_id);
       if (first && shouldFollow({ follow, idleMs: performance.now() - lastTouch, kind: st.kind, status: st.status, seen: false })) {

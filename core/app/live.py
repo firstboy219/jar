@@ -66,6 +66,12 @@ class Station:
     frame_seq: int = 0
     frame_at: float = 0.0
     capture: asyncio.Task | None = None
+    view: tuple[float, float] = (0.0, 0.0)   # the page's size in CSS pixels, from the screencast (a click at 0.5/0.5 lands in its middle)
+    control_until: float = 0.0               # the owner has taken the wheel until this moment (every input renews it)
+    control_by: str = ""
+    driver: "Driver | None" = None
+    driver_checked: float = 0.0
+    marked_at: float = 0.0
 
 
 stations: dict[int, Station] = {}
@@ -285,11 +291,14 @@ async def _cast_target(st: Station, t: dict) -> None:
                     msg = {}
                 if msg.get("method") == "Page.screencastFrame":
                     p = msg["params"]
+                    md = p.get("metadata") or {}
+                    if md.get("deviceWidth") and md.get("deviceHeight"):
+                        st.view = (float(md["deviceWidth"]), float(md["deviceHeight"]))
                     _publish(st, base64.b64decode(p["data"]))
                     await send("Page.screencastFrameAck", {"sessionId": p["sessionId"]})
                 if time.time() - last_pick > 1.5:   # is the worker still in this tab? the hands keep the station awake
                     last_pick = time.time()
-                    if tab_activity.get(t.get("id"), 0) > time.time() - 12:
+                    if tab_activity.get(t.get("id"), 0) > time.time() - 12 or controlled(st):
                         st.browser_until = max(st.browser_until, time.time() + 8)
                     now_tab = await _pick(st)
                     if now_tab is None or now_tab.get("id") != t.get("id"):
@@ -414,7 +423,8 @@ def station_view(st: Station) -> dict:
     return {"task_id": st.task_id, "ref": f"task:{st.task_id}", "title": st.title, "kind": st.kind, "status": st.status,
             "seconds": int((st.finished or time.time()) - st.started), "steps": st.steps[-MAX_STEPS:], "thought": st.thought,
             "url": st.url, "page_title": st.page_title, "frame_seq": st.frame_seq, "has_frame": bool(st.frame),
-            "browsing": time.time() < st.browser_until and not st.finished}
+            "browsing": time.time() < st.browser_until and not st.finished,
+            "controlled": controlled(st), "control_by": st.control_by if controlled(st) else ""}
 
 
 _n8n_cache: dict = {"at": 0.0, "value": []}
@@ -468,6 +478,12 @@ async def snapshot(context: str = "utama") -> dict:
     _prune()
     company = context_company(context)
     mine = [station_view(s) for s in stations.values() if s.company_id == company]
+    if mine:   # a worker that waits for the owner (a login, a captcha) says what it needs, so the card can ask for a hand
+        asks = await db.pool().fetch("SELECT task_id, question FROM owner_questions WHERE status = 'open' AND task_id = ANY($1::int[])",
+                                     [v["task_id"] for v in mine])
+        said = {a["task_id"]: a["question"] for a in asks}
+        for v in mine:
+            v["asking"] = mask(said.get(v["task_id"], ""))[:240]
     mine.sort(key=lambda s: (s["status"] in FINAL, -s["task_id"]))
     out = {"now": time.time(), "stations": mine}
     if company is None:  # the owner's own desk; a company galaxy shows only that company's tasks
@@ -484,3 +500,205 @@ def frame(task_id: int, context: str = "utama") -> tuple[bytes, int] | None:
 
 def start() -> None:
     hub.tap(on_event)
+
+
+# ---------- the owner takes the wheel (ADR-053) ----------
+# When the worker is stuck on a login or a captcha the owner clicks "Ambil alih" on the station: mouse, wheel, keys and pasted text from
+# the desk go to the very tab the video shows, through DevTools (Input.*). Nothing the owner types is stored, logged or sent anywhere
+# but into that page; only "took over" / "handed back" and how long is audited.
+
+CONTROL_TTL_S = 90          # no input for this long → the wheel goes back by itself
+KEYS = {  # keys that are not characters → Windows virtual key code
+    "Backspace": 8, "Tab": 9, "Enter": 13, "Escape": 27, "Delete": 46, "Home": 36, "End": 35, "PageUp": 33, "PageDown": 34,
+    "ArrowLeft": 37, "ArrowUp": 38, "ArrowRight": 39, "ArrowDown": 40,
+}
+BUTTONS = {"left": 1, "right": 2, "middle": 4}
+MAX_TEXT = 500
+
+
+def controlled(st: Station) -> bool:
+    return st.control_until > time.time() and not st.finished
+
+
+def _unit(v) -> float:
+    try:
+        return min(1.0, max(0.0, float(v)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def input_commands(ev: dict, view: tuple[float, float]) -> list[tuple[str, dict]]:
+    """One thing the owner did on the video → the DevTools commands that do it in the page. Anything unexpected → nothing."""
+    w, h = view
+    kind = ev.get("t")
+    if kind in ("mouse", "wheel"):
+        if w <= 0 or h <= 0:
+            return []
+        x, y = round(_unit(ev.get("x")) * w, 1), round(_unit(ev.get("y")) * h, 1)
+        if kind == "wheel":
+            dx, dy = (max(-1500.0, min(1500.0, float(ev.get(k) or 0))) for k in ("dx", "dy"))
+            return [("Input.dispatchMouseEvent", {"type": "mouseWheel", "x": x, "y": y, "deltaX": dx, "deltaY": dy})]
+        ty = {"move": "mouseMoved", "down": "mousePressed", "up": "mouseReleased"}.get(ev.get("k"))
+        if not ty:
+            return []
+        button = ev.get("b") if ev.get("b") in BUTTONS else "none"
+        held = BUTTONS.get(button, 0) if ev.get("k") != "up" else 0
+        cmd = {"type": ty, "x": x, "y": y, "button": button if ev.get("k") != "move" else "none", "buttons": held}
+        if ev.get("k") != "move":
+            cmd["clickCount"] = max(1, min(3, int(ev.get("c") or 1)))
+        return [("Input.dispatchMouseEvent", cmd)]
+    if kind == "text":
+        text = str(ev.get("text") or "")[:MAX_TEXT]
+        return [("Input.insertText", {"text": text})] if text else []
+    if kind == "key":
+        key = str(ev.get("key") or "")
+        down = ev.get("k") != "up"
+        mods = (1 if ev.get("alt") else 0) | (8 if ev.get("shift") else 0)
+        if ev.get("ctrl") or ev.get("meta"):   # no shortcuts, but select-all so a field can be replaced (pasting goes through "text")
+            if key.lower() == "a" and down:
+                return [("Input.dispatchKeyEvent", {"type": "rawKeyDown", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65,
+                                                    "modifiers": 2, "commands": ["selectAll"]}),
+                        ("Input.dispatchKeyEvent", {"type": "keyUp", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65, "modifiers": 2})]
+            return []
+        if key in KEYS:
+            cmd = {"type": ("rawKeyDown" if key != "Enter" else "keyDown") if down else "keyUp", "key": key, "code": str(ev.get("code") or key)[:20],
+                   "windowsVirtualKeyCode": KEYS[key], "modifiers": mods}
+            if key == "Enter" and down:
+                cmd["text"] = "\r"
+            return [("Input.dispatchKeyEvent", cmd)]
+        if len(key) == 1:
+            cmd = {"type": "keyDown" if down else "keyUp", "key": key, "code": str(ev.get("code") or "")[:20], "modifiers": mods,
+                   "windowsVirtualKeyCode": ord(key.upper()) if key.isalnum() else 0}
+            if down:
+                cmd["text"] = key
+            return [("Input.dispatchKeyEvent", cmd)]
+    return []
+
+
+class Driver:
+    """One DevTools connection to the tab the owner drives; the answers are read and dropped (only layout metrics are waited for)."""
+
+    def __init__(self, ws_cm, target_id: str):
+        self.cm, self.ws, self.target_id, self.n = ws_cm, None, target_id, 0
+        self.waiting: dict[int, asyncio.Future] = {}
+        self.reader: asyncio.Task | None = None
+
+    async def open(self) -> "Driver":
+        self.ws = await self.cm.__aenter__()
+        self.reader = asyncio.create_task(self._read())
+        return self
+
+    async def _read(self) -> None:
+        try:
+            async for raw in self.ws:
+                m = json.loads(raw)
+                if (f := self.waiting.pop(m.get("id"), None)) and not f.done():
+                    f.set_result(m.get("result") or {})
+        except Exception:
+            pass
+        finally:
+            for f in self.waiting.values():
+                if not f.done():
+                    f.cancel()
+
+    async def call(self, method: str, params: dict | None = None, wait: float = 0.0) -> dict:
+        self.n += 1
+        fut = asyncio.get_running_loop().create_future() if wait else None
+        if fut:
+            self.waiting[self.n] = fut
+        await self.ws.send(json.dumps({"id": self.n, "method": method, "params": params or {}}))
+        return await asyncio.wait_for(fut, wait) if fut else {}
+
+    async def close(self) -> None:
+        if self.reader:
+            self.reader.cancel()
+        try:
+            await self.cm.__aexit__(None, None, None)
+        except Exception:
+            pass
+
+
+class ControlError(Exception):
+    pass
+
+
+def _station_for(task_id: int, context: str) -> Station:
+    st = stations.get(task_id)
+    if not st or st.company_id != context_company(context) or st.finished:
+        raise ControlError("tugas ini tidak sedang dikerjakan di meja")
+    return st
+
+
+async def take(task_id: int, context: str, actor: str) -> dict:
+    """The owner takes the wheel of the station's browser tab."""
+    from . import audit
+    st = _station_for(task_id, context)
+    if not controlled(st):
+        await audit.record(actor, "live.takeover", f"task:{task_id}")
+    st.control_until, st.control_by = time.time() + CONTROL_TTL_S, actor
+    st.browser_until = max(st.browser_until, time.time() + CONTROL_TTL_S)
+    if st.capture is None or st.capture.done():
+        st.capture = asyncio.create_task(_capture_loop(st))
+    return {"ok": True, "ttl": CONTROL_TTL_S}
+
+
+async def _driver_for(st: Station) -> Driver:
+    now = time.time()
+    if st.driver and now - st.driver_checked < 2.0:
+        return st.driver
+    t = await _pick(st)
+    if not t or not t.get("webSocketDebuggerUrl"):
+        raise ControlError("belum ada halaman yang terbuka")
+    st.driver_checked = now
+    if st.driver and st.driver.target_id == t.get("id") and not st.driver.reader.done():
+        return st.driver
+    if st.driver:
+        await st.driver.close()
+    st.driver = await Driver(_ws_connect(t["webSocketDebuggerUrl"]), t.get("id", "")).open()
+    return st.driver
+
+
+async def send_input(task_id: int, context: str, ev: dict) -> bool:
+    """Do what the owner just did on the video in the page. False when the wheel is not theirs (not taken, or handed back)."""
+    st = stations.get(task_id)
+    if not st or st.company_id != context_company(context) or not controlled(st):
+        return False
+    st.control_until = time.time() + CONTROL_TTL_S
+    st.browser_until = max(st.browser_until, time.time() + 20)
+    if ev.get("t") == "hold":
+        return True
+    drv = await _driver_for(st)
+    if st.view[0] <= 0 and ev.get("t") in ("mouse", "wheel"):   # a picture from before the first screencast frame: ask the page how big it is
+        m = (await drv.call("Page.getLayoutMetrics", wait=3)).get("cssVisualViewport") or {}
+        st.view = (float(m.get("clientWidth") or 0), float(m.get("clientHeight") or 0))
+    for method, params in input_commands(ev, st.view):
+        await drv.call(method, params)
+    if ev.get("t") != "mouse" or ev.get("k") != "move":
+        if time.time() - st.marked_at > 0.5:   # the page's overlay shows the pointer as the owner's ("ANDA"), not the worker's
+            st.marked_at = time.time()
+            await drv.call("Runtime.evaluate", {"expression": "window.__jarvisOwner=Date.now()"})
+    return True
+
+
+HANDED_BACK = ("Pemilik sudah membantu langsung di browser (login / captcha / langkah yang kamu tunggu). "
+               "Lanjutkan dari halaman yang sekarang terbuka; ambil dulu pandangan halamannya.")
+
+
+async def release(task_id: int, context: str, actor: str, done: bool) -> dict:
+    """The wheel goes back to the worker. With done=True the worker's open question about this task is answered, so it carries on."""
+    from . import audit, questions
+    st = stations.get(task_id)
+    if not st or st.company_id != context_company(context):
+        raise ControlError("tugas ini tidak ada di meja")
+    was = controlled(st)
+    st.control_until = 0.0
+    if st.driver:
+        await st.driver.close()
+        st.driver = None
+    told = 0
+    if done:
+        for q in await db.pool().fetch("SELECT id FROM owner_questions WHERE status = 'open' AND task_id = $1", task_id):
+            told += 1 if await questions.answer(q["id"], HANDED_BACK, actor) else 0
+    if was:
+        await audit.record(actor, "live.handback", f"task:{task_id}", told_worker=bool(told))
+    return {"ok": True, "told": told}
