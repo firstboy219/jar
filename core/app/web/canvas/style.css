@@ -185,3 +185,23 @@ body[data-tool="measure"] #space canvas, body[data-tool="link"] #space canvas, b
 .btnlink:hover { border-color: var(--cyan); } .in-app .btnlink { display: none; }
 @media (max-width: 700px) { .in-app .dock { left: 62px; } .in-app .previews { display: none; } }
 .livebadge { margin-left: auto; padding: 1px 7px; border-radius: 999px; font-size: 10px; letter-spacing: 1px; color: #fff; background: #e11d48; animation: pulse 1.4s infinite; }
+
+/* taking the wheel of a worker's browser (ADR-053) */
+.takebtn { justify-self: start; font-size: 12px; padding: 4px 10px; }
+.takebtn.urgent { border-color: #fbbf24; color: #fde68a; animation: pulse 1.2s infinite; }
+.helpline { font-size: 12px; color: var(--muted); }
+.helpline.ask { color: #fde68a; border-left: 3px solid #fbbf24; padding-left: 8px; }
+#takeover { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: rgba(2, 3, 10, 0.97); }
+#takeover[hidden] { display: none; }
+.tk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+.tk-title { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-url { flex: 1; min-width: 80px; color: var(--cyan); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-bar .livebadge { margin-left: 0; }
+.tk-done { background: #166534; border-color: #4ade80; }
+.tk-note { padding: 4px 12px; font-size: 12px; color: #fde68a; background: rgba(251, 191, 36, .12); }
+.tk-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+.tk-canvas { background: #000; border: 2px solid #fbbf24; border-radius: 6px; touch-action: none; cursor: crosshair; max-width: 100%; max-height: 100%; }
+.tk-paste { display: flex; gap: 6px; padding: 6px 12px; padding-bottom: max(6px, env(safe-area-inset-bottom)); } .tk-paste input { flex: 1; }
+.tk-input { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; padding: 0; border: 0; }
+body.taking #bar, body.taking .palette, body.taking .navcluster { visibility: hidden; }
+@media (max-width: 700px) { .tk-title { max-width: 100%; } .tk-bar button { padding: 5px 8px; font-size: 12px; } }

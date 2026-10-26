@@ -28,12 +28,18 @@
     </style>
     <div class="c"><svg width="26" height="26" viewBox="0 0 26 26"><path d="M3 2l17 8-7.5 2.2L9.8 20z" fill="#67e8f9" stroke="#031018" stroke-width="1.6" stroke-linejoin="round"/></svg><span class="tag">JARVIS</span></div>`;
     cursor = root.querySelector('.c');
+    tag = cursor.querySelector('.tag');
     document.documentElement.appendChild(host);
   }
   const ready = () => { build(); return !!host; };
 
+  // the owner took the wheel (core stamps the page while they steer): their pointer is "ANDA", in amber, so nobody mistakes it for the worker's
+  const owner = () => Date.now() - (window.__jarvisOwner || 0) < 3000;
   function moveTo(x, y) {
     if (!ready()) return;
+    const mine = owner();
+    tag.textContent = mine ? 'ANDA' : 'JARVIS';
+    tag.style.background = mine ? '#fbbf24' : '#67e8f9';
     state.x = x; state.y = y; state.shown = true;
     cursor.classList.add('on');
     cursor.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`;
