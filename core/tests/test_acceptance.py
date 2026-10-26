@@ -1481,7 +1481,7 @@ async def test_v4_f7_the_shared_browser_gets_the_hands_overlay_in_every_page(poo
     assert attached == ["T1", "T2"]                                  # real pages only, each once (not workers, not devtools, not a repeat)
     for sid in ("S-T1", "S-T2"):
         mine = [m for m in sent if m.get("sessionId") == sid]
-        assert [m["method"] for m in mine] == ["Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]   # later pages of the tab, and the one open now
+        assert [m["method"] for m in mine] == ["Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]   # later pages of the tab, and the one open now
         assert "__jarvisHands" in mine[0]["params"]["source"]
     js = live.CURSOR_JS
     assert "mode: 'closed'" in js and "pointer-events:none" in js and "aria-hidden" in js     # draws, never touches or answers the page

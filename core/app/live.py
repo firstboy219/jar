@@ -265,6 +265,7 @@ async def _decorate_once() -> None:
             elif method == "Target.targetDestroyed":
                 seen.discard(p.get("targetId"))
             elif method == "Target.attachedToTarget" and p.get("sessionId"):
+                await send("Page.enable", None, p["sessionId"])   # without it Chromium keeps the script for the page that is open, not for the next one
                 await send("Page.addScriptToEvaluateOnNewDocument", {"source": CURSOR_JS}, p["sessionId"])   # every later page of this tab
                 await send("Runtime.evaluate", {"expression": CURSOR_JS}, p["sessionId"])                    # the page that is open now
 
