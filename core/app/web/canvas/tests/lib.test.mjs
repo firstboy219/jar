@@ -14,6 +14,15 @@ test('search, diff, easing, labels', () => {
   assert.equal(contextLabel({ context: 'utama', title: 'Utama' }), 'Utama');
 });
 
+test('the chat panel remembers open/minimized across a reload, and junk never locks it shut', async () => {
+  const { panelOpen, panelValue } = await import('../lib.js');
+  assert.equal(panelValue(true), 'open'); assert.equal(panelValue(false), 'closed');
+  assert.equal(panelOpen(panelValue(false)), false);   // what was saved comes back exactly
+  assert.equal(panelOpen(panelValue(true)), true);
+  assert.equal(panelOpen(null), true);          // first visit: open
+  assert.equal(panelOpen('apa saja'), true);    // private mode / junk: open, never stuck small
+});
+
 test('the app passes its device token in the fragment and the viewer takes it out', async () => {
   const { takeAppParams } = await import('../lib.js');
   assert.deepEqual(takeAppParams('#t=abc%2B123&app=1'), { token: 'abc+123', embedded: true, rest: '' });

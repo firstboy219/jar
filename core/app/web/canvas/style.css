@@ -206,9 +206,11 @@ body.taking .topbar, body.taking .toolrail, body.taking .zoombar, body.taking .m
   .inspector { left: 6px; right: 6px; top: auto; bottom: 6px; width: auto; max-height: 46vh; z-index: 20500; }
   body.insp-open .dock { right: 8px; }
   .dock { left: 8px; right: 8px; width: auto; bottom: 40px; max-height: 46vh; } .previews { right: 8px; bottom: calc(40px + 46vh + 4px); }
+  .dock.minimized { left: auto; right: 12px; width: 44px; max-height: none; }
+  body.insp-open .dock.minimized { right: 12px; z-index: 20501; }
 }
 .in-app .minimap { display: none !important; }
-@media (max-width: 700px) { .in-app .dock { left: 62px; } .in-app .previews { display: none; } }
+@media (max-width: 700px) { .in-app .dock { left: 62px; } .in-app .dock.minimized { left: auto; } .in-app .previews { display: none; } }
 @media (prefers-reduced-motion: reduce) { .card.pop { animation: none; } }
 
 /* ---------- the desk: stations, panels, the docks, takeover, the feature cards (ADR-051..054) ---------- */
@@ -238,6 +240,23 @@ body.taking .topbar, body.taking .toolrail, body.taking .zoombar, body.taking .m
 .dock { position: fixed; right: 12px; bottom: 44px; width: 372px; max-height: min(56vh, 520px); z-index: 20001; display: flex; flex-direction: column;
   background: var(--glass); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(10px); overflow: hidden; }
 .dock.closed .dockmsgs, .dock.closed .dockform, .dock.closed .dockstatus, .dock.closed .meter { display: none; }
+.dock.minimized { width: 44px; height: 44px; border-radius: 50%; overflow: hidden; background: var(--glass); border: 1px solid var(--line); }
+.dock.minimized .dockhead { display: grid; place-items: center; padding: 0; border-bottom: 0; }
+.dock.minimized .dockhead b,
+.dock.minimized .dockhead .dot,
+.dock.minimized .dockhead .dockbtns > :not(.minimizer) { display: none; }
+.dock.minimized .dockhead .dbtn.minimizer {
+  width: 44px; height: 44px; border-radius: 50%; font-size: 20px; line-height: 1; padding: 0;
+  display: grid; place-items: center;
+  position: relative;
+}
+.dock.minimized .dockhead .dbtn.minimizer .dot.penanda {
+  position: absolute; bottom: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--green); border: 1px solid var(--bg); display: none;
+}
+.dock.minimized .dockhead .dbtn.minimizer .dot.penanda.visible { display: block; }
+.dock.minimized .dockhead .dbtn.minimizer .dot.penanda.blink { animation: blink 1s infinite; }
+@keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
 .dockhead { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .dockhead b { flex: 1; font-size: 13px; letter-spacing: .5px; } .dockbtns { display: flex; gap: 3px; }
 .dbtn { padding: 2px 6px; border-radius: 8px; font-size: 14px; line-height: 1.2; } .dbtn.on { border-color: var(--cyan); background: rgba(103, 232, 249, .2); }

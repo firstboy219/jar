@@ -250,6 +250,10 @@ export function stopRaised(seen, now) {
 // view = {cx, cy, k}: the world point at the middle of the viewport, and the scale. vp = {w, h} is the viewport in pixels.
 // A rect is {x, y, w, h} in world units (x to the right, y down — the server's x and z).
 
+// The desk's chat panel keeps its open/minimized state in LocalStorage, so a reload brings back the same position.
+export const panelOpen = (raw) => raw !== 'closed';
+export const panelValue = (open) => (open ? 'open' : 'closed');
+
 export const MIN_ZOOM = 0.04, MAX_ZOOM = 4;
 export const clampZoom = (k) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 export const toScreen = (v, vp, x, y) => ({ x: (x - v.cx) * v.k + vp.w / 2, y: (y - v.cy) * v.k + vp.h / 2 });
