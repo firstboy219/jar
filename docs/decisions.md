@@ -967,3 +967,8 @@ Acceptance (`test_v4_f9_*`): a basic device is refused; the owner's click lands 
 stamped as the owner's, audit holds no typed text; "Selesai" answers the worker's question; after handing back, input is refused; a viewer that
 vanishes hands the wheel back. Unit: the mapping from owner input to DevTools commands (clamping, caps, no shortcuts, no blind click). JS: the
 position, fitting, key, touch and scroll helpers.
+Found while testing it live (2026-10-26): `mcp_server.py` defined `_core` twice and the second replaced the first, so a worker's `ask_owner`,
+`notify_owner`, stage, music and route tools had been failing ("Invalid port") since Sprint 2 — a worker could never ask the owner anything.
+Renamed the second to `_core_call`; `test_v4_f9_no_module_has_two_functions_of_the_same_name` now guards every module. Verified end to end in a
+second headless browser: the worker asked, the card showed the question and the pulsing button, the owner's click, keys and Backspace reached the
+worker's page, "Selesai" answered the question.
