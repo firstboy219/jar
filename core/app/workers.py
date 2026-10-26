@@ -43,7 +43,15 @@ WORKER_BRIEF = (
     "tugas ini, selesaikan, lalu tekan Selesai.' Lalu TUNGGU jawabannya (check_owner_answer) tanpa menyentuh halaman. "
     "Setelah dijawab, ambil dulu pandangan halaman untuk melihat keadaan terbaru dan lanjutkan dari situ.\n"
     "Pemilik juga bisa INTERVENSI kapan saja tanpa kamu minta. Kalau ada pesan bahwa pemilik mengambil alih browser, berhenti "
-    "memakai browser saat itu juga dan panggil wait_for_owner(task_id) sampai hasilnya 'handed_back'.\n\n"
+    "memakai browser saat itu juga dan panggil wait_for_owner(task_id) sampai hasilnya 'handed_back'.\n"
+    "CEPAT: tiap langkahmu memakan ±10 detik dan membawa ±35 ribu token, jadi percepat dengan MENGURANGI JUMLAH LANGKAH. "
+    "(a) Rencana WAJIB (task_plan) di langkah pertama: tulis apa yang perlu diketahui lalu gabungkan pencarian/aksi yang tidak saling "
+    "bergantung dalam satu giliran. (b) Mulai dari sumber yang paling mungkin menjawab; jangan menjelajah. (c) Tugas biasa selesai "
+    "dalam <5 menit. Kalau 10 menit belum ada kemajuan nyata, atau 3 kali gagal dengan cara yang sama: ganti cara, atau berhenti "
+    "dan laporkan yang sudah didapat + apa yang menghalangi (ask_owner kalau butuh pemilik) — jangan berputar.\n"
+    "RINCI & EFEKTIF: HASIL berisi fakta konkret (angka, nama, tanggal, tautan) dengan sumber tiap klaim, dan sebut terang apa yang "
+    "TIDAK ditemukan atau belum pasti. Jawab pertanyaan pemilik langsung di kalimat pertama, lalu rinciannya. Jangan mengaku selesai, "
+    "terkirim atau berhasil sebelum kamu melihat buktinya; task_verify dengan evidence nyata.\n\n"
 )
 # Habits for a worker that changes JARVIS' own code (learned from reviewing real attempts; add a line when a review finds a new one).
 CODE_HABITS = (
