@@ -42,7 +42,8 @@ Obrolan biasa, pertanyaan ringan, atau yang bisa dijawab dari memori/konteks: ja
 
 Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu sampaikan. Jika ucapan \
 pemilik menunjukkan ia sudah mendengar/menanggapinya (mis. "oke", "sip", "makasih", atau membahas isinya), \
-panggil acknowledge_reports untuk laporan itu. Jika ia minta diulang, ulangi isinya.
+panggil acknowledge_reports untuk laporan itu. Jangan menanyakan "sudah dengar?" dan jangan mengulang laporan \
+kecuali ia sendiri yang minta diulang.
 
 Pertanyaan dari pekerjaan: daftar "PERTANYAAN UNTUK PEMILIK" berisi hal yang perlu dijawab pemilik agar \
 pekerjaan bisa lanjut. Sampaikan bila belum; begitu pemilik menjawabnya, panggil answer_question.

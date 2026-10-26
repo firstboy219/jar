@@ -1,9 +1,9 @@
-"""Spoken reports: how worker results reach the owner — and keep reaching them until heard.
+"""Spoken reports: how worker results reach the owner.
 
 Lifecycle: pending → (phone speaks/shows it, sends `report_spoken`) delivered → acknowledged
-(tap "Oke", or the main agent recognises a spoken acknowledgement). A delivered report that is not
-acknowledged within `report_ack_timeout_s` is repeated, up to `report_max_attempts`, then marked
-'unheard' (still listed in the app). Nothing is counted as an attempt while no device is connected.
+(tap "Oke", or the main agent recognises a spoken acknowledgement). A report is spoken ONCE: a pending one is
+re-pushed only while the phone has not confirmed speaking it. Delivered reports are never repeated or chased
+(the owner turned "make sure I heard" off, 2026-10-26); they stay listed in the app until acknowledged.
 """
 
 import asyncio
@@ -102,9 +102,9 @@ async def recent(limit: int = 50) -> list[dict]:
 
 async def on_connect(send) -> None:
     """A device (re)connected: give it everything not yet confirmed."""
-    for r in await db.pool().fetch(
-            "SELECT * FROM reports WHERE status IN ('pending', 'delivered') ORDER BY id"):
-        await send(_event(dict(r), repeat=r["status"] == "delivered"))
+    for r in await db.pool().fetch(  # only what the phone never spoke; a spoken ('delivered') report is not read out again
+            "SELECT * FROM reports WHERE status = 'pending' ORDER BY id"):
+        await send(_event(dict(r)))
         _last_sent[r["id"]] = time.monotonic()
 
 
@@ -116,15 +116,8 @@ async def tick() -> None:
     for r in await db.pool().fetch("SELECT * FROM reports WHERE status = 'pending' ORDER BY id"):
         if now - _last_sent.get(r["id"], 0) > 60:  # pushed but the phone never confirmed speaking it
             await push(dict(r))
-    overdue = await db.pool().fetch(
-        """SELECT * FROM reports WHERE status = 'delivered'
-           AND delivered_at < now() - make_interval(secs => $1) ORDER BY id""", settings.report_ack_timeout_s)
-    for r in overdue:
-        if r["attempts"] >= settings.report_max_attempts:
-            await db.pool().execute("UPDATE reports SET status = 'unheard' WHERE id = $1", r["id"])
-            await hub.broadcast({"type": "report_unheard", "id": r["id"]})
-        elif now - _last_sent.get(r["id"], 0) > settings.report_ack_timeout_s / 2:
-            await push(dict(r), repeat=True)
+    # A delivered report is never repeated or chased ("sudah dengar?"): the owner asked for that to stop (2026-10-26).
+    # It stays listed until acknowledged (tap, or the main agent hearing the owner react).
 
 
 async def run_forever(interval: float = 10) -> None:
