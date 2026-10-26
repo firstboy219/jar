@@ -333,9 +333,21 @@ export function createBoard(ctx) {
     await refresh(true);
   }
 
+  /** A node the server just made (its answer to POST …/objects) becomes a card at once; the next refresh only confirms it. */
+  function ingest(n) {
+    if (cards.has(n.id)) return;
+    const props = typeof n.props === 'string' ? JSON.parse(n.props) : n.props || {};
+    const first = String(props.text || '').trim().split('\n')[0].slice(0, 80);
+    const d = { id: n.id, ref: n.ref, kind: n.kind, x: n.x, y: n.y, z: n.z, size: n.size, pinned: n.pinned, w: n.w, h: n.h, type: props.type, props,
+      title: first || { note: 'Catatan', text: 'Teks', shape: 'Bentuk', frame: 'Bingkai' }[props.type] || 'Objek', subtitle: props.type, snippet: String(props.text || '').slice(0, 600) };
+    const c = makeCard(d); cards.set(d.id, c);
+    c.el.classList.add('pop'); setTimeout(() => c.el.classList.remove('pop'), 600);
+  }
+
   async function createObject(props, x, y, w, h, { select: pick = true, edit = false, record: rec = true } = {}) {
     const node = await api.req('POST', `/api/v1/canvases/${canvasId()}/objects`, { props, x, z: y, w, h });
-    await refresh(true);
+    ingest(node);
+    refresh(true);   // reconciles in the background; the card is already there
     if (pick) select([node.id]);
     if (edit) startEdit(node.id);
     if (rec) {
@@ -568,7 +580,7 @@ export function createBoard(ctx) {
     if (!e.shiftKey) select([]);
   });
 
-  stage.addEventListener('pointermove', (e) => {
+  addEventListener('pointermove', (e) => {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, t: e.pointerType });
     if (gesture?.mode === 'pinch') return pinchMove();
     ctx.onPointer?.(worldAt(stagePoint(e).x, stagePoint(e).y));
@@ -601,8 +613,8 @@ export function createBoard(ctx) {
     else if (g.mode === 'pan' && !g.moved && g.tapClear) select([]);
     else if (g.mode === 'none' || !had) { /* a plain click */ }
   };
-  stage.addEventListener('pointerup', end);
-  stage.addEventListener('pointercancel', end);
+  addEventListener('pointerup', end);
+  addEventListener('pointercancel', end);
 
   stage.addEventListener('wheel', (e) => {
     if (e.target.closest('.palette, .inspector, .menu, .minimap')) return;
@@ -648,8 +660,8 @@ export function createBoard(ctx) {
       gesture = null; navigator.vibrate?.(10);
       ctx.contextMenu?.({ x: e.clientX, y: e.clientY, world: worldAt(p.x, p.y), card: card?.__card, edge: false }); } }, 520);
   });
-  stage.addEventListener('pointerup', () => clearTimeout(press));
-  stage.addEventListener('pointermove', () => { if (gesture?.moved) clearTimeout(press); });
+  addEventListener('pointerup', () => clearTimeout(press));
+  addEventListener('pointermove', () => { if (gesture?.moved) clearTimeout(press); });
 
   // pinch: two fingers zoom and pan together
   function startPinch() {

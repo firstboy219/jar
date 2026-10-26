@@ -1,6 +1,6 @@
 /* The board (Blueprint v4 Fase 11, ADR-055): a 2D infinite paper like Miro / Figma, in JARVIS' night colours. */
 :root {
-  --bg: #080c18; --glass: rgba(12, 18, 36, 0.9); --line: rgba(130, 160, 230, 0.2); --text: #e6edff; --muted: #8fa0c4;
+  --bg: #080c18; --glass: rgba(12, 18, 36, 0.96); --line: rgba(130, 160, 230, 0.2); --text: #e6edff; --muted: #8fa0c4;
   --cyan: #67e8f9; --red: #f87171; --green: #4ade80; --amber: #fbbf24; --accent: #38bdf8; --ink: #0f172a;
   font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }

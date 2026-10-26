@@ -235,10 +235,12 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
       btn('arrowFrom', 'Panah ke kartu pertama', () => board.patchEdge(e.id, { style: { to: e.a } }, 'arah panah'), to === e.a ? 'on' : ''),
       btn('arrowNone', 'Tanpa panah', () => board.patchEdge(e.id, { style: { to: null } }, 'tanpa panah'), to === null ? 'on' : ''),
       btn('arrowTo', 'Panah ke kartu kedua', () => board.patchEdge(e.id, { style: { to: e.b } }, 'arah panah'), to === e.b ? 'on' : ''));
-    return el('div', null, section('Label', label),
+    const box = el('div');
+    box.append(section('Label', label),
       section('Garis', row('Panah', arrow), toggle('Putus-putus', !!e.style?.dash, (v) => board.patchEdge(e.id, { style: { dash: v } }, 'gaya garis')),
         swatches(e.style?.color, (c) => board.patchEdge(e.id, { style: { color: c } }, 'warna garis'))),
       section('', group(lab('Putus garis', () => board.removeEdge(e.id), 'danger'))));
+    return box;
   }
 
   board.on('selection', () => { if (small) inspOpen = board.selectionInfo().cards.length > 0 || !!board.selectionInfo().edge; renderInspector(); });

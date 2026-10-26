@@ -1751,6 +1751,10 @@ async def test_v4_f10_the_meeting_endpoints_need_consent_and_an_owner_device(poo
     assert e.value.status_code == 422
     assert (await main.meeting_start_request(main.MeetingStartIn(title="x", consent=True), device={"name": "HP"}))["delivered"] == 0
     assert (await main.meeting_stop_request(device={"name": "HP"}))["stopping"] is False
+    from app import meetings
+    meetings.want_to_record("x")
+    assert (await meetings.desk_card())["state"] == "waiting"
+    assert (await main.meeting_cancel_request(device={"name": "HP"}))["ok"] and await meetings.desk_card() is None      # "Batal" on the card
 
 
 # ---------- Fase 11 / ADR-055: the canvas is a 2D board ----------

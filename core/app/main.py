@@ -1412,6 +1412,13 @@ async def meeting_start_request(m: MeetingStartIn, device: dict = Depends(owner_
     return await meetings.request_start(m.title, m.confidential, m.participants, m.agenda, f"device:{device['name']}")
 
 
+@app.delete("/api/v1/meetings/want")
+async def meeting_cancel_request(device: dict = Depends(owner_device_auth)):
+    """The owner dismissed the meeting card without recording."""
+    meetings.forget_want()
+    return {"ok": True}
+
+
 @app.post("/api/v1/meetings/stop-request")
 async def meeting_stop_request(device: dict = Depends(owner_device_auth)):
     return {"stopping": await meetings.want_to_stop(f"device:{device['name']}")}
