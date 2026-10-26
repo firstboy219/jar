@@ -838,3 +838,39 @@ Blueprint v4 Fase 5 (K10: web first, then the APK; the blueprint's suggested opt
   gestures, only from our origin, and only after Android's own camera consent (the CAMERA permission the app already declares —
   no new Android permission, no new Gradle dependency, so K1 is not touched; MediaPipe runs in the page, from the web).
 - Gestures stay navigation-only and on-device inside the WebView exactly as on the web (ADR-049).
+
+## ADR-044 — Financial actions: watchers only notify; nothing is bought, booked or traded (2026-10-26)
+Blueprint v4 Fase 6. Price, ticket, crypto and gold watchers (`watchers.py`) are **L1 Observe**: they tell the owner something and do
+nothing else.
+- **No transactions of assets, ever.** No watcher, tool or worker buys, books, pays, logs in to an account or trades. A ticket check
+  stops before payment — its message says so ("belum membeli atau memesan apa pun — kamu yang memutuskan dan membayar"); the web
+  worker is told in its brief, with hard rules (read only, no checkout, no login, no advice to buy or sell), and the main agent has
+  no tool that could pay (a test pins that the tool list has no send/buy/pay).
+- **Crypto and gold are information, not investment advice.** The closing sentence is fixed in code, not left to a model.
+- **Cheap and quiet.** Crypto is read straight from CoinGecko's free price API (no AI, ≥ 15 min apart); the others are looked up by a
+  background worker (kind `watcher`, answers with one `HASIL: {...}` line; ≥ 1–2 h apart because it costs AI, and only while the
+  server is idle enough for background work). A message goes out when the condition BECOMES true or the price moved ≥ 2% since the
+  last message — never at every check, at most once in 6 hours per watcher; a failing source says nothing. Max 10 active watchers.
+- No unofficial WhatsApp, anywhere (nothing in this phase touches it).
+
+## ADR-045 — Gmail and calendar through n8n: Propose, send with approval (2026-10-26)
+Blueprint v4 Fase 6; builds on the n8n the owner already has (ADR-017, "workflows are created inactive").
+- **Three flows**, created inactive by `inbox.install()` (admin → Inbox & Pantau) and activated only through the usual approval:
+  Gmail read (newest unread), Gmail send (ONE email), Google Calendar create (ONE event). Each sits behind a webhook whose path is a
+  random 128-bit secret (n8n's address is public). The Google OAuth sign-in is the owner's, inside n8n, on each Google node:
+  JARVIS never holds a Google credential. **Templates are BELUM DIVERIFIKASI against a live Google account** (node parameters follow
+  n8n 2.x); the admin page says so.
+- **L1 read.** `inbox check` (and, if the owner switches it on, a check every 20 minutes) keeps sender, subject and a ≤ 300-char snippet —
+  never the whole mail; anything that looks sensitive (OTP, card, password) is not kept at all. Sorting (penting/biasa/abaikan + a
+  one-line summary) is done by the **local model only** (category privat, `private=True`); important mail is told once.
+- **L2 propose.** A reply or an event is a DRAFT in `outbox`. To leave JARVIS it must be proposed as an approval (kinds `mail_send`,
+  `calendar_create`, phone or admin) showing the exact recipient/subject/text or time; only the approved row is posted, once
+  (idempotency per outbox row, a row already sent is never posted again; a refused one is closed; an edit after it went out is
+  refused; a failed post is recorded and visible). The main agent's tool `inbox` has `send`/`event` that only PROPOSE, and its
+  rules say never to claim "terkirim" before approval. Reply drafts use the same rule as drafts elsewhere: not for endpoints that may
+  log prompts.
+- `inbox.py`, `inbox_flows.py`, `watchers.py` are in the protected zone: what may leave JARVIS is not self-editable.
+Acceptance (`test_v4_f6_*`): mail is sorted by the local model only and an OTP is not even stored; a reply is drafted, proposed and
+only after approval posted — once; a refused or failed send never goes out; the calendar needs approval and a time zone; the flows are
+created inactive, once, behind random paths; watchers notify once, with the fixed wording, never buy; the agent can read, draft and
+propose but has no way to send.
