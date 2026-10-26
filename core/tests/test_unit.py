@@ -1371,3 +1371,12 @@ def test_v4_f12_qaqa_verdicts_are_read_strictly():
     assert devteam.verdict("**PERBAIKI**\n1. x") == "perbaiki"
     assert devteam.verdict("- TIDAK LULUS: kriteria 2") == "perbaiki"
     assert devteam.verdict("Semua terlihat baik") == ""                                   # no clear verdict is never a pass
+
+
+def test_v4_f12_tim_dev_is_a_direct_action():
+    from app import router
+    for said in ("Tim dev, tugas pertama: hapus card history chat", "jarvis, tim dev tolong rapikan panel chat", "Team dev: tambah tombol x di meja"):
+        a = router.parse_action(said)
+        assert a and a.name == "dev_team" and a.args["text"] == said.strip()        # the owner's words go whole, case kept
+    assert router.parse_action("tim dev") is None                                     # nothing to do yet
+    assert router.parse_action("timnya developer bagus") is None

@@ -981,6 +981,13 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             return await model_answers.stats(a["text"])
         case "model_compare":
             return await model_answers.compare(a["text"])
+        case "dev_team":
+            from . import devteam
+            try:
+                job = await devteam.request(a["text"], actor)
+            except devteam.DevTeamError as e:
+                return f"Maaf, {e}."
+            return f"Oke, tim dev menerima permintaan #{job['id']}. bisan sedang menulis spesifikasinya — pantau di area Tim Dev di Meja."
         case "meeting_start":
             return (await _meeting("start", {"title": a.get("title", "")}))["say"]
         case "meeting_stop":

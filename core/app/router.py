@@ -83,8 +83,13 @@ _MODEL_COMPARE = re.compile(r"\b(kelebihan|kekurangan|bandingkan|banding|dibandi
 _MODEL_NAMES = re.compile(r"\b(model|deepseek|qwen\S*|claude|gpt\S*|gemini|gemma|llama|mistral|nemotron|grok|kimi|glm|haiku|sonnet|opus|minimax|cohere|inkling)\b")
 
 
+_DEV_TEAM = re.compile(r"^(?:(?:jarvis|tolong|hai|halo)[, ]+)*(?:tim|team)\s?dev(?:elop(?:er|ment)?)?\b[\s,:.!-]*(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
+
+
 def parse_action(text: str) -> Intent | None:
     lowered = " ".join(text.strip().lower().split())
+    if (m := _DEV_TEAM.match(text.strip())) and len(m["rest"].strip()) >= 8:   # "tim dev, …" goes to the dev team as said (ADR-059)
+        return Intent("dev_team", {"text": text.strip()})
     if _OR_CHECK.search(lowered):
         return Intent("openrouter_check", {})
     if _MODEL_STATS.search(lowered):
