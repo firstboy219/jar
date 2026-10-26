@@ -119,7 +119,7 @@ svg.wire line { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; }
 .brand { letter-spacing: 3px; color: var(--cyan); font-size: 13px; margin: 0 4px 0 2px; }
 #galaxy { max-width: 180px; background: transparent; border-color: transparent; padding: 4px 6px; font-weight: 600; text-overflow: ellipsis; }
 #galaxy:hover { border-color: var(--line); } #galaxy option { background: #101830; }
-#title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } #count { color: var(--muted); font-size: 12px; white-space: nowrap; margin-right: 4px; }
+#title { display: none; } #count { color: var(--muted); font-size: 12px; white-space: nowrap; margin-right: 4px; }
 .pill { background: transparent; border-color: transparent; padding: 5px 9px; font-size: 13px; border-radius: 8px; color: var(--text); text-decoration: none; display: inline-flex; gap: 6px; align-items: center; }
 .pill:hover { background: rgba(120, 160, 255, .12); border-color: transparent; }
 .pill.on { color: var(--cyan); background: rgba(103, 232, 249, .12); } .pill.busy { opacity: .6; }

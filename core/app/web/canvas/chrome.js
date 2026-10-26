@@ -176,7 +176,7 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
         toggle('Garis bantu pintar', s.guidesOn, (v) => board.setGuides(v)), toggle('Garis penghubung', s.edgesOn, (v) => board.setEdgesVisible(v)), toggle('Nama area', s.zonesOn, (v) => board.setZones(v))),
       kinds.length ? section('Lapisan', ...kinds.map((k) => { const l = el('label', 'layer'); const c = el('input'); c.type = 'checkbox'; c.checked = !s.hiddenKinds.has(k.kind);
         c.addEventListener('change', () => board.setKindHidden(k.kind, !c.checked)); const dot = el('i', 'dot'); dot.style.background = k.color; l.append(c, dot, el('span', null, k.title), el('em', null, String(k.count))); return l; })) : '',
-      section('Tindakan', group(lab('Pas semua', () => board.fitAll(420)), lab('Isi dari Simpanan', () => fillFromLibrary()), lab('Riwayat', () => openHistory()))),
+      section('Tindakan', group(lab('Pas semua', () => board.fitAll(420)), lab('Rapikan kartu', () => board.arrange().catch((e) => toast(e.message, true))), lab('Isi dari Simpanan', () => fillFromLibrary()), lab('Riwayat', () => openHistory()))),
       (() => { const d = el('details', 'tips'); d.append(el('summary', null, 'Pintasan keyboard'), el('div', 'keys',
         'V pilih · H geser · N catatan · T teks · R bentuk · F bingkai · C penghubung\nSpasi+seret geser · roda zoom · Shift+1 pas semua · 0 = 100%\nCtrl+Z urungkan · Ctrl+D gandakan · Ctrl+A semua · Del hapus\nPanah geser 1px (Shift 10) · [ ] belakang/depan · Ctrl+L kunci\nKlik dua kali kertas = catatan baru · Ctrl+K cari')); return d; })(),
     ].filter(Boolean);
@@ -285,7 +285,7 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
       items.push(make({ type: 'note', text: '', color: '#fde68a' }, 'Catatan di sini'), make({ type: 'text', text: '' }, 'Teks di sini'),
         make({ type: 'shape', shape: 'rect', text: '', color: '#93c5fd' }, 'Bentuk di sini'), make({ type: 'frame', text: 'Bingkai', color: '#94a3b8' }, 'Bingkai di sini'), '-',
         { label: 'Tambah kartu dari Simpanan…', kbd: 'Ctrl K', run: () => openPalette('add') }, { label: 'Tempel', kbd: 'Ctrl V', run: () => board.paste() }, '-',
-        { label: 'Pas semua', kbd: 'Shift 1', run: () => board.fitAll(420) }, { label: board.settings.gridOn ? 'Sembunyikan kisi' : 'Tampilkan kisi', run: () => board.setGrid(!board.settings.gridOn) });
+        { label: 'Pas semua', kbd: 'Shift 1', run: () => board.fitAll(420) }, { label: 'Rapikan kartu', run: () => board.arrange().catch((e) => toast(e.message, true)) }, { label: board.settings.gridOn ? 'Sembunyikan kisi' : 'Tampilkan kisi', run: () => board.setGrid(!board.settings.gridOn) });
     }
     openMenu(x, y, items);
   }
