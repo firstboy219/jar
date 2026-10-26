@@ -76,8 +76,7 @@ async def describe(full: bool = False) -> str:
         lines.append(f"- Anggaran AI bulan ini: ${st['spent_usd']:.2f} dari ${st['budget_usd']:.0f} ({st['pct']:.0f}%).")
         v = await billing.verdict()
         lines.append(f"- OpenRouter: {v['text']} (kalau habis, model gratis/lokal tetap jalan; cek nyata dengan ai_settings check_openrouter)")
-        lines.append(f"- Jam tenang notifikasi: {settings.quiet_hours or 'tidak ada'} WIB; laporan diulang tiap "
-                     f"{settings.report_ack_timeout_s} detik, maks {settings.report_max_attempts}x.")
+        lines.append(f"- Jam tenang notifikasi: {settings.quiet_hours or 'tidak ada'} WIB; laporan hanya dibacakan sekali, tidak diulang.")
     learned = await lessons()
     if learned:
         lines.append("PELAJARAN DARI PENGALAMAN (patuhi):\n" + "\n".join(f"  • {t}" for t in learned))

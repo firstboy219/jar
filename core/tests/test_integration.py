@@ -226,7 +226,8 @@ async def test_delegation_runs_worker_and_reports_back(pool, monkeypatch):
     hub.reset()
 
 
-async def test_report_repeats_until_acknowledged_then_gives_up(pool, monkeypatch):
+async def test_a_spoken_report_is_never_repeated_or_chased(pool, monkeypatch):
+    # The owner turned "make sure I heard" off (2026-10-26): a delivered report stays listed, silently, until acknowledged.
     from app import config, hub, reports
     hub.reset()
     pushed = []
@@ -237,15 +238,20 @@ async def test_report_repeats_until_acknowledged_then_gives_up(pool, monkeypatch
     monkeypatch.setattr(config.settings, "report_ack_timeout_s", 0)
     r = await reports._create(None, "s4", "Laporan uji.")
     hub.register(phone)
-    for attempt in range(1, 4):
-        await reports.spoken(r["id"])           # phone said it out loud
-        reports._last_sent.clear()              # pretend enough time passed
-        await pool.execute("UPDATE reports SET delivered_at = now() - interval '1 second' WHERE id = $1", r["id"])
+    await reports.spoken(r["id"])               # phone said it out loud, once
+    pushed.clear()
+    for _ in range(3):
+        reports._last_sent.clear()              # plenty of time passed, with no acknowledgement
+        await pool.execute("UPDATE reports SET delivered_at = now() - interval '1 hour' WHERE id = $1", r["id"])
         await reports.tick()
-    row = await pool.fetchrow("SELECT status, attempts FROM reports WHERE id = $1", r["id"])
-    assert (row["status"], row["attempts"]) == ("unheard", 3)
-    assert [e.get("repeat") for e in pushed if e["type"] == "report"] == [True, True]
-    assert pushed[-1] == {"type": "report_unheard", "id": r["id"]}
+    await reports.on_connect(phone)             # a reconnect does not read it out again either
+    assert pushed == []
+    assert await pool.fetchval("SELECT status FROM reports WHERE id = $1", r["id"]) == "delivered"
+    assert [x["id"] for x in await reports.unconfirmed()] == [r["id"]]      # still listed until acknowledged
+    r2 = await reports._create(None, "s4", "Belum diucapkan.")               # but a report the phone never spoke is still delivered
+    pushed.clear()                                                           # (_create already pushed it once; this is the reconnect)
+    await reports.on_connect(phone)
+    assert [e["id"] for e in pushed if e["type"] == "report"] == [r2["id"]] and not pushed[-1].get("repeat")
     hub.reset()
 
 
@@ -390,7 +396,7 @@ async def test_notification_triage_levels(pool, monkeypatch):
     stored = await pool.fetchrow("SELECT title, text, sensitive FROM notifications WHERE id = 3")
     assert stored["sensitive"] and "482913" not in stored["text"]
     r = await notifications.triage([{"id": 3, "app": "BCA", "title": stored["title"], "text": stored["text"]}])
-    assert r["level"] == "urgent" and pushed[-1]["type"] == "report"  # urgent → repeated until acknowledged
+    assert r["level"] == "urgent" and pushed[-1]["type"] == "report"  # urgent → pushed at once
     decisions = [r["decision"] for r in await pool.fetch("SELECT decision FROM notifications ORDER BY id")]
     assert decisions == ["announce", "skip", "urgent"]
     hub.reset()
