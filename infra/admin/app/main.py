@@ -73,7 +73,7 @@ SETTINGS = [
      "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma. Dipakai juga oleh Whisper."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"), ("ai", "Model AI"),
-        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("voice", "Suara"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
+        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("voice", "Suara"), ("worker", "Pekerja berat"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
         ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
@@ -162,6 +162,8 @@ async def _tab_data(tab: str, request: Request) -> dict:
         return listing | {"chosen": chosen, "detail": await core("GET", f"/admin/companies/{chosen}") if chosen else None}
     if tab == "voice":
         return await core("GET", "/admin/voice")
+    if tab == "worker":
+        return await core("GET", "/admin/openjarvis")
     if tab == "self":
         return await core("GET", "/admin/self") | {"errors_log": await core("GET", "/admin/errors"),
                                                     "flow_issues": await core("GET", "/admin/flow-issues"),
@@ -418,6 +420,18 @@ async def _voice_action(request: Request, call, done) -> HTMLResponse:
     except CoreError as e:
         return await render(request, "voice", errors=[str(e)])
     return await render(request, "voice", notice=done(result) if callable(done) else done)
+
+
+@app.post("/worker/openjarvis", response_class=HTMLResponse)
+async def worker_openjarvis(request: Request, enabled: str = Form(...)):
+    """Pekerja berat tab (Fase 2): switch the optional OpenJarvis worker on or off — decided here only."""
+    if r := guard(request):
+        return r
+    try:
+        await core("POST", "/admin/openjarvis", json={"enabled": enabled == "on"})
+    except CoreError as e:
+        return await render(request, "worker", errors=[str(e)])
+    return await render(request, "worker", notice="OpenJarvis dinyalakan." if enabled == "on" else "OpenJarvis dimatikan.")
 
 
 @app.post("/voice/settings", response_class=HTMLResponse)

@@ -128,7 +128,10 @@ TOOLS = [
                          "description": "jenis pekerjaan (menentukan AI): web, coding, produktivitas, analisis, atau kategori "
                                         "buatan pemilik (ai_settings show). Kosong = pilih otomatis"},
             "attach_image": {"type": "boolean", "description": "sertakan gambar kamera/layar yang sedang ditunjukkan"},
-            "company": {"type": "string", "description": "company_id bila tugas ini untuk SATU perusahaan (worker hanya melihat data perusahaan itu)"}},
+            "company": {"type": "string", "description": "company_id bila tugas ini untuk SATU perusahaan (worker hanya melihat data perusahaan itu)"},
+            "berat": {"type": "boolean", "description": "true HANYA untuk pekerjaan besar yang butuh banyak langkah berpikir/menghitung/membaca "
+                                                         "kode (analisis mendalam, rekonstruksi, perbaikan performa). Pekerja berat dipakai bila pemilik "
+                                                         "menyalakannya; bila gagal, pekerja biasa mengerjakannya"}},
             "required": ["title", "instruction"]}}},
     {"type": "function", "function": {
         "name": "company_directive",
@@ -418,7 +421,7 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                         session_id, actor, device_id, location,
                                         image=image if a.get("attach_image") else None,
                                         category=a.get("category"), private=private,
-                                        company_id=await _company_of(a.get("company")))
+                                        company_id=await _company_of(a.get("company")), heavy=bool(a.get("berat")))
                 return json.dumps({"task_id": t["id"], "status": "queued", "category": t["category"]})
             case "canvas":
                 return json.dumps(await _canvas_tool(a, actor, device_id, stt, bool(screen_text or attachments)),

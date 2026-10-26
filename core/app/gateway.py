@@ -37,7 +37,7 @@ CONTEXT_LENGTH = 65_536
 # Time to the first byte. A local CPU model reading Hermes' ~15k-token prompt needs many minutes.
 FIRST_BYTE_S = {"cloud": 90.0, "local-chat": 300.0, "local-worker": 3600.0}
 # Callers with their own OpenRouter key (owner sets per-key limits on openrouter.ai); others share LATAR.
-CALLER_KEYS = {"chat": "OPENROUTER_KEY_CHAT", "hermes": "OPENROUTER_KEY_HERMES"}
+CALLER_KEYS = {"chat": "OPENROUTER_KEY_CHAT", "hermes": "OPENROUTER_KEY_HERMES", "openjarvis": "OPENROUTER_KEY_HERMES"}
 
 
 class GatewayError(RuntimeError):
@@ -436,7 +436,7 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
     """Yield OpenAI `chat.completion.chunk` dicts from the first route that starts answering."""
     body = {**body, "stream": True}
     errors: list[str] = []
-    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller == "hermes" else None)
+    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller in ("hermes", "openjarvis") else None)
     queue = list(await plan(category, caller=caller, private=private, worker=worker))
     while queue:
         route = queue.pop(0)
@@ -529,7 +529,7 @@ async def _complete(category: str, body: dict, *, caller: str, session_id: str |
     """Non-streaming call with the same routing and failover; returns the OpenAI response JSON."""
     body = {**body, "stream": False}
     errors: list[str] = []
-    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller == "hermes" else None)
+    att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller in ("hermes", "openjarvis") else None)
     queue = list(await plan(category, caller=caller, private=private, worker=worker))
     while queue:
         route = queue.pop(0)

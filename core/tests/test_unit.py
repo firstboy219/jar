@@ -1169,3 +1169,15 @@ def test_selfdev_policy_protects_the_spike():
     from app import selfdev_policy as p
     for f in ("core/app/spike.py", "infra/spike/harness.py", "infra/spike/hidden/p1_test.py", "infra/openjarvis/Dockerfile"):
         assert not p.judge([{"file": f, "added": 1, "deleted": 0}], "", [], 2)["ok"]   # JARVIS cannot grade itself
+
+
+def test_openjarvis_answer_must_be_an_answer():
+    from app.openjarvis import usable
+    assert usable("Hasil analisis: kategori web paling lambat (median 9 dtk), saran: pindah ke model cepat.")[0]
+    assert not usable("")[0] and not usable("ok")[0]
+    for raw in ('<｜DSML｜ calls>\n<｜DSML｜ invoke name="file_read">... dan seterusnya sampai cukup panjang',
+                "Mari baca: <tool_call>{\"name\": \"file_read\"}</tool_call> menunggu hasilnya ya ya ya"):
+        ok, why = usable(raw)
+        assert not ok and "teks mentah" in why                                      # the failure the spike saw 3 of 3 times
+    from app import selfdev_policy as p
+    assert not p.judge([{"file": "core/app/openjarvis.py", "added": 1, "deleted": 0}], "", [], 2)["ok"]

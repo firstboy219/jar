@@ -163,6 +163,7 @@ services:
       - ./data/dev:/data/dev # self-improvement requests/results exchanged with infra/scripts/self-dev.sh
       - ./data/ops:/data/ops # per-container usage (usage-collector.sh) and "netralkan" requests (ops.sh)
       - ./data/voice:/data/voice # cloud-voice cache; utterance audio only with the owner's consent (K3, ADR-048)
+      - ./data/openjarvis:/data/openjarvis:ro # the heavy worker's API key (core calls OpenJarvis with it)
       - ./data/skills:/data/skills # skills being tested: requests/results exchanged with infra/scripts/skill-sandbox.sh (ADR-040)
       - ./data/hermes/skills/jarvis-learned:/data/skills-learned # skills JARVIS learned and published (Hermes reads them as a skills folder)
       - ./data/hermes:/hermes:ro # Hermes Studio (schedules, own skills, kanban) + cron result delivery
@@ -219,6 +220,27 @@ services:
         condition: service_started
 
   # one-shot: least-privilege role + database for jarvis-core (idempotent)
+  # OpenJarvis (Blueprint v4 Fase 2, ADR-043): optional heavy worker next to Hermes. Not part of a normal `up`: set it up with
+  # scripts/openjarvis-setup.sh (keys, config, this service). jarvis-network only, no published port; thinks through jarvis-core's
+  # LLM gateway with a key good for worker categories; sees only its work folder. The owner switches it on in the admin page.
+  openjarvis:
+    build: ./openjarvis
+    image: jarvis-openjarvis:40092da
+    container_name: jarvis-openjarvis
+    profiles: ["openjarvis"]
+    restart: unless-stopped
+    mem_limit: 2g
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [NET_RAW, MKNOD, AUDIT_WRITE, SYS_CHROOT]
+    env_file: ./data/openjarvis/openjarvis.env # OPENJARVIS_API_KEY, VLLM_API_KEY (the gateway key), OJ_MODEL
+    volumes:
+      - ./data/openjarvis/home:/home/oj
+      - ./data/openjarvis/work:/work
+    networks:
+      - jarvis-network
+
   core-db-init:
     image: postgres:16.15-alpine
     restart: "no"

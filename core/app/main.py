@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, spike, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, openjarvis, spike, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
@@ -714,9 +714,18 @@ async def _gateway_auth(request: Request) -> str:
     key = _bearer(request.headers.get("authorization")) or ""
     if settings.llm_gateway_key and hmac.compare_digest(key, settings.llm_gateway_key):
         return "hermes"
-    if caller := await spike.caller_for(key):
+    if caller := await spike.caller_for(key) or await openjarvis.caller_for(key):
         return caller
     raise HTTPException(401, "invalid gateway key")
+
+
+async def _gateway_allows(caller: str, category: str) -> bool:
+    """Hermes: every category. A spike key: 'spike' only. OpenJarvis (heavy worker): worker categories, never privat."""
+    if caller == "hermes":
+        return True
+    if caller == openjarvis.CALLER:
+        return category != "privat" and bool((await gateway.categories()).get(category, {}).get("worker"))
+    return category == spike.CATEGORY
 
 
 @app.get("/llm/v1/models")
@@ -724,7 +733,8 @@ async def llm_models(request: Request):
     caller = await _gateway_auth(request)
     models = await gateway.model_list()
     if caller != "hermes":
-        models = [m for m in models if gateway.category_of_alias(str(m.get("id") or "")) == spike.CATEGORY]
+        keep = [await _gateway_allows(caller, gateway.category_of_alias(str(m.get("id") or ""))) for m in models]
+        models = [m for m, ok in zip(models, keep) if ok]
     return {"object": "list", "data": models}
 
 
@@ -734,8 +744,8 @@ async def llm_chat(request: Request, body: dict = Body(...)):
     category = gateway.category_of_alias(str(body.get("model") or ""))
     if category not in await gateway.categories():
         raise HTTPException(404, f"model tidak dikenal: {body.get('model')}")
-    if caller != "hermes" and category != spike.CATEGORY:
-        raise HTTPException(403, "kunci uji hanya untuk kategori spike")
+    if not await _gateway_allows(caller, category):
+        raise HTTPException(403, "kunci ini tidak boleh memakai kategori itu")
     session = request.headers.get("x-session-id") or (str(body.get("user")) if body.get("user") else None)
     private = category == "privat"
     if not body.get("stream"):
@@ -1342,6 +1352,21 @@ def admin_page_only(request: Request) -> None:
     """Some switches belong to the admin page alone (the control point JARVIS cannot change): never the app console."""
     if request.url.path.startswith(CONSOLE + "/"):
         raise HTTPException(403, "hanya bisa diubah di halaman admin")
+
+
+@app.get("/admin/openjarvis")
+async def admin_openjarvis(_: str = admin):
+    """Fase 2: is the optional heavy worker switched on, is it up, and the tasks it did or handed back to Hermes."""
+    return jsonable(await openjarvis.status())
+
+
+@app.post("/admin/openjarvis")
+async def admin_openjarvis_set(body: dict = Body(...), actor: str = admin):
+    on = bool(body.get("enabled"))
+    if on and not (await openjarvis.healthy()):
+        raise HTTPException(409, "OpenJarvis belum menyala (kontainer jarvis-openjarvis tidak menjawab)")
+    await audit.record(actor, "openjarvis.enabled" if on else "openjarvis.disabled", None)
+    return jsonable(await openjarvis.set_enabled(on))
 
 
 @app.get("/admin/voice")

@@ -803,3 +803,23 @@ test task ("rekonstruksi / peningkatan performa diri", K7) and capped the spike 
   with this model: all three runs ended after 24–41 s with the model's tool calls as raw text (`<｜DSML｜ ... >`) that
   OpenJarvis did not execute (it does send native `tools`; Hermes got structured calls from the same model), so OpenJarvis
   scored 0 on p1, p2 and p3 — but cheaper and ~10× faster per attempt ($0.02–0.05, 30–40 s vs $0.12–0.34, 5–17 min).
+- **Decision (owner, 2026-10-26): no further testing — implement.** The spike stops after batch 1 ($0.75 of $1 spent; no
+  OpenJarvis-vs-Hermes verdict on quality exists, and none of the four metrics is claimed). OpenJarvis is adopted as an
+  **optional heavy worker with Hermes-Brain as default and fallback** (D3 as proposed, minus the proof):
+  - `openjarvis.py` + service `openjarvis` (compose profile `openjarvis`, set up with `infra/scripts/openjarvis-setup.sh`,
+    jarvis-network only, 2 GB, no published port, sees `/work` and nothing else). It thinks through the LLM gateway with its own
+    key (SHA-256 in `settings_kv worker:key:openjarvis`, caller `openjarvis`): worker categories only — never `privat`/`ngobrol`
+    — so budget, model rules and cost-per-task (`[tugas #N]`) hold; it has no JARVIS tools, no memory, no repo.
+  - A task runs there only if (a) the owner switched it on (admin → "Pekerja berat", **off by default**), (b) the main agent
+    marked it `berat` (spawn_task), (c) it is an owner task, not private, with no picture. Handover: in = `[tugas #N]` + a short
+    brief (not Hermes' WORKER_BRIEF) + the instruction; out = the answer text. `tasks.runtime` / `runtime_note` show who did it.
+  - **Fallback:** anything but a usable answer (unreachable, HTTP error, empty, or the model's raw tool-call markup as seen
+    in 3 of 3 spike runs) → `runtime='hermes'`, the reason in `runtime_note`, an audit event, and Hermes does the task as if
+    nothing happened. The owner always gets an answer; the cost of a failed attempt is the price of finding out.
+  - Why off by default: with DeepSeek V4.1 Flash OpenJarvis produced no answer in any of 3 attempts, so with that model most heavy
+    tasks would pay for a failed try first. Turn it on when a worker-category model that returns structured tool calls to it is
+    chosen (Komposisi AI) — or leave it off; nothing else depends on it.
+  - `spike.py`, `openjarvis.py`, `infra/spike/`, `infra/openjarvis/` are in the protected zone.
+Acceptance (`test_v4_f2_*`): a heavy task goes to OpenJarvis when it is on and Hermes is never asked; a failed OpenJarvis hands
+the task to Hermes with the reason and an audit event; off by default, and private / not-heavy tasks never reach it; its gateway
+key reaches worker categories only (403 for privat/ngobrol, 401 for others) and its cost is attributed to it.
