@@ -249,6 +249,35 @@ async def auto(ref: str, company_id: str | None = None) -> None:
         logging.getLogger("jarvis-core.canvas").info("card %s not placed: %s", ref, e)
 
 
+async def touch(ref: str, company_id: str | None = None) -> None:
+    """What a card shows changed (a task finished): bump the version of every galaxy holding it, so open viewers re-read it."""
+    try:
+        async with _conn(company_id) as conn:
+            await conn.execute("UPDATE canvases SET version = version + 1 WHERE id IN (SELECT canvas_id FROM canvas_nodes WHERE ref = $1)", ref)
+    except Exception as e:
+        import logging
+        logging.getLogger("jarvis-core.canvas").info("touch %s failed: %s", ref, e)
+
+
+async def fill(context: str, actor: str, limit: int = 300) -> dict:
+    """Put what is in storage (the library: documents, drafts, songs, playlists, meetings, what was shown) on this galaxy.
+    Idempotent; only what this galaxy may hold (a company galaxy takes none of the personal library)."""
+    from . import library
+    canvas = await ensure(context)
+    if canvas["company_id"]:
+        return {"added": 0, "note": "galaksi perusahaan hanya memuat data perusahaannya"}
+    added = 0
+    for i in await library.items(limit=limit):
+        if not REF.match(i["key"]):
+            continue
+        try:
+            n = await add(context, i["key"], actor, quiet=True)
+        except CanvasError:
+            continue
+        added += 0 if n.get("existing") else 1
+    return {"added": added}
+
+
 async def _node(node_id: int) -> tuple[dict, dict]:
     row = await db.pool().fetchrow("SELECT canvas_id FROM canvas_nodes WHERE id = $1", node_id)
     if row:

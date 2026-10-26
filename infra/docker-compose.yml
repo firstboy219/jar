@@ -83,10 +83,13 @@ services:
       - TZ=${TZ}
       # lean while Hermes runs on the local CPU (fewer prompt tokens), full with cloud models (ADR-031)
       - HERMES_PROFILE=${HERMES_PROFILE:-lean}
+      # the shared browser (ADR-051): Hermes browses in it, and the 3D desk shows the owner what it is doing
+      - BROWSER_CDP_URL=http://jarvis-browser-gw:9222
     networks:
       - jarvis-network
     depends_on:
       - jarvis-tools
+      - jarvis-browser-gw
 
   # 2a. LOCAL MODELS (llama.cpp, Qwen3.5). Default AI when no cloud key/credit (decision 2026-10-21).
   # Both servers run Qwen3.5-4B Q4_K_M (same file, shared via mmap). The chat model was the 2B until 2026-10-22:
@@ -238,6 +241,35 @@ services:
     volumes:
       - ./data/openjarvis/home:/home/oj
       - ./data/openjarvis/work:/work
+    networks:
+      - jarvis-network
+
+  # SHARED BROWSER (Blueprint v4 Fase 7, ADR-051): the one Chromium Hermes browses with, so the 3D canvas can show the owner what it
+  # is doing (core attaches to the same browser over DevTools and relays screenshots). Internal network only, no published port.
+  jarvis-browser:
+    image: chromedp/headless-shell@sha256:f76fce2964611eb1e25b90d906727884db12a8918a6d85a0df2619a9ef845c7c
+    container_name: jarvis-browser
+    restart: unless-stopped
+    shm_size: "1gb"
+    mem_limit: 2g
+    pids_limit: 1024
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [NET_RAW, MKNOD, AUDIT_WRITE, SYS_CHROOT]
+    # the image's own entrypoint exposes DevTools on 9222 (socat → Chromium on 9223): only extra flags go here
+    command: ["--window-size=1280,800", "--lang=id-ID", "--remote-allow-origins=*"]
+    networks:
+      - jarvis-network
+
+  jarvis-browser-gw:
+    image: nginx:1.27.3-alpine
+    container_name: jarvis-browser-gw
+    restart: unless-stopped
+    mem_limit: 64m
+    volumes:
+      - ./browser/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - jarvis-browser
     networks:
       - jarvis-network
 

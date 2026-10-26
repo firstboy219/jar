@@ -1228,3 +1228,22 @@ def test_inbox_keeps_little_hides_the_sensitive_and_reads_a_messy_triage():
     from app import selfdev_policy as p
     for f in ("core/app/inbox.py", "core/app/watchers.py", "core/app/inbox_flows.py"):
         assert not p.judge([{"file": f, "added": 1, "deleted": 0}], "", [], 2)["ok"]       # what may leave JARVIS is not self-editable
+
+
+def test_the_desk_reads_tool_calls_and_picks_the_right_browser_tab():
+    from app import live
+    assert live.step_text("browser_navigate", "https://jostreet.com/produk") == ("🌐", "Membuka: https://jostreet.com/produk")
+    assert live.step_text("browser_type", "  kolom  nama  ")[1] == "Mengetik: kolom nama"
+    assert live.step_text("browser_scroll", "")[1] == "Menggulir"
+    assert live.step_text("alat_baru", "x")[1] == "Alat baru: x"
+    assert live.host_of("navigate https://www.jostreet.com/a?b=1 now") == "www.jostreet.com" and live.host_of("tanpa url") == ""
+    tabs = [{"type": "page", "url": "about:blank"}, {"type": "iframe", "url": "https://iklan.net"},
+            {"type": "page", "url": "https://www.jostreet.com/produk", "title": "Produk"}, {"type": "page", "url": "https://lain.id/"},
+            {"type": "page", "url": "devtools://devtools/x"}]
+    assert live.pick_target(tabs, "www.jostreet.com", "")["title"] == "Produk"          # the host it was told to open
+    assert live.pick_target(tabs, "", "https://lain.id/")["url"] == "https://lain.id/"    # else where it was last seen
+    assert live.pick_target(tabs, "", "")["url"] == "https://www.jostreet.com/produk"     # else the first real page, never about:blank/devtools
+    assert live.pick_target([{"type": "page", "url": "about:blank"}], "", "")["url"] == "about:blank"
+    assert live.pick_target([{"type": "iframe", "url": "x"}], "", "") is None
+    assert "disembunyikan" in live.mask("kode OTP saya 482913 tolong") or "disembunyikan" in live.mask("kartu 4111 1111 1111 1111")
+    assert live.mask("cek harga emas hari ini") == "cek harga emas hari ini"

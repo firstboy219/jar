@@ -1219,3 +1219,112 @@ async def test_v4_f6_the_agent_can_read_draft_and_propose_but_has_no_way_to_send
     w = await assistant._inbox_tool("watch", {"action": "add", "kind": "emas", "label": "Emas", "query": "harga emas Antam 1 gram", "op": ">=", "threshold": 1_600_000})
     assert w["cek_tiap_menit"] == 60 and "tidak membeli" in w["catatan"]
     assert (await assistant._inbox_tool("inbox", {"action": "event", "title": "x", "start": "besok", "end": "lusa"}))["error"]
+
+
+async def _station_env(pool, monkeypatch):
+    """The desk with a fake shared browser: one tab, and a screenshot that changes every look."""
+    from app import hub, live
+    live.stations.clear()
+    looks = {"n": 0}
+
+    class FakeBrowser:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            import httpx
+            return httpx.Response(200, json=[{"type": "page", "url": "https://www.jostreet.com/produk", "title": "Produk Jostreet",
+                                              "webSocketDebuggerUrl": "ws://fake/page"}])
+    monkeypatch.setattr(live, "_client", lambda timeout: FakeBrowser())
+
+    async def screenshot(ws_url):
+        looks["n"] += 1
+        return b"\xff\xd8JPEG" + bytes([looks["n"]])
+    monkeypatch.setattr(live, "_screenshot", screenshot)
+    monkeypatch.setattr(live, "FRAME_EVERY_S", 0.01)
+    hub.reset()
+    live.start()
+    return looks
+
+
+async def test_v4_f7_a_worker_task_is_a_station_on_the_desk_with_steps_and_the_page_it_browses(pool, monkeypatch):
+    import asyncio
+
+    import httpx
+    from app import devices, hub, live, main
+    await _station_env(pool, monkeypatch)
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status)
+                                 VALUES ('s-f7', 'Cek web Jostreet', 'cek jostreet', 'owner', 'web', 'running') RETURNING id""")
+    await hub.broadcast({"type": "task", "id": tid, "title": "Cek web Jostreet", "status": "running", "kind": "owner"})
+    for i, (name, label) in enumerate([("browser_navigate", "https://www.jostreet.com/produk"), ("browser_scroll", "bawah"),
+                                       ("browser_type", "kolom pencarian: sepatu")]):
+        await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": f"c{i}", "name": name, "label": label, "status": "running"}})
+    await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "thought", "text": "mencari sepatu lari"}})
+    await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": "c2", "name": "browser_type", "label": "", "status": "completed"}})
+    for _ in range(100):
+        if live.stations[tid].frame_seq >= 2:
+            break
+        await asyncio.sleep(0.02)
+    snap = await live.snapshot("utama")
+    st = next(s for s in snap["stations"] if s["task_id"] == tid)
+    assert st["status"] == "running" and st["browsing"] and st["ref"] == f"task:{tid}"
+    assert [x["text"] for x in st["steps"]] == ["Membuka: https://www.jostreet.com/produk", "Menggulir: bawah", "Mengetik: kolom pencarian: sepatu"]
+    assert st["steps"][2]["status"] == "completed" and st["thought"] == "mencari sepatu lari"   # a finished call updates its step, not a new one
+    assert st["page_title"] == "Produk Jostreet" and st["has_frame"] and st["frame_seq"] >= 2
+    assert {"n8n", "prompts", "storage"} <= set(snap)                                          # the owner's desk also has the panels
+
+    _, token = await devices.create("HP", "test", scope="owner")
+    hdr = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        assert (await c.get("/api/v1/canvas/live")).status_code == 401                           # only paired devices
+        assert (await c.get(f"/api/v1/canvas/live/{tid}/frame")).status_code == 401
+        r = await c.get(f"/api/v1/canvas/live/{tid}/frame", headers=hdr)
+        assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg" and r.content.startswith(b"\xff\xd8JPEG")
+        assert r.headers["cache-control"] == "no-store"
+        assert (await c.get(f"/api/v1/canvas/live/{tid}/frame?context=company:renature", headers=hdr)).status_code == 404   # not another galaxy's
+        assert len((await c.get("/api/v1/canvas/live", headers=hdr)).json()["stations"]) == 1
+    await hub.broadcast({"type": "task", "id": tid, "title": "Cek web Jostreet", "status": "completed", "kind": "owner"})
+    assert live.stations[tid].finished and (await live.snapshot("utama"))["stations"][0]["status"] == "completed"
+
+
+async def test_v4_f7_private_and_company_work_never_leaks_onto_the_wrong_desk_and_requests_are_masked(pool, monkeypatch):
+    from app import hub, live
+    await _station_env(pool, monkeypatch)
+    private = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, private)
+                                     VALUES ('s-p', 'Rahasia', 'x', 'owner', 'privat', 'running', true) RETURNING id""")
+    await hub.broadcast({"type": "task", "id": private, "title": "Rahasia", "status": "running", "kind": "owner"})
+    assert private not in live.stations                                                         # a private task is never on the desk
+    r, _ = await _two_companies(pool, monkeypatch)
+    ctask = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, company_id)
+                                   VALUES ('s-c', 'Iklan Renature', 'x', 'owner', 'web', 'running', $1) RETURNING id""", r)
+    await hub.broadcast({"type": "task", "id": ctask, "title": "Iklan Renature", "status": "running", "kind": "owner"})
+    assert [s["task_id"] for s in (await live.snapshot(f"company:{r}"))["stations"]] == [ctask]
+    assert (await live.snapshot("utama"))["stations"] == []                                     # the personal desk does not show company work
+    assert "n8n" not in await live.snapshot(f"company:{r}")                                      # nor the owner's panels on a company desk
+    await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('s1', 'user', 'tolong cek harga emas', 'hermes')")
+    await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('s1', 'assistant', 'Emas Rp 1,5 juta', 'hermes')")
+    await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('s2', 'user', 'kode OTP saya 482913', 'hermes')")
+    await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('s3', 'user', '/privat catatan pribadi', 'hermes')")
+    shown = await live.prompts()
+    asked = [p["asked"] for p in shown]
+    assert "tolong cek harga emas" in asked and not any("482913" in a for a in asked) and not any("catatan pribadi" in a for a in asked)
+    assert next(p for p in shown if p["asked"] == "tolong cek harga emas")["answer"] == "Emas Rp 1,5 juta"
+
+
+async def test_v4_f7_a_new_task_is_on_the_canvas_at_once_and_storage_can_be_laid_out(pool, monkeypatch):
+    from app import canvas, memory, workers
+    monkeypatch.setattr(memory, "search", _no_memory)
+    t = await workers.spawn("Cari sepatu", "Cari sepatu lari di jostreet dan bandingkan harga.", "s-f7b", "test")
+    c = await canvas.ensure("utama")
+    v = await canvas.view(c["id"])
+    assert f"task:{t['id']}" in [x["ref"] for x in v["cards"]]                                  # a card from the moment the task exists
+    before = v["version"]
+    await canvas.touch(f"task:{t['id']}")
+    assert (await canvas.view(c["id"]))["version"] == before + 1                                # a finished task makes open viewers re-read it
+    first = await canvas.fill("utama", "owner")
+    assert (await canvas.fill("utama", "owner"))["added"] == 0                                              # idempotent
+    r, _ = await _two_companies(pool, monkeypatch)
+    assert (await canvas.fill(f"company:{r}", "owner"))["added"] == 0                            # a company galaxy takes none of the personal library
