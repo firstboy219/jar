@@ -863,7 +863,7 @@ async def test_v4_f4_moves_links_focus_versions_and_hiding_never_deletes_data(po
         await canvas.move(na["id"], "owner", x=float("inf"))
     e = await canvas.link(na["id"], nb["id"], "owner", "lanjutan")
     v1 = await canvas.view(c["id"])
-    assert v1["edges"] == [{"id": e["id"], "a": na["id"], "b": nb["id"], "label": "lanjutan"}]
+    assert v1["edges"] == [{"id": e["id"], "a": na["id"], "b": nb["id"], "label": "lanjutan", "style": {}}]
     assert (await canvas.view(c["id"], since=v1["version"]))["unchanged"]
     f = await canvas.focus("utama", f"task:{b}", "jarvis")
     assert (await canvas.view(c["id"]))["focus"] == nb["id"] and f["version"] > v1["version"]
@@ -886,10 +886,10 @@ async def test_v4_f4_viewer_is_served_safely_and_the_api_needs_the_owner(pool, m
     _, guest = await devices.create("Tamu", "test", scope="device")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
         r = await c.get("/canvas/")
-        assert r.status_code == 200 and "Galaksi JARVIS" in r.text
+        assert r.status_code == 200 and "Papan JARVIS" in r.text
         csp = r.headers["content-security-policy"]
         assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp and "unsafe-eval'" not in csp.replace("wasm-unsafe-eval'", "")
-        for f in ("app.js", "lib.js", "gestures.js", "gesture.html", "vendor/three.module.min.js", "vendor/THREE_LICENSE"):
+        for f in ("app.js", "lib.js", "board.js", "chrome.js", "gestures.js", "gesture.html"):
             assert (await c.get(f"/canvas/{f}")).status_code == 200
         assert (await c.get("/canvas/../main.py")).status_code == 404 and (await c.get("/canvas/%2e%2e/main.py")).status_code == 404
         assert (await c.get("/api/v1/canvases")).status_code == 401
@@ -1432,7 +1432,7 @@ async def test_v4_f8_the_desk_is_the_front_door_and_its_chat_voice_camera_and_sc
         assert r.status_code in (302, 307) and r.headers["location"] == "/canvas/"
         pp = (await c.get("/canvas/")).headers["permissions-policy"]
         assert "camera=(self)" in pp and "microphone=(self)" in pp and "display-capture=(self)" in pp and "geolocation=()" in pp
-        for f in ("cad.js", "dock.js", "worklet.js"):
+        for f in ("deskcards.js", "dock.js", "worklet.js"):
             assert (await c.get(f"/canvas/{f}")).status_code == 200
     seen = {}
 
@@ -1751,3 +1751,81 @@ async def test_v4_f10_the_meeting_endpoints_need_consent_and_an_owner_device(poo
     assert e.value.status_code == 422
     assert (await main.meeting_start_request(main.MeetingStartIn(title="x", consent=True), device={"name": "HP"}))["delivered"] == 0
     assert (await main.meeting_stop_request(device={"name": "HP"}))["stopping"] is False
+
+
+# ---------- Fase 11 / ADR-055: the canvas is a 2D board ----------
+
+async def test_v4_f11_the_owner_draws_notes_shapes_and_frames_resizes_them_and_undoes_by_the_history(pool, monkeypatch):
+    from app import canvas
+    c = await canvas.ensure("utama")
+    note = await canvas.create_object("utama", {"type": "note", "text": "Beli tinta printer\nbesok", "color": "#fde68a"}, "owner", 100, -50)
+    frame = await canvas.create_object("utama", {"type": "frame", "text": "Minggu ini"}, "owner", 0, 0, 800, 500)
+    v = await canvas.view(c["id"])
+    got = {x["id"]: x for x in v["cards"]}
+    n = got[note["id"]]
+    assert n["ref"].startswith("obj:") and n["kind"] == "papan" and n["type"] == "note" and n["title"] == "Beli tinta printer"
+    assert (n["x"], n["z"], n["w"], n["h"]) == (100, -50, 220, 180)                                   # a note arrives with a default size
+    assert got[frame["id"]]["w"] == 800 and got[frame["id"]]["props"]["text"] == "Minggu ini"
+    # resize + edit text + colour: only known keys, only well-formed values
+    await canvas.move(note["id"], "owner", w=300, h=240, props={"text": "Beli tinta", "color": "#bbf7d0", "font": 20})
+    n = {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}[note["id"]]
+    assert (n["w"], n["h"], n["props"]["color"], n["props"]["font"], n["props"]["type"]) == (300, 240, "#bbf7d0", 20, "note")
+    for bad in ({"color": "merah"}, {"shape": "bintang"}, {"type": "frame"}, {"align": "tengah"}):
+        with pytest.raises(canvas.CanvasError):
+            await canvas.move(note["id"], "owner", props=bad)
+    with pytest.raises(canvas.CanvasError):
+        await canvas.create_object("utama", {"type": "script", "text": "x"}, "owner")
+    with pytest.raises(canvas.CanvasError):
+        await canvas.move(0, "owner", w=100)                                                           # a card that does not exist
+    # several at once = one version
+    before = (await canvas.view(c["id"]))["version"]
+    out = await canvas.move_many(c["id"], [{"id": note["id"], "x": 0, "z": 600}, {"id": frame["id"], "x": -50, "z": 520, "w": 900}], "owner", "geser dua")
+    assert out["version"] == before + 1
+    assert {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}[frame["id"]]["w"] == 900
+    # connectors keep an arrow and a style, and the history brings back sizes, props and arrows
+    e = await canvas.link(note["id"], frame["id"], "owner", "ada di", {"to": frame["id"], "dash": True, "color": "#38bdf8"})
+    edge = (await canvas.view(c["id"]))["edges"][0]
+    assert edge["label"] == "ada di" and edge["style"] == {"to": frame["id"], "dash": True, "color": "#38bdf8"}
+    await canvas.update_edge(e["id"], c["id"], "owner", label="di dalam", style={"dash": False})
+    assert (await canvas.view(c["id"]))["edges"][0]["style"]["dash"] is False
+    with pytest.raises(canvas.CanvasError):
+        await canvas.update_edge(e["id"], c["id"], "owner", style={"to": 999999})
+    ver = (await canvas.view(c["id"]))["version"]
+    await canvas.hide(note["id"], "owner")                                                            # deleting the owner's own note is allowed
+    assert note["id"] not in {x["id"] for x in (await canvas.view(c["id"]))["cards"]}
+    r = await canvas.restore(c["id"], ver, "owner")
+    back = (await canvas.view(c["id"]))
+    notes = [x for x in back["cards"] if x["type"] == "note"]
+    assert r["dropped"] == 0 and len(notes) == 1 and notes[0]["w"] == 300 and notes[0]["props"]["text"] == "Beli tinta"
+    assert back["edges"][0]["style"].get("to") in {x["id"] for x in back["cards"]}                        # the arrow follows the restored node's new id
+
+
+async def test_v4_f11_a_company_board_can_hold_drawings_but_never_another_boards_cards(pool, monkeypatch):
+    from app import canvas
+    r, _ = await _two_companies(pool, monkeypatch)
+    mine = await canvas.create_object(f"company:{r}", {"type": "shape", "shape": "ellipse", "text": "Target Q4"}, "owner", 10, 10)
+    assert {x["ref"] for x in (await canvas.view((await canvas.ensure(f"company:{r}"))["id"]))["cards"]} == {mine["ref"]}
+    other = await canvas.create_object("utama", {"type": "note", "text": "pribadi"}, "owner")
+    with pytest.raises(canvas.CanvasError):
+        await canvas.link(mine["id"], other["id"], "owner")                                          # different boards stay apart
+    c2 = await canvas.ensure(f"company:{r}")
+    with pytest.raises(canvas.CanvasError):
+        await canvas.move_many(c2["id"], [{"id": other["id"], "x": 1, "z": 1}], "owner")                # and a batch cannot reach across
+
+
+async def test_v4_f11_the_board_endpoints_need_an_owner_and_reject_nonsense(pool, monkeypatch):
+    from fastapi import HTTPException
+
+    from app import canvas, main
+    c = await canvas.ensure("utama")
+    dev = {"name": "HP"}
+    made = await main.canvases_add_object(c["id"], main.ObjectIn(props={"type": "text", "text": "Halo", "bold": True}, x=5, z=6), device=dev)
+    assert made["props"]["bold"] is True and made["w"] == 240
+    with pytest.raises(HTTPException) as e:
+        await main.canvases_add_object(c["id"], main.ObjectIn(props={"type": "note", "color": "<script>"}), device=dev)
+    assert e.value.status_code == 422
+    await main.canvases_layout(c["id"], main.LayoutIn(items=[main.LayoutItem(id=made["id"], x=50, z=60)], note="uji"), device=dev)
+    moved = {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}[made["id"]]
+    assert (moved["x"], moved["z"]) == (50, 60)
+    with pytest.raises(HTTPException):
+        await main.canvases_layout(c["id"], main.LayoutIn(items=[main.LayoutItem(id=987654321, x=1)]), device=dev)

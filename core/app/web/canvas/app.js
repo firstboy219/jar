@@ -1,24 +1,23 @@
-// JARVIS — the 3D canvas: the owner's workspace as a galaxy (Blueprint v4 Fase 4, ADR-049).
-// One galaxy per context (Utama, each project, each company). Cards are references to real things (tasks, documents,
-// what JARVIS showed, memories, company data); this page only lays them out in space. It can fly, select, place, move,
-// link and take cards off the canvas — it never approves, deletes data, sends or pays.
-import * as THREE from './vendor/three.module.min.js';
+// JARVIS — the board (Blueprint v4 Fase 4 → 11, ADR-049/055): the owner's workspace as a 2D infinite paper like Miro / Figma.
+// Boards: Utama, each project, each company. Cards are references to real things (tasks, documents, what JARVIS showed, memories, company
+// data) plus the owner's own notes, text, shapes and frames; this page lays them out. It can select, place, move, resize, link and take
+// cards off the board — it never approves, deletes data, sends or pays.
 import { createTakeover } from './takeover.js';
-import { PANELS, ago, parseFrameHeader, cardScale, clampPhi, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, orthoHeight, shortestAngle, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
-import { initCad } from './cad.js';
+import { PANELS, ago, parseFrameHeader, contextLabel, frameNeedsFetch, shouldFollow, takeAppParams } from './lib.js';
+import { createBoard } from './board.js';
+import { createChrome } from './chrome.js';
 import { initDock } from './dock.js';
 import { createMeetingCard, createPlayerCard } from './deskcards.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const small = window.matchMedia('(max-width: 700px)').matches;
+const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { /* private mode */ } return null; };
 
 // Opened by the Android app as "#t=<device token>&app=1": take the token out of the address at once (never sent to a server).
 const fromApp = takeAppParams(location.hash);
 if (fromApp.embedded || fromApp.token) history.replaceState(null, '', location.pathname + location.search + fromApp.rest);
 if (fromApp.embedded) document.documentElement.classList.add('in-app');
 
-// ---------- API (device token from pairing with the admin password; kept only in this browser) ----------
 const api = {
   get token() { try { return localStorage.getItem('jarvis_canvas_token') || ''; } catch { return ''; } },
   set token(v) { try { v ? localStorage.setItem('jarvis_canvas_token', v) : localStorage.removeItem('jarvis_canvas_token'); } catch { /* private mode */ } },
@@ -27,7 +26,7 @@ const api = {
       body: body ? JSON.stringify(body) : undefined });
     if (r.status === 401) { showLogin(); throw new Error('perlu masuk'); }
     const data = r.headers.get('content-type')?.includes('json') ? await r.json() : null;
-    if (!r.ok) throw new Error((data && data.detail) || `HTTP ${r.status}`);
+    if (!r.ok) throw new Error((data && (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))) || `HTTP ${r.status}`);
     return data;
   },
 };
@@ -38,17 +37,14 @@ function toast(text, bad = false) {
   setTimeout(() => t.remove(), 4200);
 }
 
-function showLogin() {
-  $('#login').hidden = false;
-  $('#password').focus();
-}
+function showLogin() { $('#login').hidden = false; $('#password').focus(); }
 
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('#login-error').textContent = '';
   try {
     const r = await fetch('/api/v1/devices/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: $('#password').value, device_name: 'Kanvas 3D (web)' }) });
+      body: JSON.stringify({ password: $('#password').value, device_name: 'Papan (web)' }) });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || 'gagal');
     api.token = d.token;
@@ -58,217 +54,37 @@ $('#login-form').addEventListener('submit', async (e) => {
   } catch (err) { $('#login-error').textContent = err.message; }
 });
 
-// ---------- scene ----------
-const renderer = new THREE.WebGLRenderer({ antialias: !small, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, small ? 1.5 : 2));
-renderer.setClearColor(0x02030a);
-$('#space').append(renderer.domElement);
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x02030a, 0.000035);
-$('#admin').href = location.origin.replace('//vis1.', '//jar1.');   // the admin page stays the control point; the desk links to it
-let cad = null;   // the drafting toolkit (cad.js), created at the end of this file
-const perspCam = new THREE.PerspectiveCamera(60, 1, 1, 80000);
-const orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -40000, 80000);   // same picture as the perspective one at the target's depth
-let camera = perspCam;
-let projection = 'persp';
+$('#admin').href = location.origin.replace('//vis1.', '//jar1.');   // the admin page stays the control point; the board links to it
 
-function glowTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,0)') {
-  const c = document.createElement('canvas'); c.width = c.height = 64;
-  const g = c.getContext('2d'); const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  grd.addColorStop(0, inner); grd.addColorStop(0.25, 'rgba(255,255,255,0.55)'); grd.addColorStop(1, outer);
-  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
-}
-const GLOW = glowTexture();
+// ---------- the board ----------
+let contexts = [], current = null, lastFocus = null, follow = LS('jarvis_canvas_follow') !== 'off', lastTouch = performance.now();
+for (const t of ['pointerdown', 'wheel', 'keydown']) addEventListener(t, () => { lastTouch = performance.now(); }, true);
+const liveByRef = new Map();      // ref → {st, shownSeq, fetching}
+const seenStations = new Set();
+const STATUS_TEXT = { queued: 'menunggu giliran', running: 'bekerja', completed: 'selesai', failed: 'gagal', cancelled: 'dibatalkan', stopped: 'dihentikan' };
 
-const galaxyData = spiralGalaxy(small ? 14000 : 30000);
-const galaxyGeo = new THREE.BufferGeometry();
-galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyData.positions, 3));
-galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyData.colors, 3));
-const galaxy = new THREE.Points(galaxyGeo, new THREE.PointsMaterial({ size: 11, map: GLOW, vertexColors: true, transparent: true,
-  depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.95 }));
-scene.add(galaxy);
+// One refresh at a time: the poll and the board's own edits must not overlap and fight over the same card.
+let chain = Promise.resolve();
+const refresh = (force = false) => { chain = chain.then(() => doRefresh(force)).catch(() => {}); return chain; };
 
-const starsGeo = new THREE.BufferGeometry();
-starsGeo.setAttribute('position', new THREE.BufferAttribute(starField(small ? 3000 : 7000), 3));
-const starsPoints = new THREE.Points(starsGeo, new THREE.PointsMaterial({ size: 26, map: GLOW, color: 0xbfd7ff, transparent: true, depthWrite: false,
-  blending: THREE.AdditiveBlending, opacity: 0.7, fog: false }));
-scene.add(starsPoints);
-
-const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: 0xffc98a, transparent: true, opacity: 0.6, depthWrite: false, blending: THREE.AdditiveBlending }));
-core.scale.set(620, 620, 1);
-scene.add(core);
-
-const constellationGroup = new THREE.Group();
-scene.add(constellationGroup);
-const cardStarGeo = new THREE.BufferGeometry();
-const cardStars = new THREE.Points(cardStarGeo, new THREE.PointsMaterial({ size: 46, map: GLOW, vertexColors: true, transparent: true,
-  depthWrite: false, blending: THREE.AdditiveBlending }));
-scene.add(cardStars);
-const edgeGeo = new THREE.BufferGeometry();
-const layers = { hiddenKinds: new Set(), live: true, panels: true, edges: true, grid: false, galaxy: true, stars: true };
-const grid = new THREE.GridHelper(24000, 96, 0x2f6f9f, 0x173a55);
-grid.material.transparent = true; grid.material.opacity = 0.45; grid.visible = false;
-scene.add(grid);
-const edges = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({ color: 0x67e8f9, transparent: true, opacity: 0.45 }));
-scene.add(edges);
-
-// ---------- camera: orbit around a target that can go anywhere (the space is infinite) ----------
-const raycaster = new THREE.Raycaster();
-function ndc(x, y) { return new THREE.Vector2((x / innerWidth) * 2 - 1, -(y / innerHeight) * 2 + 1); }
-const view = { target: new THREE.Vector3(), r: 3600, theta: 0.6, phi: 0.95 };
-let flight = null;
-function placeCamera() {
-  const { target, r, theta, phi } = view;
-  camera.position.set(target.x + r * Math.sin(phi) * Math.sin(theta), target.y + r * Math.cos(phi), target.z + r * Math.sin(phi) * Math.cos(theta));
-  camera.lookAt(target);
-  if (projection === 'ortho') fitOrtho();
-  camera.updateMatrixWorld();
-}
-function fitOrtho() {
-  const h = orthoHeight(view.r, 60), w = h * (innerWidth / innerHeight);
-  orthoCam.left = -w / 2; orthoCam.right = w / 2; orthoCam.top = h / 2; orthoCam.bottom = -h / 2;
-  orthoCam.updateProjectionMatrix();
-}
-function setProjection(mode) {
-  projection = mode === 'ortho' ? 'ortho' : 'persp';
-  camera = projection === 'ortho' ? orthoCam : perspCam;
-  // an orthographic camera has no distance to shrink points by: give them a fixed size in pixels instead
-  for (const [mat, base, px] of [[galaxy.material, 11, 1.8], [starsPoints.material, 26, 1.4], [cardStars.material, 46, 7]]) {
-    mat.sizeAttenuation = projection !== 'ortho'; mat.size = projection === 'ortho' ? px : base; mat.needsUpdate = true;
-  }
-  placeCamera();
-}
-const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-/** Fly (or jump, with reduced motion) to a target / distance and, optionally, to an orbit angle (a standard view). */
-function flyView({ target, r, theta, phi, ms = 900 }) {
-  // what is not given stays what the flight in progress was heading for (so "front" then "zoom extents" does both)
-  const aim = flight ? { target: flight.to, r: flight.r1, theta: flight.th1, phi: flight.ph1 } : view;
-  const to = target ? new THREE.Vector3(target.x, target.y, target.z) : aim.target.clone();
-  const th1 = theta == null ? aim.theta : shortestAngle(view.theta, theta), ph1 = phi == null ? aim.phi : clampPhi(phi), r1 = r ?? aim.r;
-  if (reducedMotion) { flight = null; view.target.copy(to); view.r = r1; view.theta = th1; view.phi = ph1; return; }   // jump, no flight
-  flight = { from: view.target.clone(), to, r0: view.r, r1, th0: view.theta, th1, ph0: view.phi, ph1, t0: performance.now(), ms };
-}
-function flyTo(pos, r = 520, ms = 900) { flyView({ target: pos, r, ms }); }
-function home() { flyView({ target: { x: 0, y: 0, z: 0 }, r: small ? 4600 : 3600, phi: 0.95, ms: 1100 }); }
-function orbit(dx, dy) { view.theta -= dx * 0.005; view.phi = clampPhi(view.phi - dy * 0.005); }
-function pan(dx, dy) {
-  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
-  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
-  const k = view.r / 900;
-  view.target.addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
-}
-function dolly(f) { view.r = Math.min(Math.max(view.r * f, 60), 30000); }
-/** The point under the cursor on the plane through the target facing the camera (what the wheel zooms toward). */
-function pointOnTargetPlane(x, y) {
-  camera.updateMatrixWorld();
-  raycaster.setFromCamera(ndc(x, y), camera);
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), view.target);
-  return raycaster.ray.intersectPlane(plane, new THREE.Vector3());
-}
-/** Zoom toward the cursor like a drafting program: the point under the mouse stays under the mouse. */
-function zoomAt(f, x, y) {
-  const before = pointOnTargetPlane(x, y);
-  dolly(f); placeCamera();
-  const after = pointOnTargetPlane(x, y);
-  if (before && after) view.target.add(before.sub(after));
-}
-
-// ---------- state ----------
-const KIND_COLOR = {};
-let contexts = [], current = null, cards = new Map(), canvasEdges = [], selected = null, linkFrom = null, gestureMode = false;
-
-function hex(c) { return new THREE.Color(c); }
-
-function rebuildStars() {
-  const list = [...cards.values()].filter((c) => !layers.hiddenKinds.has(c.data.kind));
-  const pos = new Float32Array(list.length * 3), col = new Float32Array(list.length * 3);
-  list.forEach((c, i) => {
-    pos.set([c.data.x, c.data.y, c.data.z], i * 3);
-    const k = hex(KIND_COLOR[c.data.kind] || '#ffffff');
-    col.set([k.r, k.g, k.b], i * 3);
-  });
-  cardStarGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  cardStarGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  cardStarGeo.computeBoundingSphere();
-  const seg = [];
-  for (const e of canvasEdges) {
-    const a = cards.get(e.a), b = cards.get(e.b);
-    if (a && b && !layers.hiddenKinds.has(a.data.kind) && !layers.hiddenKinds.has(b.data.kind)) seg.push(a.data.x, a.data.y, a.data.z, b.data.x, b.data.y, b.data.z);
-  }
-  edgeGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(seg), 3));
-  edgeGeo.computeBoundingSphere();
-}
-
-let constellationList = [];
-function buildConstellations(list) {
-  constellationList = list;
-  constellationGroup.clear();
-  $('#labels').replaceChildren();
-  for (const c of list) {
-    KIND_COLOR[c.kind] = c.color;
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: hex(c.color), transparent: true, opacity: 0.55,
-      depthWrite: false, blending: THREE.AdditiveBlending }));
-    s.scale.set(300, 300, 1);
-    s.position.set(...c.center);
-    constellationGroup.add(s);
-    const label = el('div', 'constellation', c.title);
-    label.style.setProperty('--c', c.color);
-    label.dataset.x = c.center[0]; label.dataset.y = c.center[1]; label.dataset.z = c.center[2];
-    label.dataset.gesture = 'ok';
-    label.addEventListener('click', () => flyTo({ x: c.center[0], y: c.center[1], z: c.center[2] }, 900));
-    $('#labels').append(label);
-  }
-}
-
-function cardElement(d) {
-  const e = el('div', 'card');
-  e.dataset.id = d.id;
-  e.style.setProperty('--c', KIND_COLOR[d.kind] || '#fff');
-  fillCard(e, d);
-  e.addEventListener('pointerdown', (ev) => startCardDrag(ev, d.id));
-  e.addEventListener('dblclick', () => { const c = cards.get(d.id); flyTo(c.data, 420); });
-  $('#cards').append(e);
-  return e;
-}
-
-function fillCard(e, d) {
-  e.replaceChildren();
-  e.append(el('div', 'kind', `${d.kind}${d.subtitle ? ' · ' + d.subtitle : ''}`), el('div', 'title', d.title || '(tanpa judul)'));
-  if (d.snippet) e.append(el('div', 'snippet', d.snippet));
-  if (d.image) { const img = el('img'); img.src = d.image; img.loading = 'lazy'; img.alt = ''; e.append(img); }
-  const acts = el('div', 'actions');
-  const btn = (label, act, cls = '') => { const b = el('button', cls, label); b.dataset.act = act; if (act !== 'hide') b.dataset.gesture = 'ok'; b.addEventListener('click', (ev) => { ev.stopPropagation(); cardAction(d.id, act); }); acts.append(b); };
-  if (d.url) btn('Buka', 'open');
-  btn('Terbang ke', 'fly');
-  btn(linkFrom === d.id ? 'Batal hubung' : 'Hubungkan', 'link');
-  btn(d.pinned ? 'Lepas pin' : 'Pin', 'pin');
-  btn('Lepas dari kanvas', 'hide', 'danger');
-  e.append(acts);
-  e.classList.toggle('pinned', !!d.pinned);
-}
-
-async function cardAction(id, act) {
-  const c = cards.get(id);
-  if (!c) return;
-  try {
-    if (act === 'fly') flyTo(c.data, 420);
-    if (act === 'open') await openUrl(c.data.url);
-    if (act === 'pin') await api.req('PATCH', `/api/v1/canvas/cards/${id}`, { pinned: !c.data.pinned });
-    if (act === 'link') {
-      if (linkFrom === id) { linkFrom = null; toast('Batal menghubungkan.'); }
-      else if (linkFrom) { await api.req('POST', `/api/v1/canvases/${current.id}/edges`, { a: linkFrom, b: id }); linkFrom = null; toast('Dua kartu terhubung.'); }
-      else { linkFrom = id; toast('Pilih kartu kedua, lalu "Hubungkan".'); }
-      cards.forEach((x) => fillCard(x.el, x.data));
-    }
-    if (act === 'hide') {
-      if (gestureMode) return toast('Melepas kartu tidak bisa lewat gestur.', true);
-      if (!confirm('Lepas kartu ini dari kanvas? Isinya (tugas/dokumen/dll) tidak dihapus.')) return;
-      await api.req('DELETE', `/api/v1/canvas/cards/${id}`);
-    }
-    await refresh(true);
-  } catch (err) { toast(err.message, true); }
-}
+const board = createBoard({
+  stage: $('#stage'), api, toast, canvasId: () => current?.id, refresh, embedded: !!fromApp.embedded,
+  openUrl,
+  contextMenu: (m) => chrome.contextMenu(m),
+  decorate: (c) => { const l = liveByRef.get(c.data.ref); if (l) { c.live = l; renderLive(c, l); } },
+});
+const kindsFor = () => {
+  const count = {};
+  for (const c of board.cards.values()) count[c.data.kind] = (count[c.data.kind] || 0) + 1;
+  const known = board.zones.map((z) => ({ kind: z.kind, title: z.title, color: z.color, count: count[z.kind] || 0 }));
+  if (count.papan) known.push({ kind: 'papan', title: 'Catatan & bentuk', color: '#94a3b8', count: count.papan });
+  return known.filter((k) => k.count);
+};
+const chrome = createChrome({ board, api, toast, canvasId: () => current?.id, refresh, kindsFor,
+  fillFromLibrary: async () => { try { const r = await api.req('POST', `/api/v1/canvases/${current.id}/fill`); toast(r.added ? `${r.added} kartu dari Simpanan ditaruh.` : 'Semua isi Simpanan sudah ada di papan.'); await refresh(true); } catch (err) { toast(err.message, true); } },
+  openHistory: () => toggleHistory() });
+$('#tb-right').prepend(chrome.inspToggle);
+board.insets.top = 64; board.insets.left = 72;
 
 async function openUrl(url) {
   if (!url) return;
@@ -277,89 +93,107 @@ async function openUrl(url) {
   if (!r.ok) throw new Error(`tidak bisa membuka (${r.status})`);
   window.open(URL.createObjectURL(await r.blob()), '_blank', 'noopener');
 }
-
-function select(id) {
-  selected = id;
-  cards.forEach((c, k) => c.el.classList.toggle('selected', k === id));
-  cad?.onSelect(id);
-}
+addEventListener('board:open', (e) => openUrl(e.detail).catch((err) => toast(err.message, true)));
 
 // ---------- data ----------
 async function loadContexts() {
   contexts = await api.req('GET', '/api/v1/canvases');
   const pick = $('#galaxy');
-  pick.replaceChildren(...contexts.map((c) => { const o = el('option', null, `${contextLabel(c)} (${c.cards})`); o.value = c.context; return o; }));
-  const want = (() => { try { return localStorage.getItem('jarvis_canvas_context'); } catch { return null; } })();
+  pick.replaceChildren(...contexts.map((c) => { const o = el('option', null, `${contextLabel(c)} (${c.cards})`); o.value = c.context; return o; }), Object.assign(el('option', null, '＋ Papan baru…'), { value: '__new' }));
+  const want = LS('jarvis_canvas_context');
   pick.value = contexts.some((c) => c.context === want) ? want : 'utama';
   await openContext(pick.value);
 }
 
 async function openContext(context) {
   const c = await api.req('POST', '/api/v1/canvases', { context });
-  try { localStorage.setItem('jarvis_canvas_context', context); } catch { /* ignore */ }
+  LS('jarvis_canvas_context', context);
   current = { id: c.id, version: -1, context };
   liveVideo.watch(context);
-  cards.forEach((x) => x.el.remove());
-  cards = new Map();
-  selected = null; linkFrom = null;
+  board.setContent({ cards: [], edges: [], constellations: [] });
+  board.select([]);
   await refresh(true);
-  const link = /#kartu=(\d+)/.exec(location.hash);   // a link straight to one card (from JARVIS or the app)
-  const target = link && cards.get(Number(link[1]));
-  if (target) { view.r = 3600; flyTo(target.data, 420, 1600); select(target.data.id); } else home();
 }
 
-let lastFocus = null;
-async function refresh(force = false) {
+async function doRefresh(force) {
   if (!current) return;
   const d = await api.req('GET', `/api/v1/canvases/${current.id}${force ? '' : `?since=${current.version}`}`);
   if (d.unchanged) return;
-  if (current.version < 0) buildConstellations(d.constellations);
-  const before = [...cards.values()].map((c) => c.data);
-  const diff = diffCards(before, d.cards);
-  for (const c of diff.removed) { cards.get(c.id)?.el.remove(); cards.delete(c.id); }
-  for (const c of d.cards) {
-    const had = cards.get(c.id);
-    if (had) { had.data = c; fillCard(had.el, c); } else cards.set(c.id, { data: c, el: cardElement(c) });
-  }
-  canvasEdges = d.edges;
+  const first = current.version < 0, before = board.cards.size;
+  const diff = board.setContent(d);
   current.version = d.version;
   $('#title').textContent = d.title;
-  $('#count').textContent = `${d.cards.length} kartu`;
-  rebuildStars();
-  if (d.focus && d.focus !== lastFocus && cards.get(d.focus)) { flyTo(cards.get(d.focus).data, 420); select(d.focus); }
+  $('#count').textContent = `${d.cards.length} objek`;
+  if (first) {
+    const link = /#kartu=(\d+)/.exec(location.hash);   // a link straight to one card (from JARVIS or the app)
+    const saved = (() => { try { return JSON.parse(LS(`jarvis_board_view_${current.context}`) || 'null'); } catch { return null; } })();
+    if (link && board.cards.get(Number(link[1]))) { board.flyToCard(Number(link[1]), 1, 0); board.select([Number(link[1])]); }
+    else if (saved && Number.isFinite(saved.k)) board.setView(saved);
+    else board.fitAll(0);
+  }
+  if (d.focus && d.focus !== lastFocus && board.cards.get(d.focus)) { board.flyToCard(d.focus, 1, 800); board.select([d.focus]); }
   lastFocus = d.focus;
-  if (diff.added.length && before.length) toast(`${diff.added.length} kartu baru dari JARVIS.`);
+  const fresh = diff.added.filter((c) => !c.ref.startsWith('obj:'));
+  if (fresh.length && before) toast(`${fresh.length} kartu baru dari JARVIS.`);
 }
-
 setInterval(() => { if (!document.hidden && api.token) refresh().catch(() => {}); }, 3000);
 
-// ---------- the desk: what JARVIS is doing, live (ADR-051) ----------
-// Every worker task is a station on its card: what it is doing step by step and, when it browses, the page as it is right now
-// (screenshots of the shared browser, about one a second). n8n, the owner's latest requests and the storage hang around the core.
-let follow = (() => { try { return localStorage.getItem('jarvis_canvas_follow') !== 'off'; } catch { return true; } })();
-let lastTouch = performance.now();
-for (const t of ['pointerdown', 'wheel', 'keydown']) addEventListener(t, () => { lastTouch = performance.now(); }, true);
-const seenStations = new Set();
-const liveByRef = new Map();      // ref → {st, shownSeq, fetching}
-const deskPanels = {};            // name → {el, ...anchor}
-const STATUS_TEXT = { queued: 'menunggu giliran', running: 'bekerja', completed: 'selesai', failed: 'gagal', cancelled: 'dibatalkan', stopped: 'dihentikan' };
+let saveTimer = null;
+board.on('view', (v) => { clearTimeout(saveTimer); saveTimer = setTimeout(() => { if (current && current.version >= 0) LS(`jarvis_board_view_${current.context}`, JSON.stringify({ cx: Math.round(v.cx), cy: Math.round(v.cy), k: +v.k.toFixed(3) })); }, 600); });
 
+// ---------- top bar ----------
+$('#galaxy').addEventListener('change', async (e) => {
+  if (e.target.value !== '__new') return openContext(e.target.value).catch((err) => toast(err.message, true));
+  const name = prompt('Nama papan baru (proyek):');
+  e.target.value = current?.context || 'utama';
+  if (!name) return;
+  try { const c = await api.req('POST', '/api/v1/canvases', { context: `project:${name}`, title: name }); await loadContexts(); $('#galaxy').value = c.context; await openContext(c.context); }
+  catch (err) { toast(err.message, true); }
+});
+$('#search').addEventListener('click', () => chrome.openPalette('find'));
+$('#logout').addEventListener('click', () => { api.token = ''; location.reload(); });
 function setFollow(on) {
-  follow = on;
-  try { localStorage.setItem('jarvis_canvas_follow', on ? 'on' : 'off'); } catch { /* private mode */ }
-  $('#follow').textContent = on ? 'Ikuti: nyala' : 'Ikuti: mati';
+  follow = on; LS('jarvis_canvas_follow', on ? 'on' : 'off');
+  $('#follow').classList.toggle('on', on); $('#follow').title = on ? 'Kamera ikut ke tugas baru yang kamu minta (nyala)' : 'Kamera tidak ikut (mati)';
 }
 $('#follow').addEventListener('click', () => setFollow(!follow));
 setFollow(follow);
 
-function cardOfRef(ref) { for (const c of cards.values()) if (c.data.ref === ref) return c; return null; }
+function toggleHistory() {
+  const panel = $('#history-panel');
+  panel.hidden = !panel.hidden;
+  if (panel.hidden) return;
+  api.req('GET', `/api/v1/canvases/${current.id}/versions`).then((versions) => {
+    const close = el('button', 'x', '×'); close.addEventListener('click', () => { panel.hidden = true; });
+    panel.replaceChildren(el('h3', null, 'Riwayat tata letak'), close, ...versions.map((v) => {
+      const row = el('div', 'version');
+      row.append(el('span', null, `v${v.version} · ${new Date(v.at).toLocaleString('id-ID')} · ${v.change} · ${v.cards} kartu`));
+      const b = el('button', null, 'Pulihkan');
+      b.addEventListener('click', async () => {
+        if (!confirm(`Pulihkan tata letak versi ${v.version}?`)) return;
+        try { const r = await api.req('POST', `/api/v1/canvases/${current.id}/restore`, { version: v.version }); toast(`Dipulihkan: ${r.cards} kartu${r.dropped ? `, ${r.dropped} sudah tidak ada` : ''}.`); await refresh(true); }
+        catch (err) { toast(err.message, true); }
+      });
+      row.append(b);
+      return row;
+    }));
+  }).catch((err) => toast(err.message, true));
+}
+$('#history').addEventListener('click', toggleHistory);
+
+// ---------- the desk: what JARVIS is doing, live (ADR-051) ----------
+// Every worker task is a station on its card: what it is doing step by step and, when it browses, the page as it is right now.
+// n8n, the owner's latest requests, the storage, the player and the meeting recorder are fixed panels around the middle of the board.
+const deskPanels = {};
+
+function cardOfRef(ref) { for (const c of board.cards.values()) if (c.data.ref === ref) return c; return null; }
 
 function renderLive(card, l) {
   const st = l.st;
   card.el.classList.add('live');
-  let box = card.el.querySelector('.livebox');
+  let box = card.el.querySelector(':scope > .livebox');
   if (!box) {
-    box = el('div', 'livebox');
+    box = el('div', 'livebox nodrag');
     const help = el('div', 'helpline'); help.hidden = true;
     const grab = el('button', 'takebtn', '🖱 Ambil alih');
     grab.title = 'Kendalikan browser pekerja ini sendiri — untuk captcha atau login';
@@ -438,7 +272,7 @@ const liveVideo = (() => {
       if (takeover.task() === h.task) takeover.frame(h.task, frame);
       l.last = frame; l.shownSeq = h.seq; l.liveAt = performance.now();
       const card = cardOfRef(l.st.ref), cv = card?.el.querySelector('.livebox canvas');
-      if (cv && !l.drawing) { l.drawing = true; drawBitmap(cv, frame).catch(() => {}).finally(() => { l.drawing = false; }); }
+      if (cv && !l.drawing && !card.el.classList.contains('off')) { l.drawing = true; drawBitmap(cv, frame).catch(() => {}).finally(() => { l.drawing = false; }); }
     };
     ws.onclose = () => { if (ws) ws.ready = false; setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000)); };
     ws.onerror = () => ws.close();
@@ -458,7 +292,8 @@ function clearLive(ref) {
   if (card) {
     card.live = null;
     card.el.classList.remove('live');
-    card.el.querySelector('.livebox')?.remove();
+    card.el.querySelector(':scope > .livebox')?.remove();
+    card.autoH = null;
   }
   liveByRef.delete(ref);
 }
@@ -467,7 +302,7 @@ function panelFor(name) {
   if (deskPanels[name]) return deskPanels[name];
   const e = el('div', 'card panel');
   e.style.setProperty('--c', '#67e8f9');
-  $('#cards').append(e);
+  board.setWidget(name, e, PANELS[name]);
   return (deskPanels[name] = { el: e, ...PANELS[name] });
 }
 
@@ -476,7 +311,7 @@ let dockApi = null, playerCard = null, meetingCard = null;
 const arrived = {};   // card → the key of what it last showed (undefined until the first poll after loading)
 
 function renderFeatureCards(d) {
-  if (!('player' in d)) return;   // a company galaxy has neither
+  if (!('player' in d)) return;   // a company board has neither
   const pp = panelFor('player'), mp = panelFor('meeting');
   playerCard ||= createPlayerCard({ box: pp.el, api, send: (o) => dockApi?.raw(o), toast });
   meetingCard ||= createMeetingCard({ box: mp.el, api, toast, embedded: !!fromApp.embedded });
@@ -486,7 +321,7 @@ function renderFeatureCards(d) {
   const arrive = (name, key, pn) => {
     const first = arrived[name] === undefined, fresh = key != null && arrived[name] !== key;
     arrived[name] = key;
-    if (fresh && !first && follow && performance.now() - lastTouch > 2500) flyTo({ x: pn.x, y: pn.y, z: pn.z }, 560, 1400);
+    if (fresh && !first && follow && performance.now() - lastTouch > 2500) board.focusRect({ x: pn.x, y: pn.y, w: pn.w, h: 320 }, 1, 900);
   };
   arrive('player', d.player?.id ?? null, pp);
   arrive('meeting', m.show && ['waiting', 'recording'].includes(d.meeting?.state) ? m.key : null, mp);
@@ -494,7 +329,7 @@ function renderFeatureCards(d) {
 
 function renderPanels(d) {
   renderFeatureCards(d);
-  const show = (name, on) => { if (on) panelFor(name); else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
+  const show = (name, on) => { if (on) panelFor(name).el.hidden = false; else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
   show('prompts', !!d.prompts); show('n8n', !!d.n8n); show('storage', !!d.storage);
   if (d.prompts) {
     const e = panelFor('prompts').el;
@@ -515,7 +350,7 @@ function renderPanels(d) {
     for (const [k, n] of Object.entries(d.storage.counts)) chips.append(el('span', 'chip', `${k} ${n}`));
     e.append(chips);
     for (const i of d.storage.latest) e.append(el('div', 'deskrow', `${i.kept ? '⭐ ' : ''}${i.title} · ${i.kind}`));
-    const b = el('button', null, 'Taruh semua di galaksi ini'); b.dataset.gesture = 'ok';
+    const b = el('button', null, 'Taruh semua di papan ini'); b.dataset.gesture = 'ok';
     b.addEventListener('click', async (ev) => { ev.stopPropagation(); try { const r = await api.req('POST', `/api/v1/canvases/${current.id}/fill`); toast(`${r.added} kartu dari Simpanan ditaruh.`); await refresh(true); } catch (err) { toast(err.message, true); } });
     e.append(b);
   }
@@ -540,7 +375,7 @@ async function pollLive() {
       const first = !seenStations.has(st.task_id);
       seenStations.add(st.task_id);
       if (first && shouldFollow({ follow, idleMs: performance.now() - lastTouch, kind: st.kind, status: st.status, seen: false })) {
-        flyTo(card.data, 620, 1400);
+        board.flyToCard(card.data.id, 0.9, 1000);
         toast(`Jarvis mengerjakan: ${st.title}`);
       }
     }
@@ -549,254 +384,39 @@ async function pollLive() {
 }
 setInterval(pollLive, 1300);
 
-// ---------- pointer: orbit / pan / zoom, and dragging cards through space ----------
-const pointers = new Map();
-let gesture = null;   // {mode: 'orbit'|'pan'|'card', ...}
-function startCardDrag(ev, id) {
-  if (ev.target.closest('button')) return;
-  ev.stopPropagation();
-  if (cad?.onCardPick(id)) return;   // measure / link tools: a click picks the card, it does not drag it
-  const c = cards.get(id);
-  const normal = camera.getWorldDirection(new THREE.Vector3());
-  gesture = { mode: 'card', id, plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3(c.data.x, c.data.y, c.data.z)),
-    sx: ev.clientX, sy: ev.clientY, moved: false };
-  if (ev.pointerId != null) ev.target.setPointerCapture?.(ev.pointerId);
-}
-
-function moveCard(x, y) {
-  const c = cards.get(gesture.id);
-  raycaster.setFromCamera(ndc(x, y), camera);
-  const hit = raycaster.ray.intersectPlane(gesture.plane, new THREE.Vector3());
-  if (!hit) return;
-  if (Math.hypot(x - gesture.sx, y - gesture.sy) > 6) gesture.moved = true;
-  if (gesture.moved) { const p = cad ? cad.snapPoint(hit) : hit; c.data = { ...c.data, x: p.x, y: p.y, z: p.z }; rebuildStars(); }
-}
-
-async function endCardDrag() {
-  const g = gesture; gesture = null;
-  const c = cards.get(g.id);
-  if (!g.moved) return select(selected === g.id ? null : g.id);
-  try { await api.req('PATCH', `/api/v1/canvas/cards/${g.id}`, { x: c.data.x, y: c.data.y, z: c.data.z }); await refresh(true); }
-  catch (err) { toast(err.message, true); }
-}
-
-const surface = renderer.domElement;
-/** Mouse like a drafting program: wheel zooms, middle button pans, Shift+middle orbits; the left button follows the active tool. */
-function dragMode(e) {
-  if (e.pointerType === 'touch') return cad?.tool === 'pan' ? 'pan' : 'orbit';
-  if (e.button === 1) return e.shiftKey ? 'orbit' : 'pan';
-  if (e.button === 2 || e.shiftKey) return 'pan';
-  return { orbit: 'orbit', pan: 'pan', zoom: 'zoom' }[cad?.tool || 'orbit'] || 'none';
-}
-surface.addEventListener('pointerdown', (e) => {
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  surface.setPointerCapture(e.pointerId);
-  if (e.button === 1) e.preventDefault();
-  if (pointers.size === 1) gesture = { mode: dragMode(e), x: e.clientX, y: e.clientY };
-  else gesture = { mode: 'pinch', d: pinchDistance(), c: pinchCenter() };
-});
-window.addEventListener('pointermove', (e) => {
-  if (gesture?.mode === 'card') return moveCard(e.clientX, e.clientY);
-  if (!pointers.has(e.pointerId)) return;
-  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (!gesture) return;
-  if (gesture.mode === 'pinch' && pointers.size === 2) {
-    const d = pinchDistance(), c = pinchCenter();
-    dolly(gesture.d / d); pan(c.x - gesture.c.x, c.y - gesture.c.y);
-    gesture.d = d; gesture.c = c; return;
-  }
-  const dx = e.clientX - gesture.x, dy = e.clientY - gesture.y;
-  gesture.x = e.clientX; gesture.y = e.clientY;
-  if (gesture.mode === 'orbit') orbit(dx, dy); else if (gesture.mode === 'pan') pan(dx, dy); else if (gesture.mode === 'zoom') dolly(Math.exp(dy * 0.01));
-});
-window.addEventListener('pointerup', (e) => {
-  pointers.delete(e.pointerId);
-  if (gesture?.mode === 'card') return void endCardDrag();
-  if (pointers.size === 0) gesture = null;
-});
-surface.addEventListener('contextmenu', (e) => e.preventDefault());
-surface.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(e.deltaY * 0.0012), e.clientX, e.clientY); }, { passive: false });
-surface.addEventListener('dblclick', () => select(null));
-surface.addEventListener('pointermove', (e) => cad?.onPointer(e.clientX, e.clientY));
-function pinchDistance() { const [a, b] = [...pointers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; }
-function pinchCenter() { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
-
-const keys = new Set();
-window.addEventListener('keydown', (e) => { if (e.target.closest('input, select')) return; keys.add(e.key.toLowerCase()); if (e.key === 'Home') home(); });
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
-function flyKeys(dt) {
-  const f = camera.getWorldDirection(new THREE.Vector3());
-  const right = new THREE.Vector3().crossVectors(f, camera.up).normalize();
-  const v = view.r * 0.0009 * dt;
-  if (keys.has('w')) view.target.addScaledVector(f, v);
-  if (keys.has('s')) view.target.addScaledVector(f, -v);
-  if (keys.has('a')) view.target.addScaledVector(right, -v);
-  if (keys.has('d')) view.target.addScaledVector(right, v);
-  if (keys.has('q')) view.target.y -= v;
-  if (keys.has('e')) view.target.y += v;
-  if (keys.has('arrowleft')) orbit(-dt * 0.4, 0);
-  if (keys.has('arrowright')) orbit(dt * 0.4, 0);
-  if (keys.has('arrowup')) dolly(1 - dt * 0.0012);
-  if (keys.has('arrowdown')) dolly(1 + dt * 0.0012);
-}
-
-// ---------- toolbar ----------
-$('#galaxy').addEventListener('change', (e) => openContext(e.target.value).catch((err) => toast(err.message, true)));
-$('#home').addEventListener('click', home);
-$('#new-project').addEventListener('click', async () => {
-  const name = prompt('Nama proyek (galaksi baru):');
-  if (!name) return;
-  try { const c = await api.req('POST', '/api/v1/canvases', { context: `project:${name}`, title: name }); await loadContexts(); $('#galaxy').value = c.context; await openContext(c.context); }
-  catch (err) { toast(err.message, true); }
-});
-$('#find').addEventListener('input', (e) => {
-  const found = matchCards([...cards.values()].map((c) => c.data), e.target.value);
-  const list = $('#find-results');
-  list.replaceChildren(...found.slice(0, 8).map((c) => { const b = el('button', null, c.title); b.dataset.gesture = 'ok'; b.addEventListener('click', () => { flyTo(c, 420); select(c.id); list.replaceChildren(); }); return b; }));
-});
-$('#add').addEventListener('click', () => { $('#add-panel').hidden = !$('#add-panel').hidden; if (!$('#add-panel').hidden) $('#add-q').focus(); });
-$('#add-q').addEventListener('input', debounce(async (e) => {
-  if (!current) return;
-  const items = await api.req('GET', `/api/v1/canvases/${current.id}/search?q=${encodeURIComponent(e.target.value)}`).catch(() => []);
-  $('#add-results').replaceChildren(...items.map((it) => {
-    const b = el('button', null, `${it.kind} · ${it.title}`);
-    b.addEventListener('click', async () => {
-      try { const n = await api.req('POST', `/api/v1/canvases/${current.id}/cards`, { ref: it.ref }); await refresh(true); const c = cards.get(n.id); if (c) { flyTo(c.data, 420); select(n.id); } }
-      catch (err) { toast(err.message, true); }
-    });
-    return b;
-  }));
-}, 300));
-$('#history').addEventListener('click', async () => {
-  const panel = $('#history-panel');
-  panel.hidden = !panel.hidden;
-  if (panel.hidden) return;
-  const versions = await api.req('GET', `/api/v1/canvases/${current.id}/versions`);
-  panel.replaceChildren(el('h3', null, 'Riwayat tata letak'), ...versions.map((v) => {
-    const row = el('div', 'version');
-    row.append(el('span', null, `v${v.version} · ${new Date(v.at).toLocaleString('id-ID')} · ${v.change} · ${v.cards} kartu`));
-    const b = el('button', null, 'Pulihkan');
-    b.addEventListener('click', async () => {
-      if (!confirm(`Pulihkan tata letak versi ${v.version}?`)) return;
-      try { const r = await api.req('POST', `/api/v1/canvases/${current.id}/restore`, { version: v.version }); toast(`Dipulihkan: ${r.cards} kartu${r.dropped ? `, ${r.dropped} sudah tidak ada` : ''}.`); await refresh(true); }
-      catch (err) { toast(err.message, true); }
-    });
-    row.append(b);
-    return row;
-  }));
-});
-$('#logout').addEventListener('click', () => { api.token = ''; location.reload(); });
-function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
-
 // ---------- hand gestures (on-device; navigation only) ----------
 let tracker = null;
 $('#gesture').addEventListener('click', async () => {
-  if (tracker) { tracker.stop(); tracker = null; gestureMode = false; document.body.classList.remove('gesture-on'); $('#gesture').textContent = 'Gestur'; return; }
+  if (tracker) { tracker.stop(); tracker = null; document.body.classList.remove('gesture-on'); $('#gesture').classList.remove('on'); return; }
   try {
-    $('#gesture').textContent = 'Memuat…';
+    $('#gesture').classList.add('busy');
     const { startHandTracking } = await import('./gestures.js');
     tracker = await startHandTracking($('#camera'), onGesture, (s, m) => {
       $('#gesture-hud').textContent = `${m.active ? (m.paused ? 'JEDA (tahan telapak 1 dtk)' : 'AKTIF') : 'tahan telapak terbuka 1 dtk untuk mulai'} · ${s.fps.toFixed(0)} fps · ${s.latencyMs.toFixed(0)} ms`;
     });
-    gestureMode = true;
-    document.body.classList.add('gesture-on');
-    $('#gesture').textContent = 'Matikan gestur';
-  } catch (err) { $('#gesture').textContent = 'Gestur'; toast(`Gestur tidak bisa dimulai: ${err.message}`, true); }
+    document.body.classList.add('gesture-on'); $('#gesture').classList.add('on');
+  } catch (err) { toast(`Gestur tidak bisa dimulai: ${err.message}`, true); } finally { $('#gesture').classList.remove('busy'); }
 });
 
 const cursor = $('#cursor');
-let gDrag = null;
+let gDown = false, gPos = { x: 0, y: 0 };
 function onGesture(e) {
   const x = (e.x ?? 0) * innerWidth, y = (e.y ?? 0) * innerHeight;
-  if (e.type === 'cursor') { cursor.hidden = false; cursor.style.transform = `translate(${x}px, ${y}px)`; if (gDrag?.mode === 'card') moveCard(x, y); }
-  if (e.type === 'press') {
-    const target = document.elementFromPoint(x, y);
-    const card = target?.closest('.card');
-    if (card && !target.closest('button')) { startCardDrag({ target: card, clientX: x, clientY: y, stopPropagation() {} }, Number(card.dataset.id)); gDrag = { mode: 'card' }; }
-    else gDrag = { mode: 'orbit', x, y };
-    cursor.classList.add('down');
-  }
-  if (e.type === 'drag' && gDrag?.mode === 'orbit') { orbit(x - gDrag.x, y - gDrag.y); gDrag.x = x; gDrag.y = y; }
-  if (e.type === 'release') { if (gDrag?.mode === 'card' && gesture?.mode === 'card') endCardDrag(); gDrag = null; cursor.classList.remove('down'); }
+  if (e.type === 'cursor') { cursor.hidden = false; cursor.style.transform = `translate(${x}px, ${y}px)`; gPos = { x, y }; if (gDown) board.pointerEvent('pointermove', x, y); }
+  if (e.type === 'press') { gDown = true; cursor.classList.add('down'); board.pointerEvent('pointerdown', x, y); }
+  if (e.type === 'release') { if (gDown) board.pointerEvent('pointerup', gPos.x, gPos.y); gDown = false; cursor.classList.remove('down'); }
   if (e.type === 'click') {
     const target = document.elementFromPoint(x, y);
     const ok = target?.closest('[data-gesture="ok"]');   // only navigation buttons; never "Lepas"/confirm dialogs
     if (ok) ok.click();
   }
-  if (e.type === 'zoom') dolly(1 / Math.min(Math.max(e.factor, 0.8), 1.25));
-  if (e.type === 'scroll') pan(e.dx * innerWidth, e.dy * innerHeight);
-  if (e.type === 'pause' || (e.type === 'lock' && !e.active)) { cursor.hidden = true; gDrag = null; }
+  if (e.type === 'zoom') board.zoomBy(Math.min(Math.max(e.factor, 0.8), 1.25), x, y);
+  if (e.type === 'scroll') board.panBy(-e.dx * innerWidth, -e.dy * innerHeight);
+  if (e.type === 'pause' || (e.type === 'lock' && !e.active)) { cursor.hidden = true; gDown = false; }
 }
 
-// ---------- frame ----------
-const tmp = new THREE.Vector3();
-let lastT = performance.now();
-function frame(t) {
-  const dt = Math.min(t - lastT, 50); lastT = t;
-  if (flight) {
-    const k = ease((t - flight.t0) / flight.ms);
-    view.target.lerpVectors(flight.from, flight.to, k);
-    view.r = flight.r0 + (flight.r1 - flight.r0) * k;
-    view.theta = flight.th0 + (flight.th1 - flight.th0) * k;
-    view.phi = flight.ph0 + (flight.ph1 - flight.ph0) * k;
-    if (k >= 1) flight = null;
-  }
-  flyKeys(dt);
-  galaxy.rotation.y += dt * 0.000004;
-  galaxy.visible = layers.galaxy; cardStars.visible = layers.stars; edges.visible = layers.edges; grid.visible = layers.grid;
-  placeCamera();
-  renderer.render(scene, camera);
-  cad?.frame(dt);
-  // HTML cards follow their 3D positions; the 140 nearest are drawn as cards, the rest are stars
-  const list = [...cards.values()].map((c) => {
-    tmp.set(c.data.x, c.data.y, c.data.z);
-    return { c, d: projection === 'ortho' ? view.r : camera.position.distanceTo(tmp), p: tmp.clone().project(camera) };
-  }).sort((a, b) => a.d - b.d);
-  list.forEach(({ c, d, p }, i) => {
-    const s = cardScale(d, c.live ? Math.max(c.data.size, 4.2) : c.data.size);
-    const visible = !layers.hiddenKinds.has(c.data.kind) && (i < 140 || c.live) && s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
-    c.el.hidden = !visible;
-    if (!visible) return;
-    const x = (p.x + 1) / 2 * innerWidth, y = (1 - p.y) / 2 * innerHeight;
-    c.el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px) scale(${s})`;
-    c.el.style.zIndex = String(10000 - Math.round(d));
-    c.el.style.opacity = String(Math.min(1, s * 1.6));
-  });
-  for (const pn of Object.values(deskPanels)) {   // the fixed desk panels around the core
-    if (!layers.panels) { pn.el.style.visibility = 'hidden'; continue; }
-    if (pn.el.hidden && !pn.hiddenByView) continue;
-    tmp.set(pn.x, pn.y, pn.z);
-    const d = projection === 'ortho' ? view.r : camera.position.distanceTo(tmp), p = tmp.clone().project(camera), s = cardScale(d, pn.size);
-    const vis = s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
-    pn.hiddenByView = !vis; pn.el.style.visibility = vis ? 'visible' : 'hidden';
-    if (!vis) continue;
-    pn.el.style.transform = `translate(-50%, -50%) translate(${(p.x + 1) / 2 * innerWidth}px, ${(1 - p.y) / 2 * innerHeight}px) scale(${s})`;
-    pn.el.style.zIndex = String(10000 - Math.round(d));
-    pn.el.style.opacity = String(Math.min(1, s * 1.6));
-  }
-  for (const label of $('#labels').children) {
-    tmp.set(+label.dataset.x, +label.dataset.y + 230, +label.dataset.z).project(camera);
-    const vis = tmp.z < 1 && Math.abs(tmp.x) < 1.1 && Math.abs(tmp.y) < 1.1;
-    label.hidden = !vis;
-    if (vis) label.style.transform = `translate(-50%, -50%) translate(${(tmp.x + 1) / 2 * innerWidth}px, ${(1 - tmp.y) / 2 * innerHeight}px)`;
-  }
-  $('#hud').textContent = `jarak ${Math.round(view.r)} · pusat ${Math.round(view.target.x)}, ${Math.round(view.target.y)}, ${Math.round(view.target.z)}`;
-  requestAnimationFrame(frame);
-}
-
-function resize() { renderer.setSize(innerWidth, innerHeight); perspCam.aspect = innerWidth / innerHeight; perspCam.updateProjectionMatrix(); if (projection === 'ortho') fitOrtho(); }
-window.addEventListener('resize', resize);
-resize();
-placeCamera();
-requestAnimationFrame(frame);
+// ---------- the docks (ADR-052) ----------
+dockApi = initDock({ api, toast, embedded: !!fromApp.embedded });
+addEventListener('keydown', (e) => { if (e.key === 'Home' && !e.target.closest('input, textarea, select')) board.fitAll(480); });
 if (fromApp.token) api.token = fromApp.token;
 if (api.token) loadContexts().catch((err) => toast(err.message, true)); else showLogin();
-
-// ---------- the drafting toolkit and the docks (ADR-052) ----------
-cad = initCad({
-  THREE, view, layers, grid, scene, KIND_COLOR,
-  camera: () => camera, projection: () => projection, setProjection, flyView, flyTo, home, placeCamera, raycaster, ndc,
-  cards: () => cards, selected: () => selected, select, current: () => current, api, toast, refresh, rebuildStars, linkFrom: () => linkFrom,
-  contexts: () => constellationList, openFind: (q) => { const f = $('#find'); f.value = q; f.dispatchEvent(new Event('input')); f.focus(); },
-});
-dockApi = initDock({ api, toast, embedded: !!fromApp.embedded });

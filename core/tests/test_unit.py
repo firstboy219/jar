@@ -1101,7 +1101,7 @@ def test_canvas_geometry_refs_contexts_and_isolation_rule():
     centers = {k: canvas.constellation_center(k) for k in canvas.PERSONAL_KINDS}
     assert len(set(centers.values())) == len(centers)                               # every constellation has its own place
     assert len({canvas.constellation_center(k, True) for k in canvas.COMPANY_KINDS}) == len(canvas.COMPANY_KINDS)
-    assert set(canvas.PERSONAL_KINDS + canvas.COMPANY_KINDS) == set(canvas.KINDS) == set(canvas.KIND_OF.values())
+    assert set(canvas.PERSONAL_KINDS + canvas.COMPANY_KINDS) | {"papan"} == set(canvas.KINDS) == set(canvas.KIND_OF.values())
     a, b = canvas.place("tugas", 0), canvas.place("tugas", 1)
     assert a != b and canvas.place("tugas", 5) == canvas.place("tugas", 5)          # deterministic, distinct
     cx, _, cz = centers["tugas"]
@@ -1314,3 +1314,18 @@ def test_v4_f10_meeting_voice_commands_are_understood_and_ordinary_talk_is_not_t
     for said in ["mulai rapat dengan klien lalu kirim email", "kapan rapat berikutnya", "buatkan notulen rapat kemarin", "putar lagu rapat"]:
         i = router.parse_action(said)
         assert not i or i.name not in ("meeting_start", "meeting_stop"), said
+
+
+def test_v4_f11_free_objects_keep_only_known_well_formed_properties():
+    from app import canvas
+    ok = canvas.clean_props({"type": "shape", "shape": "diamond", "color": "#AABBCC", "font": 500, "text": "x" * 9000, "evil": "<b>", "locked": 1})
+    assert ok == {"type": "shape", "shape": "diamond", "color": "#aabbcc", "font": 96, "text": "x" * 4000, "locked": True}
+    assert canvas.clean_props({"text": "baru"}, creating=False) == {"text": "baru"}
+    for bad in ({"type": "iframe"}, {"type": "note", "color": "red"}, {"type": "note", "shape": "star"}, {"type": "note", "align": "x"}, "teks"):
+        with pytest.raises(canvas.CanvasError):
+            canvas.clean_props(bad)
+    assert canvas.clean_style({"to": "7", "dash": 1, "color": "#38BDF8", "x": 1}) == {"to": 7, "dash": True, "color": "#38bdf8"}
+    assert canvas.clean_style({"to": None}) == {"to": None} and canvas.clean_style({}) == {}
+    assert canvas.object_content({"type": "note", "text": "Judul\nisi panjang"})["title"] == "Judul"
+    assert canvas.object_content({"type": "frame"})["title"] == "Bingkai"
+    assert canvas.allowed("obj:abc123", "renature", None) and canvas.allowed("obj:abc123", None, None)

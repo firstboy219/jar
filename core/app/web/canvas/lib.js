@@ -1,60 +1,4 @@
-// Pure helpers of the 3D canvas viewer (unit-tested with node: core/tests/test_canvas_js.py).
-
-/** Deterministic PRNG so the galaxy looks the same every visit. */
-export function rng(seed = 7) {
-  let s = seed >>> 0;
-  return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-}
-
-/**
- * A spiral galaxy of n particles: positions (x,y,z) and colours (r,g,b), warm core → cyan/violet arms.
- * Logarithmic arms with scatter that grows outward, thin disk. Returns {positions, colors} Float32Arrays.
- */
-export function spiralGalaxy(n, { arms = 4, radius = 2300, twist = 2.6, thickness = 70, seed = 7 } = {}) {
-  const r = rng(seed);
-  const positions = new Float32Array(n * 3);
-  const colors = new Float32Array(n * 3);
-  const core = [1.0, 0.82, 0.55], mid = [0.45, 0.75, 1.0], edge = [0.62, 0.45, 1.0];
-  for (let i = 0; i < n; i++) {
-    const d = Math.pow(r(), 1.6);                     // more particles near the core
-    const arm = Math.floor(r() * arms);
-    const angle = arm * (2 * Math.PI / arms) + d * twist * Math.PI;
-    const scatter = (0.12 + d * 0.5) * radius * 0.09;
-    const x = Math.cos(angle) * d * radius + (r() - 0.5) * scatter;
-    const z = Math.sin(angle) * d * radius + (r() - 0.5) * scatter;
-    const y = (r() - 0.5) * thickness * (1 - d * 0.7) * 2;
-    positions.set([x, y, z], i * 3);
-    const c = d < 0.35 ? mix(core, mid, d / 0.35) : mix(mid, edge, (d - 0.35) / 0.65);
-    const glow = 0.55 + r() * 0.45;
-    colors.set([c[0] * glow, c[1] * glow, c[2] * glow], i * 3);
-  }
-  return { positions, colors };
-}
-
-export function mix(a, b, t) {
-  const k = Math.min(Math.max(t, 0), 1);
-  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k];
-}
-
-/** Background stars on a huge shell (the space around the galaxy). */
-export function starField(n, { inner = 6000, outer = 22000, seed = 11 } = {}) {
-  const r = rng(seed);
-  const positions = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    const u = r() * 2 - 1, th = r() * 2 * Math.PI, rad = inner + r() * (outer - inner);
-    const s = Math.sqrt(1 - u * u);
-    positions.set([rad * s * Math.cos(th), rad * u, rad * s * Math.sin(th)], i * 3);
-  }
-  return positions;
-}
-
-/** How big a card is drawn at a camera distance: readable near, a star when far (null = draw only the star). */
-export function cardScale(distance, size = 1) {
-  if (!(distance > 0)) return null;
-  const s = (420 / distance) * size;
-  if (s < 0.28) return null;
-  return Math.min(s, 1.6);
-}
+// Pure helpers of the 2D board viewer (unit-tested with node: app/web/canvas/tests).
 
 /** Cards matching a search, best first (title starts > title contains > subtitle/snippet contains). */
 export function matchCards(cards, query) {
@@ -80,23 +24,24 @@ export function diffCards(before, after) {
   for (const c of after) {
     const o = old.get(c.id);
     if (!o) continue;
-    if (o.x !== c.x || o.y !== c.y || o.z !== c.z || o.size !== c.size) moved.push(c);
-    if (o.title !== c.title || o.subtitle !== c.subtitle || o.snippet !== c.snippet || o.status !== c.status) changed.push(c);
+    if (o.x !== c.x || o.y !== c.y || o.z !== c.z || o.size !== c.size || o.w !== c.w || o.h !== c.h) moved.push(c);
+    if (o.title !== c.title || o.subtitle !== c.subtitle || o.snippet !== c.snippet || o.status !== c.status || o.pinned !== c.pinned
+      || JSON.stringify(o.props || null) !== JSON.stringify(c.props || null)) changed.push(c);
   }
   return { added, removed, moved, changed };
 }
 
-/** Smooth camera flight: eased interpolation 0..1. */
+/** Smooth flight: eased interpolation 0..1. */
 export function ease(t) {
   const k = Math.min(Math.max(t, 0), 1);
   return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
 }
 
-/** Context label for the galaxy picker. */
+/** Context label for the board picker. */
 export function contextLabel(c) {
-  if (c.context === 'utama') return '🌌 Utama';
+  if (c.context === 'utama') return 'Utama';
   if (c.context.startsWith('company:')) return `🏢 ${c.title}`;
-  return `🪐 ${c.title}`;
+  return c.title;
 }
 
 /**
@@ -116,13 +61,13 @@ export function takeAppParams(hash) {
   return { token, embedded, rest: rest.length ? `#${rest.join('&')}` : '' };
 }
 
-/** Where the fixed desk panels (requests, n8n, storage) hang in the galaxy: a ring around the core, at table height. */
+/** Where the fixed desk panels (requests, n8n, storage, player, meeting) sit on the board: a ring around the middle (the server's x and z). */
 export const PANELS = {
-  prompts: { x: -760, y: 140, z: -430, size: 3.6, title: 'Permintaanmu' },
-  n8n: { x: 760, y: 140, z: -430, size: 3.6, title: 'Otomasi (n8n)' },
-  storage: { x: 0, y: 140, z: 880, size: 3.6, title: 'Simpanan' },
-  player: { x: -760, y: 140, z: 430, size: 3.6, title: 'Pemutar' },
-  meeting: { x: 760, y: 140, z: 430, size: 3.6, title: 'Rapat' },
+  prompts: { x: -760, y: -430, w: 330, title: 'Permintaanmu' },
+  n8n: { x: 440, y: -430, w: 330, title: 'Otomasi (n8n)' },
+  storage: { x: -165, y: 700, w: 330, title: 'Simpanan' },
+  player: { x: -1130, y: 110, w: 330, title: 'Pemutar' },
+  meeting: { x: 800, y: 110, w: 330, title: 'Rapat' },
 };
 
 /**
@@ -142,91 +87,6 @@ export function frameNeedsFetch(shownSeq, seq, hasFrame) {
 export function ago(seconds) {
   const s = Math.max(0, Math.round(seconds));
   return s < 90 ? `${s} dtk` : s < 5400 ? `${Math.round(s / 60)} mnt` : `${(s / 3600).toFixed(1)} jam`;
-}
-
-// ---------- the drafting toolkit (ADR-052): views, projection, commands ----------
-
-/** Standard views as orbit angles: theta around the vertical axis, phi from straight up (0) to straight down (π). */
-export const VIEWS = {
-  top: { theta: 0, phi: 0.02 }, bottom: { theta: 0, phi: Math.PI - 0.02 },
-  front: { theta: 0, phi: Math.PI / 2 }, back: { theta: Math.PI, phi: Math.PI / 2 },
-  right: { theta: Math.PI / 2, phi: Math.PI / 2 }, left: { theta: -Math.PI / 2, phi: Math.PI / 2 },
-  iso: { theta: Math.PI / 4, phi: 0.955 },
-};
-export const VIEW_LABEL = { top: 'Atas', bottom: 'Bawah', front: 'Depan', back: 'Belakang', right: 'Kanan', left: 'Kiri', iso: 'Isometrik' };
-export const clampPhi = (phi) => Math.min(Math.max(phi, 0.02), Math.PI - 0.02);
-
-/** Smallest turn from angle a to b (so a flight to "back" does not spin the long way round). */
-export function shortestAngle(a, b) {
-  const d = ((b - a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-  return a + d;
-}
-
-/** Centre and radius of a cloud of points (zoom extents / zoom to selection). */
-export function boundsOf(points) {
-  if (!points.length) return { x: 0, y: 0, z: 0, radius: 600 };
-  const c = points.reduce((s, p) => ({ x: s.x + p.x / points.length, y: s.y + p.y / points.length, z: s.z + p.z / points.length }), { x: 0, y: 0, z: 0 });
-  const radius = Math.max(...points.map((p) => Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z)), 120);
-  return { ...c, radius };
-}
-
-/** Camera distance that fits a sphere of `radius` in view (vertical fov in degrees, with a little margin). */
-export function fitDistance(radius, fovDeg, aspect) {
-  const v = (fovDeg * Math.PI) / 180, h = 2 * Math.atan(Math.tan(v / 2) * aspect);
-  return (radius / Math.sin(Math.min(v, h) / 2)) * 1.12;
-}
-
-/** Height of the orthographic frustum that shows the same picture as a perspective camera at distance r. */
-export const orthoHeight = (r, fovDeg) => 2 * r * Math.tan((fovDeg * Math.PI) / 360);
-
-export const snapValue = (v, step) => (step > 0 ? Math.round(v / step) * step : v);
-
-export function distance3(a, b) {
-  const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
-  return { dx, dy, dz, d: Math.hypot(dx, dy, dz) };
-}
-
-/** CSS matrix3d for the view cube from a camera's matrixWorldInverse (column-major 16 numbers); CSS has y pointing down. */
-export function cssCubeMatrix(e) {
-  const f = [1, -1, 1];
-  const m = [];
-  for (let j = 0; j < 3; j++) { for (let i = 0; i < 3; i++) m.push(f[i] * e[j * 4 + i] * f[j]); m.push(0); }
-  m.push(0, 0, 0, 1);
-  return `matrix3d(${m.map((x) => (Math.abs(x) < 1e-9 ? 0 : +x.toFixed(5))).join(',')})`;
-}
-
-const VIEW_WORDS = { top: 'top', atas: 'top', bottom: 'bottom', bawah: 'bottom', front: 'front', depan: 'front', back: 'back', belakang: 'back',
-  left: 'left', kiri: 'left', right: 'right', kanan: 'right', iso: 'iso', isometrik: 'iso', isometric: 'iso' };
-const TOOL_WORDS = { orbit: 'orbit', putar: 'orbit', pan: 'pan', geser: 'pan', zoom: 'zoom', select: 'select', pilih: 'select',
-  measure: 'measure', ukur: 'measure', link: 'link', hubung: 'link', hubungkan: 'link' };
-
-/** The command line (like AutoCAD's): "top", "zoom e", "ortho", "layer tugas off", "view save A", "cari laporan"… → {name, ...}. */
-export function parseCommand(text) {
-  const t = String(text || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  if (!t) return { name: 'none' };
-  const [w, ...rest] = t.split(' ');
-  const arg = rest.join(' ');
-  if (VIEW_WORDS[t]) return { name: 'view', view: VIEW_WORDS[t] };
-  if (['home', 'inti'].includes(t)) return { name: 'home' };
-  if (['ze', 'extents', 'zoom e', 'zoom extents', 'semua', 'zoom semua'].includes(t)) return { name: 'extents' };
-  if (['zs', 'zoom s', 'zoom selection', 'zoom pilihan', 'pilihan'].includes(t)) return { name: 'selection' };
-  if (['ortho', 'orto'].includes(t)) return { name: 'projection', mode: 'ortho' };
-  if (['persp', 'perspective', 'perspektif'].includes(t)) return { name: 'projection', mode: 'persp' };
-  if (['grid', 'kisi'].includes(t)) return { name: 'grid' };
-  if (['snap'].includes(t)) return { name: 'snap' };
-  if (['help', '?', 'bantuan'].includes(t)) return { name: 'help' };
-  if (TOOL_WORDS[t]) return { name: 'tool', tool: TOOL_WORDS[t] };
-  if (w === 'layer' || w === 'lapisan') {
-    const m = /^(.+?)(?: (on|off|nyala|mati))?$/.exec(arg);
-    return m && m[1] ? { name: 'layer', layer: m[1], on: m[2] ? ['on', 'nyala'].includes(m[2]) : null } : { name: 'unknown' };
-  }
-  if (w === 'view' || w === 'tampilan') {
-    const m = /^save (.+)$/.exec(arg) || /^simpan (.+)$/.exec(arg);
-    if (m) return { name: 'saveView', as: m[1] };
-    return arg ? { name: 'namedView', as: arg } : { name: 'unknown' };
-  }
-  if (['find', 'cari'].includes(w) && arg) return { name: 'find', query: arg };
-  return { name: 'unknown' };
 }
 
 // ---------- voice in the browser (ADR-052): resample, voice activity, PCM16 ----------
@@ -371,4 +231,152 @@ export function playerSource(p) {
 /** The stop button of a voice command "selesai rapat" reached this viewer: the number only ever goes up. */
 export function stopRaised(seen, now) {
   return seen != null && Number.isFinite(now) && now > seen;
+}
+
+// ---------- the 2D board (ADR-055): world ↔ screen, fitting, snapping, alignment, connectors ----------
+// view = {cx, cy, k}: the world point at the middle of the viewport, and the scale. vp = {w, h} is the viewport in pixels.
+// A rect is {x, y, w, h} in world units (x to the right, y down — the server's x and z).
+
+export const MIN_ZOOM = 0.04, MAX_ZOOM = 4;
+export const clampZoom = (k) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
+export const toScreen = (v, vp, x, y) => ({ x: (x - v.cx) * v.k + vp.w / 2, y: (y - v.cy) * v.k + vp.h / 2 });
+export const toWorld = (v, vp, sx, sy) => ({ x: (sx - vp.w / 2) / v.k + v.cx, y: (sy - vp.h / 2) / v.k + v.cy });
+
+/** Zoom by a factor so the world point under (sx, sy) stays under it — what the wheel and a pinch do. */
+export function zoomAt(v, vp, factor, sx, sy) {
+  const k = clampZoom(v.k * factor);
+  const before = toWorld(v, vp, sx, sy), after = toWorld({ ...v, k }, vp, sx, sy);
+  return { k, cx: v.cx + before.x - after.x, cy: v.cy + before.y - after.y };
+}
+
+/** Drag the paper by (dx, dy) screen pixels. */
+export const panBy = (v, dx, dy) => ({ ...v, cx: v.cx - dx / v.k, cy: v.cy - dy / v.k });
+
+export function rectsBounds(rects) {
+  if (!rects.length) return null;
+  const x0 = Math.min(...rects.map((r) => r.x)), y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.w)), y1 = Math.max(...rects.map((r) => r.y + r.h));
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/** The view that shows a rect with room around it; `inset` keeps it clear of floating panels. */
+export function fitRect(r, vp, { pad = 72, maxK = 1.25, inset = {} } = {}) {
+  const l = inset.left || 0, rt = inset.right || 0, t = inset.top || 0, b = inset.bottom || 0;
+  const aw = Math.max(vp.w - l - rt - 2 * pad, 80), ah = Math.max(vp.h - t - b - 2 * pad, 80);
+  const k = clampZoom(Math.min(aw / Math.max(r.w, 1), ah / Math.max(r.h, 1), maxK));
+  // the middle of the free area, not of the whole viewport
+  const mx = l + (vp.w - l - rt) / 2, my = t + (vp.h - t - b) / 2;
+  return { k, cx: r.x + r.w / 2 + (vp.w / 2 - mx) / k, cy: r.y + r.h / 2 + (vp.h / 2 - my) / k };
+}
+
+/** Mouse wheel (zoom) or trackpad two-finger scroll (pan)? Pinch on a trackpad arrives as a ctrl+wheel (zoom). */
+export function wheelIntent(e) {
+  if (e.ctrlKey || e.metaKey) return 'zoom';
+  if (e.deltaMode === 1) return 'zoom';                          // lines: a notched mouse wheel
+  const dy = Math.abs(e.deltaY), dx = Math.abs(e.deltaX);
+  if (dx > 0 || (dy > 0 && dy % 1 !== 0)) return 'pan';          // sideways or fractional: a trackpad
+  return dy >= 50 ? 'zoom' : 'pan';                              // whole big steps: a mouse wheel
+}
+
+export const snapValue = (v, step) => (step > 0 ? Math.round(v / step) * step : v);
+
+export const rectsIntersect = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+export const rectContains = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.w <= outer.x + outer.w && inner.y + inner.h <= outer.y + outer.h;
+
+/**
+ * Smart guides: how far (dx, dy) to nudge a moving rect so one of its edges / middle lines meets one of the others', when closer than
+ * `tol` world units, and the guide lines to draw. Pure.
+ */
+export function snapRect(m, others, tol) {
+  const xs = [m.x, m.x + m.w / 2, m.x + m.w], ys = [m.y, m.y + m.h / 2, m.y + m.h];
+  let bx = null, by = null;
+  for (const o of others) {
+    const ox = [o.x, o.x + o.w / 2, o.x + o.w], oy = [o.y, o.y + o.h / 2, o.y + o.h];
+    for (const a of xs) for (const b of ox) { const d = b - a; if (Math.abs(d) <= tol && (!bx || Math.abs(d) < Math.abs(bx.d))) bx = { d, at: b, o }; }
+    for (const a of ys) for (const b of oy) { const d = b - a; if (Math.abs(d) <= tol && (!by || Math.abs(d) < Math.abs(by.d))) by = { d, at: b, o }; }
+  }
+  const dx = bx ? bx.d : 0, dy = by ? by.d : 0;
+  const moved = { x: m.x + dx, y: m.y + dy, w: m.w, h: m.h };
+  const guides = [];
+  if (bx) guides.push({ axis: 'x', at: bx.at, from: Math.min(moved.y, bx.o.y), to: Math.max(moved.y + moved.h, bx.o.y + bx.o.h) });
+  if (by) guides.push({ axis: 'y', at: by.at, from: Math.min(moved.x, by.o.x), to: Math.max(moved.x + moved.w, by.o.x + by.o.w) });
+  return { dx, dy, guides };
+}
+
+/** Align rects to their group's edge / middle. Returns the same rects with new x / y. Pure. */
+export function alignRects(rects, mode) {
+  const b = rectsBounds(rects);
+  if (!b) return [];
+  return rects.map((r) => {
+    switch (mode) {
+      case 'left': return { ...r, x: b.x };
+      case 'hcenter': return { ...r, x: b.x + (b.w - r.w) / 2 };
+      case 'right': return { ...r, x: b.x + b.w - r.w };
+      case 'top': return { ...r, y: b.y };
+      case 'vcenter': return { ...r, y: b.y + (b.h - r.h) / 2 };
+      case 'bottom': return { ...r, y: b.y + b.h - r.h };
+      default: return r;
+    }
+  });
+}
+
+/** Even gaps between three or more rects along an axis ('h' or 'v'); the outer two stay put. Pure. */
+export function distributeRects(rects, axis) {
+  if (rects.length < 3) return rects;
+  const pos = axis === 'h' ? 'x' : 'y', size = axis === 'h' ? 'w' : 'h';
+  const order = [...rects].sort((a, b) => a[pos] - b[pos]);
+  const first = order[0], last = order[order.length - 1];
+  const gap = (last[pos] + last[size] - first[pos] - order.reduce((s, r) => s + r[size], 0)) / (order.length - 1);
+  let at = first[pos];
+  const placed = new Map();
+  for (const r of order) { placed.set(r, { ...r, [pos]: at }); at += r[size] + gap; }
+  return rects.map((r) => placed.get(r));
+}
+
+/** Drag a handle ('n','ne','e','se','s','sw','w','nw') by (dx, dy) world units. `ratio` keeps the shape; `center` grows from the middle. */
+export function resizeRect(r, handle, dx, dy, { min = [60, 40], ratio = false, center = false } = {}) {
+  let { x, y, w, h } = r;
+  const east = handle.includes('e'), west = handle.includes('w'), south = handle.includes('s'), north = handle.includes('n');
+  const f = center ? 2 : 1;
+  if (east) w += dx * f; if (west) w -= dx * f;
+  if (south) h += dy * f; if (north) h -= dy * f;
+  if (ratio && r.w > 0 && r.h > 0) {
+    const k = (east || west) && (north || south) ? Math.max(w / r.w, h / r.h) : (east || west) ? w / r.w : h / r.h;
+    w = r.w * k; h = r.h * k;
+  }
+  w = Math.max(w, min[0]); h = Math.max(h, min[1]);
+  x = center ? r.x + (r.w - w) / 2 : west ? r.x + r.w - w : r.x;
+  y = center ? r.y + (r.h - h) / 2 : north ? r.y + r.h - h : r.y;
+  return { x, y, w, h };
+}
+
+const SIDES = { e: [1, 0], w: [-1, 0], s: [0, 1], n: [0, -1] };
+export function sidePoint(r, side) {
+  return side === 'e' ? { x: r.x + r.w, y: r.y + r.h / 2 } : side === 'w' ? { x: r.x, y: r.y + r.h / 2 }
+    : side === 's' ? { x: r.x + r.w / 2, y: r.y + r.h } : { x: r.x + r.w / 2, y: r.y };
+}
+
+/** The curve from card a to card b (rects), leaving and entering through the sides that face each other. */
+export function connectorPath(a, b) {
+  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const dx = bc.x - ac.x, dy = bc.y - ac.y;
+  const horizontal = Math.abs(dx) * (a.h + b.h) >= Math.abs(dy) * (a.w + b.w);
+  const sa = horizontal ? (dx >= 0 ? 'e' : 'w') : (dy >= 0 ? 's' : 'n');
+  const sb = horizontal ? (dx >= 0 ? 'w' : 'e') : (dy >= 0 ? 'n' : 's');
+  const p = sidePoint(a, sa), q = sidePoint(b, sb);
+  const pull = Math.max(40, Math.hypot(q.x - p.x, q.y - p.y) * 0.4);
+  const c1 = { x: p.x + SIDES[sa][0] * pull, y: p.y + SIDES[sa][1] * pull }, c2 = { x: q.x + SIDES[sb][0] * pull, y: q.y + SIDES[sb][1] * pull };
+  const t = 0.5, u = 1 - t;
+  const mid = { x: u ** 3 * p.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t ** 3 * q.x, y: u ** 3 * p.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t ** 3 * q.y };
+  return {
+    d: `M ${p.x} ${p.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${q.x} ${q.y}`, from: p, to: q, mid,
+    startAngle: Math.atan2(p.y - c1.y, p.x - c1.x), endAngle: Math.atan2(q.y - c2.y, q.x - c2.x),   // the direction an arrow at each end points
+  };
+}
+
+/** The minimap: world bounds → a box of `size` pixels, and back. */
+export function miniMapFit(bounds, size, pad = 200) {
+  const w = bounds.w + 2 * pad, h = bounds.h + 2 * pad;
+  const s = Math.min(size.w / w, size.h / h);
+  return { s, ox: (size.w - w * s) / 2 - (bounds.x - pad) * s, oy: (size.h - h * s) / 2 - (bounds.y - pad) * s };
 }
