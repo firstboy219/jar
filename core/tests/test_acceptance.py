@@ -1042,3 +1042,180 @@ async def test_v4_f2_the_openjarvis_gateway_key_reaches_worker_categories_only(p
         assert "jarvis-analisis" in ids and "jarvis-privat" not in ids and "jarvis-ngobrol" not in ids
     row = await pool.fetchrow("SELECT caller, category FROM llm_usage WHERE category = 'analisis' ORDER BY id DESC LIMIT 1")
     assert row["caller"] == "openjarvis"                                                  # cost is attributed to the worker
+
+
+async def _mail_env(pool, monkeypatch, items=None):
+    from app import inbox, llm, memory
+    monkeypatch.setattr(memory, "search", _no_memory)
+    posts, llm_calls = [], []
+
+    async def post(kind, payload):
+        posts.append((kind, payload))
+        if kind == "list":
+            return {"items": items or []}
+        return {"sent": True, "id": f"g-{len(posts)}"}
+    monkeypatch.setattr(inbox, "_post", post)
+
+    async def complete(messages, category="cepat", **kw):
+        llm_calls.append((category, kw.get("private"), messages[-1]["content"]))
+        if category == "privat":
+            return '[{"importance": "penting", "summary": "Budi minta konfirmasi rapat"}, {"importance": "abaikan", "summary": "Promosi"}]'
+        return "Baik Pak Budi, saya hadir Senin jam 10. Terima kasih."
+    monkeypatch.setattr(llm, "complete", complete)
+    return posts, llm_calls
+
+
+async def test_v4_f6_mail_is_sorted_by_the_local_model_and_a_reply_leaves_only_after_approval(pool, monkeypatch):
+    from app import approvals, inbox
+    posts, llm_calls = await _mail_env(pool, monkeypatch, items=[
+        {"id": "m1", "threadId": "t1", "from": "Budi <budi@kantor.co.id>", "subject": "Rapat Senin", "snippet": "Bisa konfirmasi hadir?"},
+        {"id": "m2", "threadId": "t2", "from": "Toko <promo@toko.id>", "subject": "Diskon 50%", "snippet": "Hanya hari ini"},
+        {"id": "m3", "from": "Bank <no-reply@bank.id>", "subject": "Kode verifikasi", "snippet": "OTP 482913"}])
+    r = await inbox.check()
+    assert r["baru"] == 3 and [m["dari"] for m in r["penting"]] == ["Budi"]
+    sorted_by = [c for c in llm_calls if c[0] == "privat"]
+    assert len(sorted_by) == 1 and sorted_by[0][1] is True                       # mail text only ever reached the LOCAL model
+    assert "482913" not in sorted_by[0][2] and "482913" not in str(await pool.fetch("SELECT * FROM mail_items"))   # the OTP is not even kept
+    assert await pool.fetchval("SELECT count(*) FROM reports WHERE session_id = 'inbox' AND text LIKE '%email penting%'") == 1
+    assert (await inbox.check())["baru"] == 0                                    # the same mail is not told twice (ext_id is unique)
+    assert await pool.fetchval("SELECT count(*) FROM mail_items") == 3
+
+    mid = await pool.fetchval("SELECT id FROM mail_items WHERE ext_id = 'm1'")
+    d = await inbox.draft_reply(mid, "bilang saya hadir")
+    assert d["status"].startswith("draf") and d["subjek"] == "Re: Rapat Senin"
+    assert [p for p in posts if p[0] == "send"] == []                              # a draft is not sent
+    p = await inbox.propose(d["outbox_id"])
+    assert p["status"].startswith("menunggu persetujuanmu") and [x for x in posts if x[0] == "send"] == []   # proposed is not sent either
+    assert await pool.fetchval("SELECT status FROM approvals WHERE id = $1", p["persetujuan"]) == "awaiting_approval"
+    await approvals.decide(p["persetujuan"], True, "device:HP")                    # the owner's phone approves THIS email
+    sends = [x for x in posts if x[0] == "send"]
+    assert len(sends) == 1 and sends[0][1]["to"] == "budi@kantor.co.id" and "hadir Senin" in sends[0][1]["body"] and sends[0][1]["threadId"] == "t1"
+    assert await pool.fetchval("SELECT status FROM outbox WHERE id = $1", d["outbox_id"]) == "sent"
+    assert await pool.fetchval("SELECT status FROM mail_items WHERE id = $1", mid) == "replied"
+    assert (await inbox.execute(d["outbox_id"])) == {"already_sent": True} and len([x for x in posts if x[0] == "send"]) == 1   # never twice
+    with __import__("pytest").raises(inbox.InboxError):                            # an edit after it went out is refused
+        await inbox.edit_draft(d["outbox_id"], "lain")
+
+
+async def test_v4_f6_a_refused_or_failed_send_never_goes_out_and_the_calendar_needs_approval_too(pool, monkeypatch):
+    import pytest
+    from app import approvals, inbox
+    posts, _ = await _mail_env(pool, monkeypatch, items=[{"id": "m9", "from": "Ani <ani@x.id>", "subject": "Halo", "snippet": "Apa kabar"}])
+    await inbox.check(notify=False)
+    mid = await pool.fetchval("SELECT id FROM mail_items WHERE ext_id = 'm9'")
+    d = await inbox.draft_reply(mid, "jawab singkat")
+    p = await inbox.propose(d["outbox_id"])
+    await approvals.decide(p["persetujuan"], False, "device:HP")                   # the owner says no
+    assert await pool.fetchval("SELECT status FROM outbox WHERE id = $1", d["outbox_id"]) == "rejected"
+    with pytest.raises(inbox.InboxError):
+        await inbox.execute(d["outbox_id"])
+    assert [x for x in posts if x[0] == "send"] == []
+
+    with pytest.raises(inbox.InboxError):                                          # an event needs a time zone and an end after the start
+        await inbox.propose_event("Rapat", "2026-11-03T14:00:00", "2026-11-03T15:00:00")
+    e = await inbox.propose_event("Rapat proyek", "2026-11-03T14:00:00+07:00", "2026-11-03T15:00:00+07:00", ["budi@kantor.co.id"], "Zoom")
+    assert [x for x in posts if x[0] == "calendar"] == []                          # proposed, not written
+    await approvals.decide(e["persetujuan"], True, "device:HP")
+    cal = [x for x in posts if x[0] == "calendar"]
+    assert len(cal) == 1 and cal[0][1]["title"] == "Rapat proyek" and cal[0][1]["attendees"] == ["budi@kantor.co.id"]
+
+    async def broken(kind, payload):
+        raise inbox.InboxError("alur n8n belum aktif")
+    monkeypatch.setattr(inbox, "_post", broken)
+    d2 = await inbox.draft_reply(mid, "coba lagi")
+    p2 = await inbox.propose(d2["outbox_id"])
+    done = await approvals.decide(p2["persetujuan"], True, "device:HP")
+    assert done["status"] == "failed" and await pool.fetchval("SELECT status FROM outbox WHERE id = $1", d2["outbox_id"]) == "failed"
+
+
+async def test_v4_f6_the_flows_are_created_inactive_once_and_the_owner_activates_them(pool, monkeypatch):
+    from app import inbox, n8n
+    created = []
+
+    async def create_inactive(wf):
+        created.append(wf)
+        return {"id": f"wf{len(created)}", "name": wf["name"], "active": False}
+    monkeypatch.setattr(n8n, "create_inactive", create_inactive)
+
+    async def list_workflows():
+        return [{"id": "wf1", "name": "x", "active": True}]
+    monkeypatch.setattr(n8n, "list_workflows", list_workflows)
+    st = await inbox.install()
+    assert len(created) == 3 and all(f["installed"] for f in st["flows"]) and [f["active"] for f in st["flows"]] == [True, False, False]
+    assert (await pool.fetchval("SELECT count(*) FROM approvals WHERE kind = 'n8n_activate_workflow' AND status = 'awaiting_approval'")) == 3
+    await inbox.install()                                                          # repeating creates nothing new
+    assert len(created) == 3
+    paths = [h["path"] for h in (await inbox.hooks()).values()]
+    assert len(set(paths)) == 3 and all(len(p.split("-")[-1]) == 32 for p in paths)    # a random secret in each address
+
+
+async def test_v4_f6_watchers_notify_once_never_buy_and_never_advise(pool, monkeypatch):
+    from app import ops, reports, watchers, workers
+    prices = iter([1_050_000.0, 990_000.0, 985_000.0, None])
+
+    async def coingecko(coin):
+        return next(prices)
+    monkeypatch.setattr(watchers, "_coingecko", coingecko)
+    monkeypatch.setattr(reports, "push", lambda *a, **k: __import__("asyncio").sleep(0, False))
+    w = await watchers.add("kripto", "Bitcoin", "bitcoin", "<=", 1_000_000)
+    assert w["every_min"] == 15                                                    # not faster than every 15 minutes
+    with __import__("pytest").raises(watchers.WatchError):
+        await watchers.add("kripto", "x", "Bitcoin; DROP", "<=", 1)
+
+    async def due():
+        await pool.execute("UPDATE watchers SET last_checked = now() - interval '1 day' WHERE id = $1", w["id"])
+        await watchers.tick()
+    texts = lambda: pool.fetch("SELECT text FROM reports WHERE session_id = 'watcher' ORDER BY id")   # noqa: E731
+    await due()
+    assert await texts() == []                                                     # 1.05 M is above the line: silent
+    await due()
+    t = await texts()
+    assert len(t) == 1 and "Rp 990.000" in t[0]["text"] and "bukan nasihat investasi" in t[0]["text"]
+    await due()
+    assert len(await texts()) == 1                                                 # still below: no second message within 6 hours
+    await due()                                                                    # the source failed: nothing breaks, nothing is said
+    assert len(await texts()) == 1 and "tidak menjawab" in (await pool.fetchrow("SELECT last_note FROM watchers WHERE id = $1", w["id"]))["last_note"]
+
+    spawned = []
+
+    async def spawn(title, instruction, session_id, actor, **kw):
+        spawned.append((instruction, kw))
+        tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status)
+                                     VALUES ('watcher', $1, $2, 'watcher', 'web', 'running') RETURNING id""", title, instruction)
+        spawned[-1] = (instruction, kw, tid)
+        return {"id": tid}
+    monkeypatch.setattr(workers, "spawn", spawn)
+
+    async def ok():
+        return True, ""
+    monkeypatch.setattr(ops, "background_ok", ok)
+    t = await watchers.add("tiket", "KA Argo Bromo", "tiket KA Argo Bromo Anggrek Gambir-Surabaya 20 Nov 2026", "<=", 600_000)
+    assert t["every_min"] == 120                                                   # web checks cost AI: rarer
+    await watchers.tick()
+    instruction, kw, task_id = spawned[0]
+    assert kw == {"kind": "watcher"} and "JANGAN membeli" in instruction and "berhenti sebelum pembayaran" in instruction
+    assert "JANGAN memberi saran membeli" in instruction
+    assert (await pool.fetchval("SELECT pending_task FROM watchers WHERE id = $1", t["id"])) == task_id
+    await watchers.tick()
+    assert len(spawned) == 1                                                       # one check at a time per watcher
+    await watchers.on_result(task_id, 'Harga terendah Rp 575.000 di kai.id.\nHASIL: {"value": 575000, "note": "kai.id, kelas eksekutif"}')
+    last = (await texts())[-1]["text"]
+    assert "Rp 575.000" in last and "belum membeli atau memesan" in last and "kamu yang memutuskan dan membayar" in last
+    assert await pool.fetchval("SELECT pending_task FROM watchers WHERE id = $1", t["id"]) is None
+
+
+async def test_v4_f6_the_agent_can_read_draft_and_propose_but_has_no_way_to_send(pool, monkeypatch):
+    from app import assistant
+    posts, _ = await _mail_env(pool, monkeypatch, items=[{"id": "m5", "from": "Cici <cici@x.id>", "subject": "Tanya harga", "snippet": "Berapa?"}])
+    names = {t["function"]["name"] for t in assistant.TOOLS}
+    assert {"inbox", "watch"} <= names and not {"send_email", "send_mail", "send_whatsapp", "buy_ticket", "pay"} & names
+    actions = next(t for t in assistant.TOOLS if t["function"]["name"] == "inbox")["function"]["parameters"]["properties"]["action"]["enum"]
+    assert "send" in actions                                                       # 'send' only PROPOSES (an approval); the executor is the approval
+    await assistant._inbox_tool("inbox", {"action": "check"})
+    mid = await pool.fetchval("SELECT id FROM mail_items WHERE ext_id = 'm5'")
+    d = await assistant._inbox_tool("inbox", {"action": "draft_reply", "mail_id": mid, "instruction": "kasih tahu Rp 100 ribu"})
+    p = await assistant._inbox_tool("inbox", {"action": "send", "outbox_id": d["outbox_id"]})
+    assert "menunggu persetujuanmu" in p["status"] and [x for x in posts if x[0] == "send"] == []
+    w = await assistant._inbox_tool("watch", {"action": "add", "kind": "emas", "label": "Emas", "query": "harga emas Antam 1 gram", "op": ">=", "threshold": 1_600_000})
+    assert w["cek_tiap_menit"] == 60 and "tidak membeli" in w["catatan"]
+    assert (await assistant._inbox_tool("inbox", {"action": "event", "title": "x", "start": "besok", "end": "lusa"}))["error"]

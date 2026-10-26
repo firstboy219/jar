@@ -36,7 +36,7 @@ WORKER_BRIEF = (
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",
-                 "flowcheck": "latar-belakang"}
+                 "flowcheck": "latar-belakang", "watcher": "web"}
 
 
 def _sem_() -> asyncio.Semaphore:
@@ -201,7 +201,7 @@ OPENJARVIS_BRIEF = ("[tugas #{id}] Kerjakan sendiri sampai selesai, tanpa bertan
                     "dan menjalankan Python; tidak ada internet. Jawab langsung dengan HASIL AKHIR yang bisa dipakai (bukan rencana, "
                     "bukan janji). Jika tugas ini butuh hal di luar kemampuanmu, katakan apa yang kurang.\n\n")
 DRAFT_TITLE = "Menulis draf"
-BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine", "situation")
+BACKGROUND_KINDS = ("selfimprove", "selfcheck", "routine", "situation", "watcher")
 RESUME_MARK = "\n\n---LANJUTAN---\n"
 HERMES_RETRIES, HERMES_RETRY_S = 6, 20  # up to 2 minutes for Hermes to come back
 
@@ -306,6 +306,9 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
         await awareness.on_situation(task_id, result)
     elif kind == "routine":
         pass  # the worker stored the habits it found as memories itself
+    elif kind == "watcher":  # a price / ticket check (ADR-044): judged against the watcher's condition, not spoken as it is
+        from . import watchers
+        await watchers.on_result(task_id, result)
     elif kind == "selfcheck":
         from . import selfimprove
         await reports._create(task_id, session_id, await selfimprove.on_selfcheck(task_id, result))

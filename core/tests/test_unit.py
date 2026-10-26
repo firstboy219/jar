@@ -1181,3 +1181,50 @@ def test_openjarvis_answer_must_be_an_answer():
         assert not ok and "teks mentah" in why                                      # the failure the spike saw 3 of 3 times
     from app import selfdev_policy as p
     assert not p.judge([{"file": "core/app/openjarvis.py", "added": 1, "deleted": 0}], "", [], 2)["ok"]
+
+
+def test_watcher_alerts_when_the_condition_becomes_true_and_not_every_check():
+    from datetime import UTC, datetime, timedelta
+
+    from app.watchers import evaluate, message, parse_result
+    now = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+    assert evaluate("<=", 1000, 1200, None, None, None, None, now) == (False, False)              # not met: silent
+    assert evaluate("<=", 1000, 900, None, False, None, None, now) == (True, True)                 # became true: tell
+    assert evaluate("<=", 1000, 880, None, True, now - timedelta(hours=1), 900, now) == (True, False)     # within 6 h: never again
+    assert evaluate("<=", 1000, 890, None, True, now - timedelta(hours=7), 900, now) == (True, False)     # still true, barely moved: silent
+    assert evaluate("<=", 1000, 700, None, True, now - timedelta(hours=7), 900, now) == (True, True)      # moved ≥ 2% since the last message
+    assert evaluate(">=", 50, 51, None, None, None, None, now) == (True, True)
+    assert evaluate("berubah", 5, 105, 100, None, None, None, now) == (True, True)                 # +5% since the last check
+    assert evaluate("berubah", 5, 101, 100, None, None, None, now) == (False, False)
+    assert evaluate("berubah", 5, 105, None, None, None, None, now) == (False, False)              # nothing to compare with yet
+    # the wording is fixed in code: information only, never advice, never a purchase
+    assert "bukan nasihat investasi" in message("kripto", "Bitcoin", "<=", 1_000_000, 990_000)
+    assert "bukan nasihat investasi" in message("emas", "Emas Antam", ">=", 1_500_000, 1_510_000)
+    ticket = message("tiket", "KA Argo", "<=", 400_000, 380_000)
+    assert "belum membeli atau memesan" in ticket and "kamu yang memutuskan dan membayar" in ticket
+    assert "Rp 990.000" in message("kripto", "Bitcoin", "<=", 1_000_000, 990_000)
+    assert parse_result('Hasil: ketemu.\nHASIL: {"value": 1520000, "note": "antam.co.id"}') == (1_520_000.0, "antam.co.id")
+    assert parse_result('HASIL: {"value": null, "note": "tidak ketemu"}')[0] is None
+    assert parse_result("tanpa baris hasil")[0] is None and parse_result('HASIL: {rusak')[0] is None
+
+
+def test_inbox_keeps_little_hides_the_sensitive_and_reads_a_messy_triage():
+    from app import inbox_flows
+    from app.inbox import clean_item, parse_triage
+    ok = clean_item({"id": "m1", "threadId": "t1", "from": "Budi Santoso <budi@kantor.co.id>", "subject": "Rapat Senin", "snippet": "Jam 10 ya " * 60})
+    assert ok["sender"] == "Budi Santoso" and ok["sender_addr"] == "budi@kantor.co.id" and len(ok["snippet"]) == 300 and not ok["sensitive"]
+    otp = clean_item({"id": "m2", "from": "bank@x.id", "subject": "Kode verifikasi Anda", "snippet": "OTP 482913 jangan bagikan"})
+    assert otp["sensitive"] and otp["snippet"] == "" and "482913" not in str(otp) and otp["subject"] == "(berisi data sensitif)"
+    assert clean_item({"subject": "tanpa id"}) is None
+    assert parse_triage('Ini: [{"importance": "penting", "summary": "Tagihan jatuh tempo"}, {"importance": "aneh"}]', 3) == [
+        {"importance": "penting", "summary": "Tagihan jatuh tempo"}, {"importance": "biasa", "summary": ""}, {"importance": "biasa", "summary": ""}]
+    assert parse_triage("bukan json", 2) == [{"importance": "biasa", "summary": ""}] * 2
+    for kind in inbox_flows.KINDS:                       # each template is a closed little graph behind a secret webhook path
+        wf = inbox_flows.build(kind, "jarvis-" + kind + "-abc")
+        names = {n["name"] for n in wf["nodes"]}
+        assert wf["nodes"][0]["parameters"]["path"] == "jarvis-" + kind + "-abc" and wf["nodes"][0]["parameters"]["httpMethod"] == "POST"
+        assert set(wf["connections"]) <= names and all(c["node"] in names for v in wf["connections"].values() for out in v["main"] for c in out)
+        assert "active" not in wf                         # created inactive: only the owner's approval activates it
+    from app import selfdev_policy as p
+    for f in ("core/app/inbox.py", "core/app/watchers.py", "core/app/inbox_flows.py"):
+        assert not p.judge([{"file": f, "added": 1, "deleted": 0}], "", [], 2)["ok"]       # what may leave JARVIS is not self-editable

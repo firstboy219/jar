@@ -154,7 +154,7 @@ async def _restore_after_reset() -> None:
 
 
 KIND_TEXT = {"owner": "tugasmu", "meeting": "notulen rapat", "selfimprove": "perbaikan diri", "selfcheck": "cek diri harian",
-             "routine": "belajar kebiasaanmu", "situation": "menyiapkan info situasi", "flowcheck": "pengawas alur"}
+             "routine": "belajar kebiasaanmu", "situation": "menyiapkan info situasi", "flowcheck": "pengawas alur", "watcher": "pantauan harga"}
 
 
 async def background() -> dict:
