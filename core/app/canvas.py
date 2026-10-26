@@ -1,4 +1,5 @@
-"""The 3D canvas — JARVIS's workspace as a galaxy (Blueprint v4 Fase 4, ADR-049; the owner asked for 3D, 2026-10-26).
+"""The canvas — JARVIS's workspace as a board (Blueprint v4 Fase 4, ADR-049; a 3D galaxy first, a 2D Miro/Figma-style board since Fase 11, ADR-055).
+The plane of the board is x (right) and z (down); y is kept as the old 3D height and ignored by the viewer.
 
 One galaxy per context: "utama" (everyday), "project:<name>", and "company:<id>" for each company. Each galaxy has
 constellations, one per kind of card (tugas, dokumen, tampilan, rapat, memori, …), laid out on spiral arms; the owner and
@@ -7,10 +8,12 @@ JARVIS can move cards anywhere in 3D space (it is infinite), link them, and fly 
 A canvas stores LAYOUT, never knowledge: a card is a reference '<type>:<id>' resolved when the canvas is read —
   shown:<stage_history id>   doc:<document uuid>   meeting:<id>   playlist:<id>   music:<id>   memory:<uuid>
   task:<id>   goal:<id>   vault:<company_vault id>   directive:<gm_directives id>   decision:<decision_vault id>
+  obj:<token>   a free object the owner drew on the board — note, text, shape or frame; it lives in the node itself (props)
 Isolation (§4.4): a card may only reference things of its canvas's owner — a company's galaxy only that company's
 vault, directives, decisions, tasks and their documents; a personal galaxy never anything of a company. Checked when a
 card is added AND again when the canvas is read; company galaxies are read inside the company's row-level-security scope.
-The canvas can navigate, select, place, move, link and hide cards — it can never approve, delete, send or pay.
+The canvas can navigate, select, place, move, resize, link and hide cards — it can never approve, delete (other than the owner's own notes and
+shapes), send or pay.
 """
 
 import contextlib
@@ -24,16 +27,16 @@ KINDS = {  # constellation → (title, colour) — the viewer draws them
     "tampilan": ("Yang ditampilkan", "#38bdf8"), "dokumen": ("Dokumen", "#a78bfa"), "rapat": ("Rapat", "#f472b6"),
     "musik": ("Musik", "#fb923c"), "memori": ("Memori", "#34d399"), "tugas": ("Tugas", "#facc15"),
     "tujuan": ("Tujuan", "#f87171"), "perusahaan": ("Data perusahaan", "#2dd4bf"), "arahan": ("Arahan tim", "#60a5fa"),
-    "keputusan": ("Keputusan", "#e879f9"),
+    "keputusan": ("Keputusan", "#e879f9"), "papan": ("Catatan & bentuk", "#94a3b8"),
 }
-REF = re.compile(r"^(shown|doc|meeting|playlist|music|memory|task|goal|vault|directive|decision):([0-9A-Za-z-]{1,64})$")
+REF = re.compile(r"^(shown|doc|meeting|playlist|music|memory|task|goal|vault|directive|decision|obj):([0-9A-Za-z-]{1,64})$")
 KIND_OF = {"shown": "tampilan", "doc": "dokumen", "meeting": "rapat", "playlist": "musik", "music": "musik",
            "memory": "memori", "task": "tugas", "goal": "tujuan", "vault": "perusahaan", "directive": "arahan",
-           "decision": "keputusan"}
+           "decision": "keputusan", "obj": "papan"}
 COMPANY_ONLY = {"vault", "directive"}          # these exist only inside a company
 PERSONAL_ONLY = {"memory", "goal", "playlist", "music", "shown", "meeting"}   # personal things never go to a company galaxy
 PERSONAL_KINDS = ["tugas", "tampilan", "dokumen", "rapat", "memori", "musik", "tujuan", "keputusan"]
-COMPANY_KINDS = ["tugas", "perusahaan", "arahan", "dokumen", "keputusan"]   # a company galaxy has no personal constellations
+COMPANY_KINDS = ["tugas", "perusahaan", "arahan", "dokumen", "keputusan"]   # a company galaxy has no personal constellations (free objects, kind "papan", have no zone: they sit where the owner puts them)
 GALAXY_R = 1500.0
 KEEP_VERSIONS = 60
 
@@ -159,6 +162,8 @@ async def owner_of(ref: str) -> tuple[bool, str | None]:
     p = db.pool()
     try:
         match kind:
+            case "obj":
+                return (True, None)   # the node row is the object; the viewer drops it when the row is gone
             case "task":
                 row = await p.fetchrow("SELECT company_id FROM tasks WHERE id = $1", int(ident))
                 return (row is not None, row["company_id"] if row else None)
@@ -197,6 +202,8 @@ async def owner_of(ref: str) -> tuple[bool, str | None]:
 def allowed(ref: str, canvas_company: str | None, ref_company: str | None) -> bool:
     """Isolation rule for one card. Pure; unit-tested."""
     kind, _ = parse_ref(ref)
+    if kind == "obj":   # the owner's own drawing: any board may hold it, it points at no one's data
+        return True
     if canvas_company:
         return kind not in PERSONAL_ONLY and ref_company == canvas_company
     return kind not in COMPANY_ONLY and ref_company is None
@@ -206,8 +213,8 @@ def allowed(ref: str, canvas_company: str | None, ref_company: str | None) -> bo
 
 async def _bump(conn, canvas: dict, actor: str, change: str) -> int:
     v = await conn.fetchval("UPDATE canvases SET version = version + 1, updated_at = now() WHERE id = $1 RETURNING version", canvas["id"])
-    nodes = await conn.fetch("SELECT id, kind, ref, x, y, z, size, pinned FROM canvas_nodes WHERE canvas_id = $1", canvas["id"])
-    edges = await conn.fetch("SELECT a, b, label FROM canvas_edges WHERE canvas_id = $1", canvas["id"])
+    nodes = await conn.fetch("SELECT id, kind, ref, x, y, z, size, pinned, w, h, props FROM canvas_nodes WHERE canvas_id = $1", canvas["id"])
+    edges = await conn.fetch("SELECT a, b, label, style FROM canvas_edges WHERE canvas_id = $1", canvas["id"])
     await conn.execute("""INSERT INTO canvas_versions (canvas_id, version, company_id, snapshot, actor, change)
                           VALUES ($1, $2, $3, $4, $5, $6)""", canvas["id"], v, canvas["company_id"],
                        {"nodes": [dict(n) for n in nodes], "edges": [dict(e) for e in edges]}, actor, change[:120])
@@ -303,13 +310,28 @@ def _coord(v) -> float:
     return f
 
 
-async def move(node_id: int, actor: str, x=None, y=None, z=None, size=None, pinned=None) -> dict:
+def _extent(v, lo: float, hi: float) -> float:
+    f = float(v)
+    if not math.isfinite(f):
+        raise CanvasError("ukuran tidak valid")
+    return min(max(f, lo), hi)
+
+
+async def move(node_id: int, actor: str, x=None, y=None, z=None, size=None, pinned=None, w=None, h=None, props=None) -> dict:
     node, canvas = await _node(node_id)
     vals = {k: _coord(v) for k, v in (("x", x), ("y", y), ("z", z)) if v is not None}
     if size is not None:
         vals["size"] = min(max(float(size), 0.3), 4.0)
     if pinned is not None:
         vals["pinned"] = bool(pinned)
+    if w is not None:
+        vals["w"] = _extent(w, 60, 4000)
+    if h is not None:
+        vals["h"] = _extent(h, 40, 4000)
+    if props is not None:
+        if not node["ref"].startswith("obj:"):
+            raise CanvasError("hanya catatan, teks, bentuk dan bingkai yang punya properti")
+        vals["props"] = {**(node["props"] if isinstance(node["props"], dict) else json.loads(node["props"] or "{}")), **clean_props(props, creating=False)}
     if not vals:
         return node
     sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(vals))
@@ -317,6 +339,131 @@ async def move(node_id: int, actor: str, x=None, y=None, z=None, size=None, pinn
         row = await conn.fetchrow(f"UPDATE canvas_nodes SET {sets}, updated_at = now() WHERE id = $1 RETURNING *", node_id, *vals.values())
         await _bump(conn, canvas, actor, f"pindah #{node_id}")
     return dict(row)
+
+
+OBJECT_TYPES = ("note", "text", "shape", "frame")
+SHAPES = ("rect", "round", "ellipse", "diamond")
+_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+MAX_OBJECT_TEXT = 4000
+
+
+def clean_props(props: dict, creating: bool = True) -> dict:
+    """What a free object may carry: only these keys, only these shapes of value. Pure; unit-tested."""
+    if not isinstance(props, dict):
+        raise CanvasError("properti harus berupa objek")
+    out: dict = {}
+    if creating or "type" in props:
+        if props.get("type") not in OBJECT_TYPES:
+            raise CanvasError(f"jenis objek: {', '.join(OBJECT_TYPES)}")
+        if not creating:
+            raise CanvasError("jenis objek tidak bisa diganti")
+        out["type"] = props["type"]
+    if "text" in props:
+        out["text"] = str(props["text"] or "")[:MAX_OBJECT_TEXT]
+    for key in ("color", "stroke"):
+        if props.get(key) is not None:
+            if not _COLOR.match(str(props[key])):
+                raise CanvasError(f"{key}: warna harus #rrggbb")
+            out[key] = str(props[key]).lower()
+    if "shape" in props:
+        if props["shape"] not in SHAPES:
+            raise CanvasError(f"bentuk: {', '.join(SHAPES)}")
+        out["shape"] = props["shape"]
+    if "font" in props:
+        out["font"] = int(_extent(props["font"], 10, 96))
+    if "align" in props:
+        if props["align"] not in ("left", "center", "right"):
+            raise CanvasError("rata teks: left, center, right")
+        out["align"] = props["align"]
+    for flag in ("bold", "locked", "filled"):
+        if flag in props:
+            out[flag] = bool(props[flag])
+    return out
+
+
+def object_content(props) -> dict:
+    """The viewer's card for a free object (what _resolve does for things that live elsewhere). Pure."""
+    p = props if isinstance(props, dict) else json.loads(props or "{}")
+    text = str(p.get("text") or "")
+    first = text.strip().splitlines()[0] if text.strip() else ""
+    return {"title": _short(first, 80) or {"note": "Catatan", "text": "Teks", "shape": "Bentuk", "frame": "Bingkai"}.get(p.get("type"), "Objek"),
+            "subtitle": p.get("type", "objek"), "snippet": _short(text, 600), "type": p.get("type", "note"), "props": p}
+
+
+DEFAULT_SIZE = {"note": (220, 180), "text": (240, 60), "shape": (180, 120), "frame": (560, 380)}
+
+
+async def create_object(context: str, props: dict, actor: str, x: float = 0, z: float = 0, w=None, h=None) -> dict:
+    """The owner draws a note / text / shape / frame on the board."""
+    import secrets
+    props = clean_props(props)
+    canvas = await ensure(context)
+    dw, dh = DEFAULT_SIZE[props["type"]]
+    ref = f"obj:{secrets.token_hex(5)}"
+    async with _conn(canvas["company_id"]) as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO canvas_nodes (canvas_id, company_id, kind, ref, x, y, z, w, h, props, created_by)
+               VALUES ($1, $2, 'papan', $3, $4, 0, $5, $6, $7, $8, $9) RETURNING *""",
+            canvas["id"], canvas["company_id"], ref, _coord(x), _coord(z),
+            _extent(w if w is not None else dw, 60, 4000), _extent(h if h is not None else dh, 40, 4000), props, actor)
+        await _bump(conn, canvas, actor, f"buat {props['type']}")
+    await audit.record(actor, "canvas.object_added", f"canvas:{canvas['id']}", type=props["type"])
+    return dict(row)
+
+
+async def move_many(canvas_id: int, items: list[dict], actor: str, note: str = "") -> dict:
+    """Several cards at once (a multi-selection dragged, aligned or resized): one change, one history entry."""
+    if not items or len(items) > 500:
+        raise CanvasError("1–500 kartu sekaligus")
+    canvas = await _canvas_row(canvas_id)
+    async with _conn(canvas["company_id"]) as conn:
+        have = {r["id"] for r in await conn.fetch("SELECT id FROM canvas_nodes WHERE canvas_id = $1 AND id = ANY($2::bigint[])",
+                                                 canvas_id, [int(i["id"]) for i in items])}
+        for it in items:
+            if int(it["id"]) not in have:
+                raise CanvasError("kartu bukan milik kanvas ini")
+        for it in items:
+            vals = {k: _coord(it[k]) for k in ("x", "y", "z") if it.get(k) is not None}
+            if it.get("w") is not None:
+                vals["w"] = _extent(it["w"], 60, 4000)
+            if it.get("h") is not None:
+                vals["h"] = _extent(it["h"], 40, 4000)
+            if vals:
+                sets = ", ".join(f"{k} = ${i + 2}" for i, k in enumerate(vals))
+                await conn.execute(f"UPDATE canvas_nodes SET {sets}, updated_at = now() WHERE id = $1", int(it["id"]), *vals.values())
+        v = await _bump(conn, canvas, actor, (note or f"atur {len(items)} kartu")[:120])
+    return {"version": v, "moved": len(items)}
+
+
+def clean_style(style: dict) -> dict:
+    out: dict = {}
+    if not isinstance(style, dict):
+        raise CanvasError("gaya garis tidak valid")
+    if "to" in style:   # null / 0 takes the arrow away
+        out["to"] = int(style["to"]) if style["to"] else None
+    if "dash" in style:
+        out["dash"] = bool(style["dash"])
+    if style.get("color") is not None:
+        if not _COLOR.match(str(style["color"])):
+            raise CanvasError("warna garis harus #rrggbb")
+        out["color"] = str(style["color"]).lower()
+    return out
+
+
+async def update_edge(edge_id: int, canvas_id: int, actor: str, label: str | None = None, style: dict | None = None) -> dict:
+    canvas = await _canvas_row(canvas_id)
+    async with _conn(canvas["company_id"]) as conn:
+        row = await conn.fetchrow("SELECT * FROM canvas_edges WHERE id = $1 AND canvas_id = $2", edge_id, canvas_id)
+        if not row:
+            raise CanvasError("garis tidak ada")
+        merged = {**(row["style"] if isinstance(row["style"], dict) else json.loads(row["style"] or "{}")), **clean_style(style or {})}
+        merged = {k: v for k, v in merged.items() if v is not None}
+        if merged.get("to") not in (None, row["a"], row["b"]):
+            raise CanvasError("panah harus menunjuk salah satu ujung garis")
+        out = await conn.fetchrow("UPDATE canvas_edges SET label = $2, style = $3 WHERE id = $1 RETURNING *", edge_id,
+                                  row["label"] if label is None else label.strip()[:60], merged)
+        await _bump(conn, canvas, actor, f"ubah garis #{edge_id}")
+    return dict(out)
 
 
 async def hide(node_id: int, actor: str) -> bool:
@@ -329,16 +476,16 @@ async def hide(node_id: int, actor: str) -> bool:
     return True
 
 
-async def link(a: int, b: int, actor: str, label: str = "") -> dict:
+async def link(a: int, b: int, actor: str, label: str = "", style: dict | None = None) -> dict:
     na, ca = await _node(a)
     nb, cb = await _node(b)
     if ca["id"] != cb["id"]:
         raise CanvasError("dua kartu harus di kanvas yang sama")
     async with _conn(ca["company_id"]) as conn:
         row = await conn.fetchrow(
-            """INSERT INTO canvas_edges (canvas_id, company_id, a, b, label) VALUES ($1, $2, $3, $4, $5)
-               ON CONFLICT (a, b) DO UPDATE SET label = EXCLUDED.label RETURNING *""",
-            ca["id"], ca["company_id"], min(a, b), max(a, b), label.strip()[:60])
+            """INSERT INTO canvas_edges (canvas_id, company_id, a, b, label, style) VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT (a, b) DO UPDATE SET label = EXCLUDED.label, style = EXCLUDED.style RETURNING *""",
+            ca["id"], ca["company_id"], min(a, b), max(a, b), label.strip()[:60], {k: v for k, v in clean_style(style or {}).items() if v is not None})
         await _bump(conn, ca, actor, f"hubung #{a}–#{b}")
     return dict(row)
 
@@ -391,19 +538,28 @@ async def restore(canvas_id: int, version: int, actor: str) -> dict:
         ids = {}
         for n in keep:
             ids[n["id"]] = await conn.fetchval(
-                """INSERT INTO canvas_nodes (canvas_id, company_id, kind, ref, x, y, z, size, pinned, created_by)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id""", canvas_id, canvas["company_id"], n["kind"], n["ref"],
-                n["x"], n["y"], n["z"], n["size"], n["pinned"], actor)
+                """INSERT INTO canvas_nodes (canvas_id, company_id, kind, ref, x, y, z, size, pinned, w, h, props, created_by)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id""", canvas_id, canvas["company_id"], n["kind"], n["ref"],
+                n["x"], n["y"], n["z"], n["size"], n["pinned"], n.get("w"), n.get("h"), _as_dict(n.get("props")), actor)
         for e in snap["edges"]:
             if e["a"] in ids and e["b"] in ids:
-                await conn.execute("INSERT INTO canvas_edges (canvas_id, company_id, a, b, label) VALUES ($1, $2, $3, $4, $5)",
-                                   canvas_id, canvas["company_id"], min(ids[e["a"]], ids[e["b"]]), max(ids[e["a"]], ids[e["b"]]), e["label"])
+                style = _as_dict(e.get("style"))
+                if style.get("to") in ids:   # the arrow follows the node it pointed at, which has a new id now
+                    style["to"] = ids[style["to"]]
+                else:
+                    style.pop("to", None)
+                await conn.execute("INSERT INTO canvas_edges (canvas_id, company_id, a, b, label, style) VALUES ($1, $2, $3, $4, $5, $6)",
+                                   canvas_id, canvas["company_id"], min(ids[e["a"]], ids[e["b"]]), max(ids[e["a"]], ids[e["b"]]), e["label"], style)
         v = await _bump(conn, canvas, actor, f"pulihkan versi {version}")
     await audit.record(actor, "canvas.restored", f"canvas:{canvas_id}", version=version)
     return {"version": v, "cards": len(keep), "dropped": len(snap["nodes"]) - len(keep)}
 
 
 # ---------- reading ----------
+
+def _as_dict(v) -> dict:
+    return v if isinstance(v, dict) else (json.loads(v) if v else {})
+
 
 def _short(text: str | None, n: int = 280) -> str:
     t = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -476,17 +632,18 @@ async def view(canvas_id: int, since: int | None = None) -> dict:
         return {"id": canvas_id, "version": canvas["version"], "unchanged": True}
     async with _conn(canvas["company_id"]) as conn:
         nodes = [dict(n) for n in await conn.fetch("SELECT * FROM canvas_nodes WHERE canvas_id = $1 ORDER BY id", canvas_id)]
-        edges = [dict(e) for e in await conn.fetch("SELECT id, a, b, label FROM canvas_edges WHERE canvas_id = $1", canvas_id)]
+        edges = [dict(e) | {"style": _as_dict(e["style"])} for e in
+                 await conn.fetch("SELECT id, a, b, label, style FROM canvas_edges WHERE canvas_id = $1", canvas_id)]
         cards = []
         for n in nodes:
             exists, ref_company = await owner_of(n["ref"])
             if not exists or not allowed(n["ref"], canvas["company_id"], ref_company):
                 continue   # gone, or (never expected) not this canvas's — never shown
-            content = await _resolve(conn, n["ref"])
+            content = object_content(n["props"]) if n["ref"].startswith("obj:") else await _resolve(conn, n["ref"])
             if content is None:
                 continue
             cards.append({"id": n["id"], "ref": n["ref"], "kind": n["kind"], "x": n["x"], "y": n["y"], "z": n["z"],
-                          "size": n["size"], "pinned": n["pinned"], **content})
+                          "size": n["size"], "pinned": n["pinned"], "w": n["w"], "h": n["h"], **content})
     shown = {c["id"] for c in cards}
     return {"id": canvas_id, "context": canvas["context"], "title": canvas["title"], "version": canvas["version"],
             "focus": canvas["focus_node"] if canvas["focus_node"] in shown else None,

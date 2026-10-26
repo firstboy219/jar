@@ -720,6 +720,50 @@ class CardPatch(BaseModel):
     z: float | None = None
     size: float | None = None
     pinned: bool | None = None
+    w: float | None = None
+    h: float | None = None
+    props: dict | None = None
+
+
+class ObjectIn(BaseModel):
+    props: dict
+    x: float = 0
+    z: float = 0
+    w: float | None = None
+    h: float | None = None
+
+
+@app.post("/api/v1/canvases/{canvas_id}/objects")
+async def canvases_add_object(canvas_id: int, o: ObjectIn, device: dict = Depends(owner_device_auth)):
+    """The owner draws a note / text / shape / frame on the board (ADR-055)."""
+    try:
+        row = await canvas._canvas_row(canvas_id)
+        return jsonable(await canvas.create_object(row["context"], o.props, f"device:{device['name']}", o.x, o.z, o.w, o.h))
+    except (canvas.CanvasError, companies.CompanyError, ValueError, TypeError) as e:
+        raise _canvas_error(e)
+
+
+class LayoutItem(BaseModel):
+    id: int
+    x: float | None = None
+    y: float | None = None
+    z: float | None = None
+    w: float | None = None
+    h: float | None = None
+
+
+class LayoutIn(BaseModel):
+    items: list[LayoutItem] = Field(min_length=1, max_length=500)
+    note: str = Field(default="", max_length=100)
+
+
+@app.post("/api/v1/canvases/{canvas_id}/layout")
+async def canvases_layout(canvas_id: int, l: LayoutIn, device: dict = Depends(owner_device_auth)):
+    """A multi-selection moved / aligned / resized: one change in the history."""
+    try:
+        return await canvas.move_many(canvas_id, [i.model_dump() for i in l.items], f"device:{device['name']}", l.note)
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
 
 
 @app.patch("/api/v1/canvas/cards/{node_id}")
@@ -743,12 +787,26 @@ class EdgeIn(BaseModel):
     a: int
     b: int
     label: str = Field(default="", max_length=60)
+    style: dict = Field(default_factory=dict)
+
+
+class EdgePatch(BaseModel):
+    label: str | None = Field(default=None, max_length=60)
+    style: dict | None = None
+
+
+@app.patch("/api/v1/canvases/{canvas_id}/edges/{edge_id}")
+async def canvases_edge_patch(canvas_id: int, edge_id: int, p: EdgePatch, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await canvas.update_edge(edge_id, canvas_id, f"device:{device['name']}", p.label, p.style))
+    except (canvas.CanvasError, ValueError, TypeError) as e:
+        raise _canvas_error(e)
 
 
 @app.post("/api/v1/canvases/{canvas_id}/edges")
 async def canvases_link(canvas_id: int, e: EdgeIn, device: dict = Depends(owner_device_auth)):
     try:
-        return jsonable(await canvas.link(e.a, e.b, f"device:{device['name']}", e.label))
+        return jsonable(await canvas.link(e.a, e.b, f"device:{device['name']}", e.label, e.style))
     except canvas.CanvasError as err:
         raise _canvas_error(err)
 

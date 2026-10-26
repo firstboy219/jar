@@ -1,26 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cardScale, diffCards, ease, matchCards, spiralGalaxy, starField, contextLabel } from '../lib.js';
-
-test('the galaxy is deterministic, finite and disk-shaped', () => {
-  const a = spiralGalaxy(2000), b = spiralGalaxy(2000);
-  assert.deepEqual(a.positions, b.positions);
-  let maxY = 0, maxR = 0;
-  for (let i = 0; i < 2000; i++) {
-    const [x, y, z] = a.positions.slice(i * 3, i * 3 + 3);
-    assert.ok(Number.isFinite(x + y + z));
-    maxY = Math.max(maxY, Math.abs(y)); maxR = Math.max(maxR, Math.hypot(x, z));
-  }
-  assert.ok(maxY < 100 && maxR > 1200, `thin and wide (y ${maxY}, r ${maxR})`);
-  assert.equal(starField(100).length, 300);
-});
-
-test('cards shrink with distance and become stars far away', () => {
-  assert.ok(cardScale(300) > cardScale(900));
-  assert.equal(cardScale(5000), null);
-  assert.equal(cardScale(10), 1.6);
-  assert.equal(cardScale(0), null);
-});
+import { diffCards, ease, matchCards, contextLabel } from '../lib.js';
 
 test('search, diff, easing, labels', () => {
   const cards = [{ id: 1, title: 'Laporan omzet', x: 0, y: 0, z: 0 }, { id: 2, title: 'Rapat tim', snippet: 'bahas omzet', x: 1, y: 1, z: 1 }];
@@ -31,6 +11,7 @@ test('search, diff, easing, labels', () => {
   assert.deepEqual([d.added.map((c) => c.id), d.removed.map((c) => c.id), d.moved.map((c) => c.id)], [[3], [2], [1]]);
   assert.equal(ease(0), 0); assert.equal(ease(1), 1); assert.equal(ease(0.5), 0.5);
   assert.equal(contextLabel({ context: 'company:renature', title: 'PT Renature' }), '🏢 PT Renature');
+  assert.equal(contextLabel({ context: 'utama', title: 'Utama' }), 'Utama');
 });
 
 test('the app passes its device token in the fragment and the viewer takes it out', async () => {
@@ -59,33 +40,6 @@ test('the desk follows the owner\'s new task once, and never grabs the camera fr
   assert.deepEqual(Object.keys(PANELS).sort(), ['meeting', 'n8n', 'player', 'prompts', 'storage']);
 });
 
-test('standard views, fitting and the command line', async () => {
-  const { VIEWS, shortestAngle, boundsOf, fitDistance, orthoHeight, snapValue, distance3, cssCubeMatrix, parseCommand, clampPhi } = await import('../lib.js');
-  assert.deepEqual(Object.keys(VIEWS).sort(), ['back', 'bottom', 'front', 'iso', 'left', 'right', 'top']);
-  assert.ok(VIEWS.top.phi > 0 && VIEWS.bottom.phi < Math.PI);                      // never exactly on the pole (the up vector would flip)
-  assert.equal(clampPhi(-1), 0.02);
-  assert.ok(Math.abs(shortestAngle(0.1, 2 * Math.PI - 0.1) - (-0.1)) < 1e-9);       // back round the short side
-  const b = boundsOf([{ x: 0, y: 0, z: 0 }, { x: 1000, y: 0, z: 0 }]);
-  assert.equal(b.x, 500); assert.equal(b.radius, 500);
-  assert.equal(boundsOf([]).radius, 600);
-  assert.ok(fitDistance(500, 60, 1.6) > 500 && fitDistance(500, 60, 0.5) > fitDistance(500, 60, 1.6));   // a narrow screen needs more room
-  assert.ok(Math.abs(orthoHeight(1000, 60) - 2 * 1000 * Math.tan(Math.PI / 6)) < 1e-9);
-  assert.equal(snapValue(137, 50), 150); assert.equal(snapValue(137, 0), 137);
-  assert.equal(distance3({ x: 0, y: 0, z: 0 }, { x: 3, y: 4, z: 0 }).d, 5);
-  assert.equal(cssCubeMatrix([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]), 'matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)');
-  assert.deepEqual(parseCommand('top'), { name: 'view', view: 'top' });
-  assert.deepEqual(parseCommand('  Depan '), { name: 'view', view: 'front' });
-  assert.deepEqual(parseCommand('zoom e'), { name: 'extents' });
-  assert.deepEqual(parseCommand('ortho'), { name: 'projection', mode: 'ortho' });
-  assert.deepEqual(parseCommand('layer tugas off'), { name: 'layer', layer: 'tugas', on: false });
-  assert.deepEqual(parseCommand('layer yang ditampilkan'), { name: 'layer', layer: 'yang ditampilkan', on: null });
-  assert.deepEqual(parseCommand('view save kerja'), { name: 'saveView', as: 'kerja' });
-  assert.deepEqual(parseCommand('view kerja'), { name: 'namedView', as: 'kerja' });
-  assert.deepEqual(parseCommand('ukur'), { name: 'tool', tool: 'measure' });
-  assert.deepEqual(parseCommand('cari laporan bulanan'), { name: 'find', query: 'laporan bulanan' });
-  assert.equal(parseCommand('ngawur').name, 'unknown'); assert.equal(parseCommand('').name, 'none');
-});
-
 test('voice: resample, PCM16 and the voice activity detector', async () => {
   const { downsample, floatToPcm16, pcm16ToBase64, Vad } = await import('../lib.js');
   assert.equal(downsample(new Float32Array(48000), 48000, 16000).length, 16000);
@@ -106,21 +60,6 @@ test('voice: resample, PCM16 and the voice activity detector', async () => {
   const clicks = new Vad(); const got = [];
   for (const chunk of [quiet(1), tone(0.1, 0.4), quiet(1.5)]) { const u = clicks.push(chunk); if (u) got.push(u); }
   assert.equal(got.length, 0);                                                          // a 100 ms click is not an utterance
-});
-
-test('the view cube shows the face you are looking at: each standard view puts its face toward the viewer', async () => {
-  const THREE = await import('../vendor/three.module.min.js');
-  const { VIEWS, cssCubeMatrix } = await import('../lib.js');
-  const normals = { top: [0, -1, 0], bottom: [0, 1, 0], front: [0, 0, 1], back: [0, 0, -1], right: [1, 0, 0], left: [-1, 0, 0] };   // CSS space (y down)
-  const cam = new THREE.PerspectiveCamera(60, 1.6, 1, 80000);
-  for (const [view, n] of Object.entries(normals)) {
-    const { theta, phi } = VIEWS[view], r = 1000;
-    cam.position.set(r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.cos(theta));
-    cam.lookAt(0, 0, 0); cam.updateMatrixWorld(); cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
-    const m = cssCubeMatrix(cam.matrixWorldInverse.elements).replace('matrix3d(', '').replace(')', '').split(',').map(Number);
-    const z = m[2] * n[0] + m[6] * n[1] + m[10] * n[2];                       // the z component of the face normal after the cube's rotation
-    assert.ok(z > 0.95, `${view}: face normal z = ${z.toFixed(3)}`);          // pointing at the viewer
-  }
 });
 
 test('a live video frame carries its task and number in front of the picture', async () => {
@@ -173,4 +112,92 @@ test('desk feature cards: timer text, what plays a panel, the voice stop signal'
   assert.equal(playerSource({}).kind, 'none');
   assert.equal(stopRaised(null, 3), false); assert.equal(stopRaised(2, 2), false); assert.equal(stopRaised(2, 3), true);
   assert.ok(PANELS.player && PANELS.meeting);
+});
+
+test('board: zooming keeps the point under the cursor in place, and is bounded', async () => {
+  const { toScreen, toWorld, zoomAt, panBy, clampZoom, MIN_ZOOM, MAX_ZOOM } = await import('../lib.js');
+  const vp = { w: 1000, h: 600 }, v = { cx: 120, cy: -40, k: 1 };
+  const p = toWorld(v, vp, 700, 200);
+  const z = zoomAt(v, vp, 2, 700, 200);
+  const back = toScreen(z, vp, p.x, p.y);
+  assert.ok(Math.abs(back.x - 700) < 1e-9 && Math.abs(back.y - 200) < 1e-9 && z.k === 2);
+  assert.equal(zoomAt(v, vp, 1e9, 10, 10).k, MAX_ZOOM); assert.equal(zoomAt(v, vp, 1e-9, 10, 10).k, MIN_ZOOM); assert.equal(clampZoom(0), MIN_ZOOM);
+  const q = toWorld(panBy(v, 100, -50), vp, 500, 300);
+  assert.deepEqual([q.x, q.y], [20, 10]);                                     // dragging the paper right shows what was to the left
+});
+
+test('board: fitting a rect centres it in the free area and never zooms past the cap', async () => {
+  const { fitRect, toScreen, rectsBounds } = await import('../lib.js');
+  const vp = { w: 1000, h: 600 };
+  const r = { x: 0, y: 0, w: 4000, h: 1000 };
+  const v = fitRect(r, vp, { pad: 50 });
+  assert.ok(Math.abs(v.k - 0.225) < 1e-9);
+  const c = toScreen(v, vp, 2000, 500);
+  assert.ok(Math.abs(c.x - 500) < 1e-6 && Math.abs(c.y - 300) < 1e-6);
+  assert.equal(fitRect({ x: 0, y: 0, w: 10, h: 10 }, vp).k, 1.25);          // a tiny thing is not blown up
+  const free = fitRect(r, vp, { pad: 50, inset: { left: 200 } });
+  assert.ok(Math.abs(toScreen(free, vp, 2000, 500).x - 600) < 1e-6);         // the middle of what the left panel leaves free
+  assert.deepEqual(rectsBounds([{ x: 0, y: 0, w: 10, h: 10 }, { x: 20, y: -5, w: 10, h: 10 }]), { x: 0, y: -5, w: 30, h: 15 });
+  assert.equal(rectsBounds([]), null);
+});
+
+test('board: a mouse wheel zooms, a trackpad scroll pans, a pinch zooms', async () => {
+  const { wheelIntent } = await import('../lib.js');
+  assert.equal(wheelIntent({ deltaY: 100, deltaX: 0, deltaMode: 0 }), 'zoom');      // notched wheel
+  assert.equal(wheelIntent({ deltaY: 3, deltaX: 0, deltaMode: 1 }), 'zoom');
+  assert.equal(wheelIntent({ deltaY: 7.5, deltaX: 0, deltaMode: 0 }), 'pan');        // trackpad: fractional
+  assert.equal(wheelIntent({ deltaY: 4, deltaX: 3, deltaMode: 0 }), 'pan');          // trackpad: sideways
+  assert.equal(wheelIntent({ deltaY: -8, deltaX: 0, deltaMode: 0, ctrlKey: true }), 'zoom');   // pinch
+});
+
+test('board: smart guides pull an edge or a middle line onto a neighbour, within a tolerance', async () => {
+  const { snapRect, snapValue } = await import('../lib.js');
+  const others = [{ x: 100, y: 100, w: 200, h: 100 }];
+  const a = snapRect({ x: 303, y: 400, w: 50, h: 50 }, others, 6);            // left edge 3 away from the other's right edge
+  assert.equal(a.dx, -3); assert.equal(a.dy, 0); assert.equal(a.guides.length, 1); assert.equal(a.guides[0].axis, 'x'); assert.equal(a.guides[0].at, 300);
+  const b = snapRect({ x: 160, y: 143, w: 80, h: 10 }, others, 6);            // middle lines: x 200 meets 200, y 148 meets 150
+  assert.deepEqual([b.dx, b.dy], [0, 2]);
+  assert.deepEqual(snapRect({ x: 1000, y: 1000, w: 10, h: 10 }, others, 6), { dx: 0, dy: 0, guides: [] });
+  assert.equal(snapValue(137, 50), 150); assert.equal(snapValue(137, 0), 137);
+});
+
+test('board: align and distribute', async () => {
+  const { alignRects, distributeRects, rectsIntersect, rectContains } = await import('../lib.js');
+  const rs = [{ x: 0, y: 0, w: 100, h: 50 }, { x: 300, y: 80, w: 40, h: 40 }, { x: 150, y: 200, w: 60, h: 20 }];
+  assert.deepEqual(alignRects(rs, 'left').map((r) => r.x), [0, 0, 0]);
+  assert.deepEqual(alignRects(rs, 'right').map((r) => r.x), [240, 300, 280]);
+  assert.deepEqual(alignRects(rs, 'vcenter').map((r) => r.y), [85, 90, 100]);
+  const d = distributeRects(rs, 'h');                                          // equal gaps of 70 between the three
+  assert.equal(d[0].x, 0); assert.equal(d[1].x, 300); assert.ok(Math.abs(d[2].x - 170) < 1e-9);
+  assert.deepEqual(distributeRects(rs.slice(0, 2), 'h'), rs.slice(0, 2));
+  assert.ok(rectsIntersect(rs[0], { x: 90, y: 40, w: 50, h: 50 })); assert.ok(!rectsIntersect(rs[0], { x: 100, y: 0, w: 5, h: 5 }));
+  assert.ok(rectContains({ x: 0, y: 0, w: 500, h: 500 }, rs[1])); assert.ok(!rectContains(rs[0], rs[1]));
+});
+
+test('board: resizing from a handle keeps the opposite side still, respects the minimum, and the shape on request', async () => {
+  const { resizeRect } = await import('../lib.js');
+  const r = { x: 100, y: 100, w: 200, h: 100 };
+  assert.deepEqual(resizeRect(r, 'se', 50, 20), { x: 100, y: 100, w: 250, h: 120 });
+  assert.deepEqual(resizeRect(r, 'nw', 30, 10), { x: 130, y: 110, w: 170, h: 90 });          // the south-east corner stays at (300, 200)
+  assert.deepEqual(resizeRect(r, 'e', -500, 0), { x: 100, y: 100, w: 60, h: 100 });          // never smaller than the minimum
+  const sq = resizeRect(r, 'se', 100, 0, { ratio: true });
+  assert.ok(Math.abs(sq.w / sq.h - 2) < 1e-9);
+  const c = resizeRect(r, 'e', 40, 0, { center: true });
+  assert.deepEqual(c, { x: 60, y: 100, w: 280, h: 100 });
+});
+
+test('board: a connector leaves and enters through the facing sides and points its arrows along the curve', async () => {
+  const { connectorPath, miniMapFit } = await import('../lib.js');
+  const a = { x: 0, y: 0, w: 100, h: 60 }, b = { x: 400, y: 20, w: 100, h: 60 };
+  const c = connectorPath(a, b);
+  assert.deepEqual(c.from, { x: 100, y: 30 }); assert.deepEqual(c.to, { x: 400, y: 50 });
+  assert.ok(c.d.startsWith('M 100 30 C '));
+  assert.ok(Math.abs(c.endAngle) < 0.2);                                       // arriving from the left: the arrow points right
+  assert.ok(Math.abs(Math.abs(c.startAngle) - Math.PI) < 0.2);                 // leaving to the right: an arrow at the start points left
+  const below = connectorPath(a, { x: 10, y: 400, w: 80, h: 40 });
+  assert.deepEqual(below.from, { x: 50, y: 60 }); assert.deepEqual(below.to, { x: 50, y: 400 });
+  const up = connectorPath(below && { x: 10, y: 400, w: 80, h: 40 }, a);
+  assert.deepEqual(up.from, { x: 50, y: 400 });
+  const m = miniMapFit({ x: 0, y: 0, w: 1000, h: 500 }, { w: 200, h: 120 }, 0);
+  assert.ok(Math.abs(m.s - 0.2) < 1e-9 && Math.abs(m.oy - 10) < 1e-9);
 });
