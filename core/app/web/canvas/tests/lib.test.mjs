@@ -56,7 +56,7 @@ test('the desk follows the owner\'s new task once, and never grabs the camera fr
   assert.equal(ago(5), '5 dtk');
   assert.equal(ago(150), '3 mnt');
   assert.equal(ago(7200), '2.0 jam');
-  assert.deepEqual(Object.keys(PANELS).sort(), ['n8n', 'prompts', 'storage']);
+  assert.deepEqual(Object.keys(PANELS).sort(), ['meeting', 'n8n', 'player', 'prompts', 'storage']);
 });
 
 test('standard views, fitting and the command line', async () => {
@@ -159,4 +159,18 @@ test('takeover: a quick small touch is a click, a drag scrolls the page by page 
   assert.equal(touchIntent(2, 3, 900), 'scroll');
   assert.equal(touchIntent(0, 40, 100), 'scroll');
   assert.equal(scrollDelta(100, 400, 1100), 275);
+});
+
+test('desk feature cards: timer text, what plays a panel, the voice stop signal', async () => {
+  const { mmss, playerSource, stopRaised, PANELS } = await import('../lib.js');
+  assert.equal(mmss(0), '00:00'); assert.equal(mmss(754), '12:34'); assert.equal(mmss(3725), '1:02:05'); assert.equal(mmss(-5), '00:00');
+  assert.deepEqual(playerSource({ panel: 'video', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }), { kind: 'youtube', id: 'dQw4w9WgXcQ' });
+  assert.deepEqual(playerSource({ panel: 'video', url: 'https://youtu.be/dQw4w9WgXcQ' }), { kind: 'youtube', id: 'dQw4w9WgXcQ' });
+  assert.deepEqual(playerSource({ panel: 'music', url: '/api/v1/media/abc' }), { kind: 'audio', url: '/api/v1/media/abc', auth: true });
+  assert.deepEqual(playerSource({ panel: 'video', url: 'https://cdn.example.com/a.mp4' }), { kind: 'video', url: 'https://cdn.example.com/a.mp4', auth: false });
+  assert.equal(playerSource({ panel: 'music', url: 'http://plain.example.com/a.mp3' }).kind, 'none');
+  assert.equal(playerSource({ panel: 'music', url: 'javascript:alert(1)' }).kind, 'none');
+  assert.equal(playerSource({}).kind, 'none');
+  assert.equal(stopRaised(null, 3), false); assert.equal(stopRaised(2, 2), false); assert.equal(stopRaised(2, 3), true);
+  assert.ok(PANELS.player && PANELS.meeting);
 });

@@ -100,7 +100,9 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
     // what needs the owner's eyes comes to the front by itself: something JARVIS put on the screen, or a report not yet heard
     val panelId = stage.panel?.id
     val unheard = board.reports.count { it.state == SpokenReport.State.Unheard }
-    LaunchedEffect(panelId) { if (asTab && panelId != null) talkOpen = true }
+    // sound and video play in the desk's own player card (the web page), so only the other panels (map, document, draft…) open the sheet
+    val panelKind = stage.panel?.kind
+    LaunchedEffect(panelId) { if (asTab && panelId != null && panelKind !in DESK_PLAYS) talkOpen = true }
     LaunchedEffect(unheard) { if (asTab && unheard > 0) talkOpen = true }
 
     // the camera is only for the viewer's hand-gesture mode, only for our own origin, and only after the owner's Android consent
@@ -296,6 +298,9 @@ private fun DeskCaption(vm: JarvisViewModel, onOpen: () -> Unit, modifier: Modif
         .clip(RoundedCornerShape(14.dp)).background(Color(0xDD0B1226)).border(1.dp, micColor(mic).copy(alpha = 0.6f), RoundedCornerShape(14.dp))
         .clickable(onClick = onOpen).padding(horizontal = 12.dp, vertical = 8.dp))
 }
+
+/** Stage panels the desk plays in its player card; the native stage must not play them a second time. */
+internal val DESK_PLAYS = setOf("music", "audio", "video")
 
 /** ".../canvas/#t=<token>&app=1" — the viewer takes the token from the fragment and removes it (lib.js takeAppParams). */
 internal fun galaxyUrl(serverUrl: String, token: String): String =

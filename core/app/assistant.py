@@ -67,7 +67,8 @@ analisis, perbandingan, atau membuat sesuatu darinya → spawn_task (berkasnya o
 mengaku sudah membaca bagian yang tidak ada di pesan.
 
 Layar HP (Panggung): pemilik bisa melihat apa saja yang ditampilkan — musik/suara, video, gambar, peta, \
-halaman web, dokumen, catatan, draf, atau beberapa sekaligus. Jika ia minta menutupnya ("tutup", "sudah"), panggil close_stage. Minta putar lagu → \
+halaman web, dokumen, catatan, draf, atau beberapa sekaligus. Jika ia minta menutupnya ("tutup", "sudah"), panggil close_stage. Pemutar musik/video dan kartu Rapat juga muncul di meja (kanvas), tempat kamera terbang ke sana sendiri. \
+Rapat: "mulai rapat" → meeting(start) (merekam butuh persetujuan peserta, jadi pemilik mengetuk Mulai rekam di kartu); "selesai rapat" → meeting(stop). Minta putar lagu → \
 play_music; "masukkan lagu X ke playlist" → playlist_add; "putar playlist" → play_playlist; "tampilkan lagi gambar/dokumen/lagu \
 yang tadi/kemarin" → show_saved (semua hasil JARVIS ada di menu Simpanan); tanya jarak/rute/"lewat mana" → show_route (asal kosong = lokasi pemilik sekarang). Untuk \
 video, artikel, atau hal lain yang perlu dicari → spawn_task dan minta worker menampilkannya.
@@ -348,6 +349,15 @@ TOOLS = [
             "destination": {"type": "string"}, "origin": {"type": "string", "description": "kosong = lokasi pemilik sekarang"},
             "mode": {"type": "string", "enum": ["driving", "motor", "walking"]}}, "required": ["destination"]}}},
     {"type": "function", "function": {
+        "name": "meeting",
+        "description": "Rapat yang direkam. start = buka kartu Rapat di meja (rekaman baru mulai saat pemilik mengetuk Mulai rekam, karena semua "
+                       "peserta harus setuju); stop = hentikan rekaman yang sedang berjalan dan buat notulen.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["start", "stop"]}, "title": {"type": "string"},
+            "confidential": {"type": "boolean", "description": "rahasia: diproses hanya di server sendiri"},
+            "participants": {"type": "array", "items": {"type": "string"}}, "agenda": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "close_stage",
         "description": "Tutup panel yang sedang tampil di layar HP (musik, video, peta, web, dokumen, draf).",
         "parameters": {"type": "object", "properties": {}}}},
@@ -499,6 +509,8 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps({"relayed": ok})
             case "close_stage":
                 return json.dumps(await stage.close())
+            case "meeting":
+                return json.dumps(await _meeting(str(a.get("action") or ""), a), ensure_ascii=False)
             case "memory_correct":
                 if (refused := await chat_settings.guard("memory_correct", device_id, stt, bool(screen_text or attachments))):
                     return json.dumps({"error": refused})
@@ -890,6 +902,17 @@ async def _voice_tool(name: str, a: dict, actor: str, session_id: str, device_id
         return {"error": str(e)}
 
 
+async def _meeting(action: str, a: dict) -> dict:
+    """"Mulai rapat" / "selesai rapat": the card on the desk does the recording (ADR-054)."""
+    from . import meetings
+    if action == "stop":
+        if not await meetings.want_to_stop():
+            return {"error": "tidak ada rapat yang sedang direkam"}
+        return {"ok": True, "say": "Rekaman kuhentikan, notulennya sedang disusun dan kukabari kalau sudah jadi."}
+    w = meetings.want_to_record(str(a.get("title") or ""), bool(a.get("confidential")), a.get("participants") or [], str(a.get("agenda") or ""))
+    return {"ok": True, "judul": w["title"], "say": "Kartu Rapat sudah kubuka di meja. Pastikan semua peserta setuju direkam, lalu ketuk Mulai rekam."}
+
+
 def _owner_clear(stt: dict | None) -> bool:
     """The owner said it and it was heard well (typed text has no stt). The 'possibly misheard' line is per engine
     once the calibrated threshold passed its gate (voice.threshold_now, ADR-048); 0.45 until then."""
@@ -936,6 +959,11 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             return await model_answers.stats(a["text"])
         case "model_compare":
             return await model_answers.compare(a["text"])
+        case "meeting_start":
+            return (await _meeting("start", {"title": a.get("title", "")}))["say"]
+        case "meeting_stop":
+            r = await _meeting("stop", {})
+            return r.get("say") or f"Maaf, {r['error']}."
         case "play_music":
             r = await media_tools.play(a["query"])
             if r.get("playing") and r.get("source") == "YouTube":

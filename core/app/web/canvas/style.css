@@ -205,3 +205,27 @@ body[data-tool="measure"] #space canvas, body[data-tool="link"] #space canvas, b
 .tk-input { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; padding: 0; border: 0; }
 body.taking #bar, body.taking .palette, body.taking .navcluster { visibility: hidden; }
 @media (max-width: 700px) { .tk-title { max-width: 100%; } .tk-bar button { padding: 5px 8px; font-size: 12px; } }
+
+/* feature cards on the desk: the player and the meeting recorder (ADR-054) */
+.card.panel .pbody { margin-top: 8px; display: grid; gap: 6px; }
+.pframe { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 8px; background: #000; }
+.pmedia { width: 100%; border-radius: 8px; }
+video.pmedia { background: #000; aspect-ratio: 16 / 9; }
+.pcover { width: 96px; height: 96px; object-fit: cover; border-radius: 12px; justify-self: center; }
+.pctl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.plabel { font-size: 11px; color: var(--muted); }
+.card.panel .pbtn { margin-top: 0; }
+.mbody { display: grid; gap: 6px; margin-top: 6px; }
+.mfield { display: grid; gap: 2px; font-size: 11px; color: var(--muted); }
+.mfield input { font-size: 12px; padding: 5px 7px; background: rgba(2, 3, 10, 0.7); border: 1px solid var(--line); border-radius: 6px; color: var(--text); }
+.mcheck { display: flex; gap: 6px; align-items: flex-start; font-size: 11px; color: var(--text); }
+.mcheck input { margin-top: 2px; }
+.card.panel .mgo { margin-top: 4px; font-size: 13px; padding: 7px 10px; border-color: var(--red); color: var(--red); }
+.card.panel .mgo:disabled { opacity: .4; }
+.card.panel .mstop { margin-top: 4px; font-size: 13px; padding: 7px 10px; border-color: var(--red); color: #fff; background: rgba(248, 113, 113, 0.28); }
+.mtimer { font-size: 34px; font-variant-numeric: tabular-nums; font-weight: 700; text-align: center; letter-spacing: 1px; }
+.kind.rec { color: var(--red); animation: pulse 1.2s infinite; }
+.mmeter { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.mmeter i { display: block; height: 100%; width: 3%; background: var(--green); transition: width .12s; }
+.mstatus { font-size: 13px; color: var(--amber, #fbbf24); }
+.mstatus.ok { color: var(--green); } .mstatus.bad { color: var(--red); }

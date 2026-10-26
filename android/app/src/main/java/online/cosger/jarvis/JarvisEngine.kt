@@ -325,6 +325,22 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     fun toggleMute() = if (listener.unmuted) mute() else unmute()
 
+    /** The desk's meeting card (the owner ticked everyone's consent there) or "selesai rapat" by voice: this phone's microphone records. */
+    private fun onMeetingCmd(c: ServerEvent.MeetingCmd) {
+        val st = meetings.state.value
+        if (c.cmd == "stop") {
+            if (st.recording) meetings.stop { r -> _notice.value = if (r.isSuccess) "Rekaman selesai. Notulen sedang dibuat — JARVIS akan mengabari." else "Gagal: ${r.exceptionOrNull()?.message}" }
+            return
+        }
+        if (c.cmd != "start" || st.recording || st.finishing) return
+        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            _notice.value = "Rapat belum bisa direkam: izinkan mikrofon dulu (ketuk tombol Mikrofon di Meja sekali)."
+            return
+        }
+        prepareMeeting()
+        scope.launch { meetings.start(c.title, c.confidential, c.participants, c.agenda).onFailure { _notice.value = "Rapat tidak bisa dimulai: ${it.message}" } }
+    }
+
     /** Recording a meeting or a voiceprint sample: the JARVIS mic must let go of the microphone. */
     fun prepareMeeting() {
         speaker.stop()
@@ -500,6 +516,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 if (event.items.isNotEmpty()) _notice.value = "JARVIS menampilkan: ${event.caption.ifBlank { "${event.items.size} gambar/video" }}"
             }
             is ServerEvent.Stage -> _stage.update { it.reduce(event) }
+            is ServerEvent.MeetingCmd -> onMeetingCmd(event)
             is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind, event.labels) }
             is ServerEvent.Approval -> _notice.value = "Butuh persetujuanmu: ${event.title} (menu Tugas & Persetujuan)"
             is ServerEvent.Transcript -> {

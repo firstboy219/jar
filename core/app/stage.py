@@ -164,6 +164,20 @@ def current() -> dict | None:
     return _current
 
 
+def desk_player() -> dict | None:
+    """What the desk's player card shows (ADR-054): the music / sound / video panel that is up, else nothing. The id changes with each
+    song, so a viewer builds a new player only then; the rest of the fields describe it."""
+    cur = _current
+    if not cur or cur["panel"] not in ("music", "audio", "video"):
+        return None
+    p = cur["payload"] or {}
+    pl = p.get("playlist") if isinstance(p.get("playlist"), dict) else None
+    return {"id": cur["id"], "panel": cur["panel"], "title": str(p.get("title") or "")[:200],
+            "artist": str(p.get("artist") or p.get("channel") or "")[:200], "url": str(p.get("url") or ""),
+            "cover_url": str(p.get("cover_url") or ""), "caption": cur.get("caption", ""), "playlist": pl,
+            "license": str(p.get("license") or ""), "at": cur.get("at")}
+
+
 def describe() -> str | None:
     """For the main agent's prompt: what the owner is looking at."""
     if not _current:

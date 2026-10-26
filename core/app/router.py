@@ -58,6 +58,10 @@ _ACTIONS: list[tuple[re.Pattern, str]] = [
                 r"(?:video|film|youtube)\s+(?P<query>.{2,80}?)[.!?]*$"), "play_video"),
     (re.compile(_POLITE + r"(?:putar(?:kan|in)?|puterin|mainkan|setel(?:kan)?|play)\s+(?:lagu(?:nya)?\s+|musik\s+)?"
                 r"(?P<query>.{2,80}?)(?:\s+(?:dong|ya|ke hp|di hp))?[.!?]*$"), "play_music"),
+    (re.compile(_POLITE + r"(?:kita |saya |aku )?(?:mulai(?:kan)?|buka|rekam)\s+(?:rekam(?:an)?\s+)?(?:rapat|meeting)(?:\s+(?:ini|sekarang|dong|ya))*"
+                r"(?:\s+(?:tentang|soal|mengenai|membahas)\s+(?P<title>.{2,100}?))?(?:\s+(?:dong|ya|sekarang))*[.!?]*$"), "meeting_start"),
+    (re.compile(_POLITE + r"(?:kita |saya |aku )?(?:(?:selesai(?:kan)?|stop|akhiri|hentikan|sudah|tutup)\s+(?:rekam(?:an)?\s+)?(?:rapat|meeting|rekaman)|"
+                r"(?:rapat|meetingnya?|rapatnya)\s+(?:sudah\s+)?(?:selesai|usai))(?:\s+(?:ini|nya|sekarang|dong|ya))*[.!?]*$"), "meeting_stop"),
     (re.compile(_POLITE + r"(?:tunjukkan |tampilkan |cari(?:kan)? |lihat )?(?:rute|jalan|arah|navigasi)\s+(?:ke|menuju)\s+"
                 r"(?P<destination>.{2,80}?)[.!?]*$"), "show_route"),
     (re.compile(_POLITE + r"(?:cek |cari(?:kan)? |lihat |bacakan |apa |ada )?" + _NEWS_WORD +
@@ -101,7 +105,7 @@ def parse_action(text: str) -> Intent | None:
         m = rx.match(lowered)
         if not m:
             continue
-        args = {k: v.strip() for k, v in m.groupdict().items()}
+        args = {k: (v or "").strip() for k, v in m.groupdict().items()}
         if name == "play_music" and (args["query"] in _NOT_A_SONG or args["query"].split()[0] in _NOT_A_SONG):
             return None
         if name == "news" and _NO_TOPIC.match(args["topic"]):

@@ -165,7 +165,7 @@ fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}, onOpenBackgro
         },
         camera = { CameraPreview(frontCamera, vm::setCameraFrameSource, Modifier.fillMaxSize()) },
         onFlipCamera = { frontCamera = !frontCamera },
-        panelOpen = stage.panel != null,
+        panelOpen = stage.panel != null && !(compact && stage.panel?.kind in online.cosger.jarvis.ui.console.DESK_PLAYS),
         stageContent = {
             val workersBusy = board.workers.any { it.active }
             StageHost(stage, brain, orbPhase(turn, mic, speaking, workersBusy) != Phase.Idle,
