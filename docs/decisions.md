@@ -823,3 +823,18 @@ test task ("rekonstruksi / peningkatan performa diri", K7) and capped the spike 
 Acceptance (`test_v4_f2_*`): a heavy task goes to OpenJarvis when it is on and Hermes is never asked; a failed OpenJarvis hands
 the task to Hermes with the reason and an audit event; off by default, and private / not-heavy tasks never reach it; its gateway
 key reaches worker categories only (403 for privat/ngobrol, 401 for others) and its cost is attributed to it.
+
+## ADR-050 — The canvas in the APK: the same web viewer in a WebView (2026-10-26)
+Blueprint v4 Fase 5 (K10: web first, then the APK; the blueprint's suggested option, now taken).
+- **One viewer, two shells.** A new menu "Galaksi 3D" (Lainnya → JARVIS) opens `<server>/canvas/` in a WebView. The same code runs
+  on the web and here, so there is nothing to keep in step. What the phone adds stays native and outside this screen — microphone
+  and VAD, camera, notifications, location, meetings, the console — all unchanged in their own tabs (no regression: nothing in them
+  was touched). The web side keeps what a phone does not need (keyboard/trackpad use, the sign-in form, "Keluar").
+- **Sign-in without a password.** The app passes its existing device token in the URL fragment (`/canvas/#t=<token>&app=1`); a
+  fragment is never sent to a server, and the viewer takes it out of the address at once (`takeAppParams`, tested). The token is
+  the same one the app already uses, so it is revoked in Perangkat like any other.
+- **Contained.** Only the JARVIS server's own origin is shown in the screen (`sameOrigin`: scheme + host + port; anything else
+  opens in the browser); no file or content access; mixed content refused. The page may ask for the **camera** only for hand
+  gestures, only from our origin, and only after Android's own camera consent (the CAMERA permission the app already declares —
+  no new Android permission, no new Gradle dependency, so K1 is not touched; MediaPipe runs in the page, from the web).
+- Gestures stay navigation-only and on-device inside the WebView exactly as on the web (ADR-049).
