@@ -11,6 +11,7 @@ sensitive (OTP, card, password).
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -68,6 +69,24 @@ class Station:
 
 
 stations: dict[int, Station] = {}
+subscribers: list[tuple[str | None, asyncio.Queue]] = []   # live viewers: (company or None, queue of (task_id, seq, jpeg))
+
+
+def subscribe(context: str) -> tuple[asyncio.Queue, "callable"]:
+    """A viewer's live feed of frames for the stations of its galaxy (newest wins: a slow viewer skips frames, never lags behind)."""
+    q: asyncio.Queue = asyncio.Queue(maxsize=3)
+    entry = (context_company(context), q)
+    subscribers.append(entry)
+    return q, lambda: subscribers.remove(entry) if entry in subscribers else None
+
+
+def _publish(st: "Station", jpeg: bytes) -> None:
+    st.frame, st.frame_seq, st.frame_at = jpeg, st.frame_seq + 1, time.time()
+    for company, q in subscribers:
+        if company == st.company_id:
+            if q.full():
+                q.get_nowait()
+            q.put_nowait((st.task_id, st.frame_seq, jpeg))
 
 
 def step_text(name: str, label: str) -> tuple[str, str]:
@@ -107,6 +126,8 @@ def pick_target(targets: list[dict], hint_host: str, last_url: str, activity: di
         for t in pages:
             if t.get("url") == last_url:
                 return t
+    if activity is not None:
+        return None   # nothing the worker touched lately: show nothing rather than a forgotten tab
     real = [t for t in pages if t.get("url") not in ("", "about:blank")]
     return (real or pages)[0]
 
@@ -200,8 +221,6 @@ def _client(timeout: float) -> httpx.AsyncClient:  # seam for tests
 
 
 async def _screenshot(ws_url: str) -> bytes | None:
-    import base64
-
     import websockets
     try:
         async with websockets.connect(ws_url, max_size=8 * 2**20, open_timeout=4) as ws:
@@ -230,15 +249,72 @@ async def grab(st: Station) -> bool:
     jpeg = await _screenshot(t["webSocketDebuggerUrl"])
     if not jpeg:
         return False
-    st.frame, st.frame_seq, st.frame_at = jpeg, st.frame_seq + 1, time.time()
+    _publish(st, jpeg)
     return True
+
+
+async def _pick(st: Station) -> dict | None:
+    try:
+        async with _client(4) as c:
+            targets = (await c.get(f"{BROWSER}/json/list")).json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    t = pick_target(targets, st.hint_host, st.url, tab_activity)
+    if t:
+        st.url, st.page_title = str(t.get("url") or "")[:300], str(t.get("title") or "")[:160]
+    return t
+
+
+async def _cast_target(st: Station, t: dict) -> None:
+    """Live video of one tab: Chromium pushes a frame whenever the page changes (about 10–30 a second while the cursor glides, a page
+    scrolls or a form fills in) and we relay each one to the viewers. Returns when the worker moves to another tab or goes idle."""
+    async with _ws_connect(t["webSocketDebuggerUrl"]) as ws:
+        n = 0
+
+        async def send(method: str, params: dict | None = None) -> None:
+            nonlocal n
+            n += 1
+            await ws.send(json.dumps({"id": n, "method": method, "params": params or {}}))
+        await send("Page.startScreencast", {"format": "jpeg", "quality": 55, "maxWidth": 1100, "maxHeight": 700, "everyNthFrame": 1})
+        last_pick = time.time()
+        try:
+            while time.time() < st.browser_until:
+                try:
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), 1.0))
+                except asyncio.TimeoutError:
+                    msg = {}
+                if msg.get("method") == "Page.screencastFrame":
+                    p = msg["params"]
+                    _publish(st, base64.b64decode(p["data"]))
+                    await send("Page.screencastFrameAck", {"sessionId": p["sessionId"]})
+                if time.time() - last_pick > 1.5:   # is the worker still in this tab? the hands keep the station awake
+                    last_pick = time.time()
+                    if tab_activity.get(t.get("id"), 0) > time.time() - 12:
+                        st.browser_until = max(st.browser_until, time.time() + 8)
+                    now_tab = await _pick(st)
+                    if now_tab is None or now_tab.get("id") != t.get("id"):
+                        return
+        finally:
+            try:
+                await send("Page.stopScreencast")
+            except Exception:
+                pass
 
 
 async def _capture_loop(st: Station) -> None:
     try:
-        while time.time() < st.browser_until and not st.finished:
-            await grab(st)
-            await asyncio.sleep(FRAME_EVERY_S)
+        while time.time() < st.browser_until:
+            t = await _pick(st)
+            if t is None or not t.get("webSocketDebuggerUrl"):
+                await asyncio.sleep(0.6)
+                continue
+            try:
+                await _cast_target(st, t)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # the tab closed or the socket dropped: look for the worker's tab again
+                log.debug("screencast: %s", type(e).__name__)
+                await asyncio.sleep(0.6)
         await grab(st)   # and one last look, so the final page stays on the station
     except asyncio.CancelledError:
         raise

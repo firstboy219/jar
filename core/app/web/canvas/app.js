@@ -3,7 +3,7 @@
 // what JARVIS showed, memories, company data); this page only lays them out in space. It can fly, select, place, move,
 // link and take cards off the canvas — it never approves, deletes data, sends or pays.
 import * as THREE from './vendor/three.module.min.js';
-import { PANELS, ago, cardScale, clampPhi, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, orthoHeight, shortestAngle, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
+import { PANELS, ago, parseFrameHeader, cardScale, clampPhi, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, orthoHeight, shortestAngle, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
 import { initCad } from './cad.js';
 import { initDock } from './dock.js';
 
@@ -296,6 +296,7 @@ async function openContext(context) {
   const c = await api.req('POST', '/api/v1/canvases', { context });
   try { localStorage.setItem('jarvis_canvas_context', context); } catch { /* ignore */ }
   current = { id: c.id, version: -1, context };
+  liveVideo.watch(context);
   cards.forEach((x) => x.el.remove());
   cards = new Map();
   selected = null; linkFrom = null;
@@ -357,44 +358,84 @@ function renderLive(card, l) {
   let box = card.el.querySelector('.livebox');
   if (!box) {
     box = el('div', 'livebox');
-    box.append(el('div', 'livehead'), el('div', 'pageline'), el('img', 'frame'), el('ul', 'steps'), el('div', 'thought'));
-    box.querySelector('img').alt = '';
-    box.querySelector('img').hidden = true;
+    box.append(el('div', 'livehead'), el('div', 'pageline'), el('canvas', 'frame'), el('ul', 'steps'), el('div', 'thought'));
+    box.querySelector('canvas').hidden = true;
+    if (l.last) drawBitmap(box.querySelector('canvas'), l.last);   // the newest frame we already have
     card.el.insertBefore(box, card.el.querySelector('.actions'));
   }
   const head = box.querySelector('.livehead');
-  head.replaceChildren(el('span', `dot ${st.status}`), el('span', null, `${STATUS_TEXT[st.status] || st.status} · ${ago(st.seconds)}${st.browsing ? ' · di browser' : ''}`));
+  head.replaceChildren(el('span', `dot ${st.status}`), el('span', null, `${STATUS_TEXT[st.status] || st.status} · ${ago(st.seconds)}${st.browsing ? ' · di browser' : ''}`),
+    ...(performance.now() - (l.liveAt || -1e9) < 3000 ? [el('span', 'livebadge', '● LANGSUNG')] : []));
   box.querySelector('.pageline').textContent = st.page_title || st.url || '';
   box.querySelector('.pageline').hidden = !(st.page_title || st.url);
   const ul = box.querySelector('.steps');
   ul.replaceChildren(...st.steps.slice(-8).map((s) => el('li', s.status === 'running' ? 'now' : '', `${s.icon} ${s.text}${s.n > 1 ? ` ×${s.n}` : ''}`)));
   box.querySelector('.thought').textContent = st.thought ? `💭 ${st.thought}` : '';
-  if (frameNeedsFetch(l.shownSeq, st.frame_seq, st.has_frame)) fetchFrame(card, l);
+  if (!liveVideo.open() && frameNeedsFetch(l.shownSeq, st.frame_seq, st.has_frame)) fetchFrame(card, l);   // snapshots only while the live video is down
 }
 
+async function drawBitmap(cv, blobOrBuf) {
+  const bmp = await createImageBitmap(blobOrBuf instanceof Blob ? blobOrBuf : new Blob([blobOrBuf], { type: 'image/jpeg' }));
+  if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; }
+  cv.getContext('2d').drawImage(bmp, 0, 0);
+  bmp.close();
+  cv.hidden = false;
+}
+
+/** The fallback while the live video is down: one picture per poll. */
 async function fetchFrame(card, l) {
   if (l.fetching) return;
   l.fetching = true;
   try {
     const r = await fetch(`/api/v1/canvas/live/${l.st.task_id}/frame?context=${encodeURIComponent(current.context)}`, { headers: { Authorization: `Bearer ${api.token}` } });
     if (r.ok) {
-      const url = URL.createObjectURL(await r.blob());
-      const img = card.el.querySelector('.livebox img');
-      if (img) { const old = img.src; img.src = url; img.hidden = false; if (old.startsWith('blob:')) URL.revokeObjectURL(old); } else URL.revokeObjectURL(url);
+      const blob = await r.blob(), cv = card.el.querySelector('.livebox canvas');
+      l.last = blob;
+      if (cv) await drawBitmap(cv, blob);
       l.shownSeq = Number(r.headers.get('X-Frame-Seq')) || l.st.frame_seq;
     }
   } catch { /* the next poll tries again */ } finally { l.fetching = false; }
 }
+
+/** Live video of the stations: the server pushes every frame its browser makes (about 10–30 a second while something moves). */
+const liveVideo = (() => {
+  let ws = null, retry = 0, want = '';
+  const open = () => ws?.readyState === 1 && ws.ready;
+  function watch(context) {
+    want = context;
+    if (ws?.readyState === 1 && ws.ready) ws.send(JSON.stringify({ type: 'watch', context }));
+  }
+  function connect() {
+    if (!api.token || (ws && ws.readyState <= 1)) return;
+    ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/v1/canvas/live/ws`);
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: api.token }));
+    ws.onmessage = (m) => {
+      if (typeof m.data === 'string') {
+        if (JSON.parse(m.data).type === 'auth_ok') { ws.ready = true; retry = 0; if (want) watch(want); }
+        return;
+      }
+      const h = parseFrameHeader(m.data);
+      const l = [...liveByRef.values()].find((x) => x.st.task_id === h.task);
+      if (!l) return;
+      const frame = new Blob([m.data.slice(h.offset)], { type: 'image/jpeg' });
+      l.last = frame; l.shownSeq = h.seq; l.liveAt = performance.now();
+      const card = cardOfRef(l.st.ref), cv = card?.el.querySelector('.livebox canvas');
+      if (cv && !l.drawing) { l.drawing = true; drawBitmap(cv, frame).catch(() => {}).finally(() => { l.drawing = false; }); }
+    };
+    ws.onclose = () => { if (ws) ws.ready = false; setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000)); };
+    ws.onerror = () => ws.close();
+  }
+  return { open, watch, connect };
+})();
+setInterval(() => liveVideo.connect(), 2000);
 
 function clearLive(ref) {
   const card = cardOfRef(ref);
   if (card) {
     card.live = null;
     card.el.classList.remove('live');
-    const box = card.el.querySelector('.livebox');
-    const img = box?.querySelector('img');
-    if (img?.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
-    box?.remove();
+    card.el.querySelector('.livebox')?.remove();
   }
   liveByRef.delete(ref);
 }

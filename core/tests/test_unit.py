@@ -1256,7 +1256,9 @@ def test_the_station_follows_the_tab_the_hands_are_in_and_forgotten_tabs_are_clo
     now = 10_000.0
     assert live.pick_target(tabs, "", "", {"B": now - 5, "A": now - 40}, now)["id"] == "B"                 # the hands moved in B most recently
     assert live.pick_target(tabs, "www.iana.org", "", {"B": now - 5, "A": now - 40}, now)["id"] == "A"     # both are hot: the one on the host it was told to open
-    assert live.pick_target(tabs, "", "", {"B": now - 500}, now)["id"] == "A"                              # nothing hot: the old rules (first real page)
+    assert live.pick_target(tabs, "", "", {"B": now - 500}, now) is None                                   # nothing hot, nothing told: show nothing, not a forgotten tab
+    assert live.pick_target(tabs, "", "https://www.iana.org/help/example-domain", {"B": now - 500}, now)["id"] == "A"   # …unless it was seen there
+    assert live.pick_target(tabs, "", "")["id"] == "A"                                                     # (without an activity map: the first real page, as before)
     assert live.pick_target(tabs, "www.jobstreet.co.id", "", {"A": now - 500}, now)["id"] == "B"           # …or the host it was told to open
     many = [{"id": str(i), "type": "page", "url": f"https://s{i}.id/"} for i in range(12)]
     act = {str(i): now - i * 1000 for i in range(12)}                                                      # tab 0 newest … tab 11 oldest (11000 s idle)

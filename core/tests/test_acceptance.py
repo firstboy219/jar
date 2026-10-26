@@ -1223,10 +1223,18 @@ async def test_v4_f6_the_agent_can_read_draft_and_propose_but_has_no_way_to_send
 
 
 async def _station_env(pool, monkeypatch):
-    """The desk with a fake shared browser: one tab, and a screenshot that changes every look."""
+    """The desk with a fake shared browser: one tab the worker's hands are in, and a screencast that pushes a frame whenever 'the page changes'."""
+    import asyncio
+    import base64
+    import time
+
+    import httpx
     from app import hub, live
     live.stations.clear()
-    looks = {"n": 0}
+    live.subscribers.clear()
+    live.tab_activity.clear()
+    live.tab_activity["P1"] = time.time()                                   # the hands moved in this tab a moment ago
+    looks = {"frames": 0, "acks": [], "started": 0}
 
     class FakeBrowser:
         async def __aenter__(self):
@@ -1236,16 +1244,45 @@ async def _station_env(pool, monkeypatch):
             return False
 
         async def get(self, url):
-            import httpx
-            return httpx.Response(200, json=[{"type": "page", "url": "https://www.jostreet.com/produk", "title": "Produk Jostreet",
-                                              "webSocketDebuggerUrl": "ws://fake/page"}])
+            return httpx.Response(200, json=[{"id": "P1", "type": "page", "url": "https://www.jostreet.com/produk", "title": "Produk Jostreet",
+                                              "webSocketDebuggerUrl": "ws://fake/page"},
+                                             {"id": "OLD", "type": "page", "url": "https://iana.org/", "title": "forgotten", "webSocketDebuggerUrl": "ws://fake/old"}])
     monkeypatch.setattr(live, "_client", lambda timeout: FakeBrowser())
 
+    class FakePage:
+        def __init__(self, url):
+            self.url, self.q = url, asyncio.Queue()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            if getattr(self, "pusher", None):
+                self.pusher.cancel()
+            return False
+
+        async def send(self, raw):
+            m = json.loads(raw)
+            if m["method"] == "Page.startScreencast" and self.url.endswith("/page"):
+                looks["started"] += 1
+
+                async def push():                                        # Chromium keeps pushing while something moves: ~100 frames a second here
+                    for i in range(1, 400):
+                        looks["frames"] += 1
+                        self.q.put_nowait(json.dumps({"method": "Page.screencastFrame", "params": {
+                            "data": base64.b64encode(b"\xff\xd8JPEG" + bytes([i % 250])).decode(), "sessionId": i}}))
+                        await asyncio.sleep(0.01)
+                self.pusher = asyncio.create_task(push())
+            elif m["method"] == "Page.screencastFrameAck":
+                looks["acks"].append(m["params"]["sessionId"])
+
+        async def recv(self):
+            return await self.q.get()
+    monkeypatch.setattr(live, "_ws_connect", lambda url: FakePage(url))
+
     async def screenshot(ws_url):
-        looks["n"] += 1
-        return b"\xff\xd8JPEG" + bytes([looks["n"]])
+        return b"\xff\xd8JPEG-final"
     monkeypatch.setattr(live, "_screenshot", screenshot)
-    monkeypatch.setattr(live, "FRAME_EVERY_S", 0.01)
     hub.reset()
     live.start()
     return looks
@@ -1256,7 +1293,8 @@ async def test_v4_f7_a_worker_task_is_a_station_on_the_desk_with_steps_and_the_p
 
     import httpx
     from app import devices, hub, live, main
-    await _station_env(pool, monkeypatch)
+    looks = await _station_env(pool, monkeypatch)
+    watcher_q, unsubscribe = live.subscribe("utama")                                  # a viewer with the desk open
     tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status)
                                  VALUES ('s-f7', 'Cek web Jostreet', 'cek jostreet', 'owner', 'web', 'running') RETURNING id""")
     await hub.broadcast({"type": "task", "id": tid, "title": "Cek web Jostreet", "status": "running", "kind": "owner"})
@@ -1285,6 +1323,12 @@ async def test_v4_f7_a_worker_task_is_a_station_on_the_desk_with_steps_and_the_p
     steps = (await live.snapshot("utama"))["stations"][0]["steps"]
     assert len(steps) == 4 and steps[3]["n"] == 3 and steps[3]["text"] == "Menjalankan di halaman: ambil teks halaman"
     assert st["page_title"] == "Produk Jostreet" and st["has_frame"] and st["frame_seq"] >= 2
+    assert looks["started"] >= 1 and len(looks["acks"]) >= 2                              # a live screencast on the worker's tab, every frame acknowledged
+    got = []
+    while not watcher_q.empty():
+        got.append(watcher_q.get_nowait())
+    assert got and all(g[0] == tid for g in got) and [g[1] for g in got] == sorted(g[1] for g in got)   # pushed to the viewer, in order, for its task
+    unsubscribe()
     assert {"n8n", "prompts", "storage"} <= set(snap)                                          # the owner's desk also has the panels
 
     _, token = await devices.create("HP", "test", scope="owner")
@@ -1492,3 +1536,48 @@ async def test_v4_f7_the_shared_browser_gets_the_hands_overlay_in_every_page(poo
     js = live.CURSOR_JS
     assert "mode: 'closed'" in js and "pointer-events:none" in js and "aria-hidden" in js     # draws, never touches or answers the page
     assert "fetch(" not in js and "XMLHttpRequest" not in js and "sendBeacon" not in js        # and sends nothing anywhere
+
+
+async def test_v4_f7_live_video_reaches_a_viewer_over_a_websocket_only_for_its_own_galaxy(pool, monkeypatch):
+    import asyncio
+
+    from app import devices, hub, live, main
+    looks = await _station_env(pool, monkeypatch)
+    _, token = await devices.create("Browser meja", "test", scope="owner")
+    tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status)
+                                 VALUES ('s-v', 'Cek web', 'x', 'owner', 'web', 'running') RETURNING id""")
+    await hub.broadcast({"type": "task", "id": tid, "title": "Cek web", "status": "running", "kind": "owner"})
+
+    class Sock(_FakeSocket):
+        def __init__(self):
+            super().__init__()
+            self.bytes = []
+
+        async def send_bytes(self, data):
+            self.bytes.append(data)
+    stranger, viewer = Sock(), Sock()
+    srv1 = asyncio.create_task(main.canvas_live_ws(stranger))
+    await stranger.inbox.put(json.dumps({"type": "auth", "token": "salah"}))
+    await asyncio.wait_for(srv1, 3)
+    assert {"type": "closed", "code": 4401} in stranger.out and not stranger.bytes                # a wrong token never gets video
+    srv2 = asyncio.create_task(main.canvas_live_ws(viewer))
+    await viewer.inbox.put(json.dumps({"type": "auth", "token": token}))
+    await viewer.inbox.put(json.dumps({"type": "watch", "context": "utama"}))
+    await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": "c1", "name": "browser_navigate",
+                                                                          "label": "https://www.jostreet.com/produk", "status": "running"}})
+    for _ in range(150):
+        if len(viewer.bytes) >= 3:
+            break
+        await asyncio.sleep(0.02)
+    assert len(viewer.bytes) >= 3                                                                   # frames pushed as they happen, not polled
+    task_id, seq = int.from_bytes(viewer.bytes[0][:4], "big"), int.from_bytes(viewer.bytes[0][4:8], "big")
+    assert task_id == tid and seq >= 1 and viewer.bytes[0][8:].startswith(b"\xff\xd8JPEG")         # task id + frame number + the JPEG
+    assert {"type": "auth_ok"} in viewer.out
+    await viewer.inbox.put(json.dumps({"type": "watch", "context": "company:renature"}))             # another galaxy: this task's frames stop
+    await asyncio.sleep(0.2)
+    n = len(viewer.bytes)
+    await asyncio.sleep(0.4)
+    assert len(viewer.bytes) == n
+    srv2.cancel()
+    await asyncio.gather(srv2, return_exceptions=True)
+    assert live.subscribers == []                                                                    # a closed viewer leaves nothing behind

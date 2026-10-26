@@ -122,3 +122,10 @@ test('the view cube shows the face you are looking at: each standard view puts i
     assert.ok(z > 0.95, `${view}: face normal z = ${z.toFixed(3)}`);          // pointing at the viewer
   }
 });
+
+test('a live video frame carries its task and number in front of the picture', async () => {
+  const { parseFrameHeader } = await import('../lib.js');
+  const buf = new Uint8Array([0, 0, 1, 2, 0, 0, 0, 7, 0xff, 0xd8]).buffer;
+  assert.deepEqual(parseFrameHeader(buf), { task: 258, seq: 7, offset: 8 });
+  assert.deepEqual([...new Uint8Array(buf.slice(8))], [0xff, 0xd8]);
+});

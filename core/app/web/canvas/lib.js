@@ -299,3 +299,9 @@ export class Vad {
   }
 }
 function concat(list) { const n = list.reduce((s, a) => s + a.length, 0), out = new Float32Array(n); let o = 0; for (const a of list) { out.set(a, o); o += a.length; } return out; }
+
+/** A live video frame from the server: task id (4 bytes) + frame number (4 bytes), then the JPEG. */
+export function parseFrameHeader(buf) {
+  const v = new DataView(buf);
+  return { task: v.getUint32(0), seq: v.getUint32(4), offset: 8 };
+}

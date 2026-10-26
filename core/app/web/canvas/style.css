@@ -90,7 +90,7 @@ button.danger { border-color: rgba(248, 113, 113, 0.5); color: #fecaca; }
 .livebox { margin-top: 8px; display: grid; gap: 6px; }
 .livehead { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
 .pageline { font-size: 11px; color: var(--cyan); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.livebox img.frame { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; border-radius: 8px; background: #000; border: 1px solid var(--line); }
+.livebox .frame { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; border-radius: 8px; background: #000; border: 1px solid var(--line); }
 .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
 .steps li.now { color: var(--text); }
 .steps li.now::after { content: " …"; }
@@ -184,3 +184,4 @@ body[data-tool="measure"] #space canvas, body[data-tool="link"] #space canvas, b
 .btnlink { font: inherit; color: var(--text); background: rgba(30, 44, 80, 0.75); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; text-decoration: none; }
 .btnlink:hover { border-color: var(--cyan); } .in-app .btnlink { display: none; }
 @media (max-width: 700px) { .in-app .dock { left: 62px; } .in-app .previews { display: none; } }
+.livebadge { margin-left: auto; padding: 1px 7px; border-radius: 999px; font-size: 10px; letter-spacing: 1px; color: #fff; background: #e11d48; animation: pulse 1.4s infinite; }

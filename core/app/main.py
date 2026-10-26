@@ -575,6 +575,61 @@ async def canvas_live(context: str = "utama", device: dict = Depends(device_auth
     return jsonable(await live.snapshot(context[:80]))
 
 
+@app.websocket("/api/v1/canvas/live/ws")
+async def canvas_live_ws(websocket: WebSocket):
+    """Live video of the stations (ADR-051): after a first {"type":"auth","token"} and {"type":"watch","context"} message, every frame the
+    worker's browser produces arrives as ONE binary message: task id (4 bytes) + frame number (4 bytes), then the JPEG. Paired devices only;
+    a company's frames only to that company's galaxy."""
+    await websocket.accept()
+    device = await devices.authenticate(_bearer(websocket.headers.get("authorization")))
+    unsubscribe = None
+    try:
+        context = "utama"
+        while True:
+            msg = json.loads(await asyncio.wait_for(websocket.receive_text(), 15 if unsubscribe is None else 3600))
+            if msg.get("type") == "auth" and not device:
+                device = await devices.authenticate(msg.get("token"))
+                if not device:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "unauthorized"}))
+                    await websocket.close(code=4401)
+                    return
+                await websocket.send_text(json.dumps({"type": "auth_ok"}))
+            elif msg.get("type") == "watch" and device:
+                context = str(msg.get("context") or "utama")[:80]
+                if unsubscribe:
+                    unsubscribe()
+                queue, unsubscribe = live.subscribe(context)
+                for st in list(live.stations.values()):   # what is already on screen, at once
+                    if st.frame and st.company_id == live.context_company(context):
+                        queue.put_nowait((st.task_id, st.frame_seq, st.frame))
+                break
+            elif not device:
+                await websocket.close(code=4401)
+                return
+
+        async def pump():
+            while True:
+                task_id, seq, jpeg = await queue.get()
+                await websocket.send_bytes(task_id.to_bytes(4, "big") + (seq & 0xFFFFFFFF).to_bytes(4, "big") + jpeg)
+        pumper = asyncio.create_task(pump())
+        try:
+            while True:  # the viewer may switch galaxy: a new "watch" replaces the subscription
+                msg = json.loads(await websocket.receive_text())
+                if msg.get("type") == "watch":
+                    unsubscribe()
+                    queue, unsubscribe = live.subscribe(str(msg.get("context") or "utama")[:80])
+                    for st in list(live.stations.values()):
+                        if st.frame and st.company_id == live.context_company(str(msg.get("context") or "utama")):
+                            queue.put_nowait((st.task_id, st.frame_seq, st.frame))
+        finally:
+            pumper.cancel()
+    except (WebSocketDisconnect, asyncio.TimeoutError, ValueError, RuntimeError):
+        pass
+    finally:
+        if unsubscribe:
+            unsubscribe()
+
+
 @app.get("/api/v1/canvas/live/{task_id}/frame")
 async def canvas_live_frame(task_id: int, context: str = "utama", device: dict = Depends(device_auth)):
     got = live.frame(task_id, context[:80])
