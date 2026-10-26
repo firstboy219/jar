@@ -1652,6 +1652,16 @@ async def test_v4_f12_logging_in_to_google_from_the_phone_puts_the_account_into_
     assert again.status_code == 400                                                       # a state works once
 
 
+async def test_v4_f12_the_owner_can_hand_a_worker_a_brief_word_for_word(pool, monkeypatch):
+    from app import main, workers
+    started = []
+    monkeypatch.setattr(workers, "_start", lambda task_id, context="": started.append(task_id))
+    brief = "Kembangkan fitur X. " + "langkah " * 300
+    t = await main.admin_task(main.AdminTask(title="Fitur X", instruction=brief), actor="web-admin")
+    assert started == [t["id"]] and t["category"] == "coding"
+    assert await pool.fetchval("SELECT instruction FROM tasks WHERE id = $1", t["id"]) == brief.strip()
+
+
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
     from app import assistant
     brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200

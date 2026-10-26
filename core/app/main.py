@@ -2317,6 +2317,18 @@ async def admin_audit(_: str = admin):
     return await audit.recent()
 
 
+class AdminTask(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    instruction: str = Field(min_length=10, max_length=12000)
+    category: str = "coding"
+
+
+@app.post("/admin/tasks")
+async def admin_task(t: AdminTask, actor: str = admin):
+    """The owner hands a worker a brief word for word (the main agent may shorten or split a long one)."""
+    return await workers.spawn(t.title, t.instruction, "web-admin", actor, category=t.category)
+
+
 class AdminChat(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     session_id: str = "web-admin"
