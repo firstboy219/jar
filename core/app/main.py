@@ -743,6 +743,15 @@ async def canvases_add_object(canvas_id: int, o: ObjectIn, device: dict = Depend
         raise _canvas_error(e)
 
 
+@app.post("/api/v1/canvases/{canvas_id}/arrange")
+async def canvases_arrange(canvas_id: int, device: dict = Depends(owner_device_auth)):
+    """"Rapikan": cards that point at something go back into the grid of their area (the owner's drawings and locked cards stay)."""
+    try:
+        return await canvas.arrange(canvas_id, f"device:{device['name']}")
+    except canvas.CanvasError as e:
+        raise _canvas_error(e)
+
+
 class LayoutItem(BaseModel):
     id: int
     x: float | None = None

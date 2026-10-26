@@ -455,6 +455,15 @@ export function createBoard(ctx) {
     const before = snapshotRects(ids);
     await commitLayout(before, distributeRects(before, axis), 'sebarkan');
   }
+  async function arrange() {
+    const list = [...cards.values()].filter((c) => !isObj(c) && !isLocked(c));
+    if (!list.length) return toast('Tidak ada kartu yang perlu dirapikan.');
+    const before = snapshotRects(list.map((c) => c.data.id));
+    await api.req('POST', `/api/v1/canvases/${canvasId()}/arrange`);
+    record({ label: 'rapikan', undo: () => pushLayout(before, 'urung rapikan'), redo: () => api.req('POST', `/api/v1/canvases/${canvasId()}/arrange`) });
+    await refresh(true);
+    fitAll(600);
+  }
   async function setGeometry(patch) {   // typed X / Y / W / H of a single card
     const [id] = [...sel];
     const c = cards.get(id);
@@ -533,7 +542,7 @@ export function createBoard(ctx) {
     if (e.button === 1 || holdsPan()) { gesture = { ...base, mode: 'pan', view0: { ...view } }; stage.classList.add('panning'); return; }
     if (handle) { startResize(base, handle.dataset.handle); return; }
     if (tool === 'connector' && card) { startWire(base, card.__card.data.id); return; }
-    if (['note', 'text', 'shape', 'frame'].includes(tool) && !card) { gesture = { ...base, mode: 'draw' }; return; }
+    if (['note', 'text', 'shape', 'frame'].includes(tool)) { gesture = { ...base, mode: 'draw' }; return; }
     if (edge) { selectEdge(Number(edge.dataset.id)); gesture = { ...base, mode: 'none' }; return; }
     if (card) {
       const c = card.__card, id = c.data.id;
@@ -881,7 +890,7 @@ export function createBoard(ctx) {
     flyToPoint(x, y, k = 0.8, ms = 800) { setView({ cx: x, cy: y, k }, ms); },
     select, selectEdge, setTool, setShape(s) { shapeKind = s; setTool('shape'); },
     selectionInfo, histState, undo, redo, record,
-    createObject, setProps, setPinned, removeSelection, removeEdge, patchEdge, duplicate, copy, paste, order, align, distribute, setGeometry, startEdit, addEdge,
+    createObject, arrange, setProps, setPinned, removeSelection, removeEdge, patchEdge, duplicate, copy, paste, order, align, distribute, setGeometry, startEdit, addEdge,
     isObj, isLocked,
     setSnap(v) { snapOn = v; emit('tool', tool); }, setGuides(v) { guidesOn = v; emit('tool', tool); },
     setGrid(v) { gridOn = v; stage.classList.toggle('nogrid', !v); emit('tool', tool); },

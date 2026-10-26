@@ -543,7 +543,7 @@ async def test_v4_f1_anything_that_changes_the_outside_world_stops_at_approval(p
     sneaky = await gm.create(r, "rencana", "Susun rencana lalu posting ke Instagram resmi", "owner")
     assert sneaky["status"] == "awaiting_owner"                                     # the words give it away
     await approvals.decide(d["approval_id"], True, "device:HP")                     # the owner's phone may approve company work
-    assert (await gm.get(r, d["id"]))["status"] == "sent" and len(gm.MockDGM.sent) == 1
+    assert (await gm.get(r, d["id"]))["status"] in ("sent", "completed") and len(gm.MockDGM.sent) == 1   # the mock may already have answered
 
 
 async def test_v4_f1_callbacks_are_signed_deduplicated_and_company_bound(pool, monkeypatch):
@@ -1829,3 +1829,18 @@ async def test_v4_f11_the_board_endpoints_need_an_owner_and_reject_nonsense(pool
     assert (moved["x"], moved["z"]) == (50, 60)
     with pytest.raises(HTTPException):
         await main.canvases_layout(c["id"], main.LayoutIn(items=[main.LayoutItem(id=987654321, x=1)]), device=dev)
+
+
+async def test_v4_f11_arrange_puts_pointing_cards_back_in_their_grid_and_leaves_drawings_and_locked_cards(pool, monkeypatch):
+    from app import canvas
+    t = [await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, category, status) VALUES ('s-ar', $1, 'x', 'owner', 'web', 'completed') RETURNING id", f"T{i}") for i in range(3)]
+    c = await canvas.ensure("utama")
+    nodes = [await canvas.add("utama", f"task:{i}", "owner", (123.0 + n, 5.0, 456.0)) for n, i in enumerate(t)]
+    note = await canvas.create_object("utama", {"type": "note", "text": "tetap"}, "owner", 7, 8)
+    await canvas.move(nodes[2]["id"], "owner", pinned=True)
+    r = await canvas.arrange(c["id"], "owner")
+    assert r["arranged"] == 2
+    got = {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}
+    a, b = got[nodes[0]["id"]], got[nodes[1]["id"]]
+    assert (a["x"], a["z"]) == (canvas.place("tugas", 0)[0], canvas.place("tugas", 0)[2]) and b["x"] == canvas.place("tugas", 1)[0]
+    assert (got[nodes[2]["id"]]["x"], got[note["id"]]["x"]) == (125.0, 7)                                  # locked and drawn things stay where they are

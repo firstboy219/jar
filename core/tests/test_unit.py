@@ -1105,7 +1105,11 @@ def test_canvas_geometry_refs_contexts_and_isolation_rule():
     a, b = canvas.place("tugas", 0), canvas.place("tugas", 1)
     assert a != b and canvas.place("tugas", 5) == canvas.place("tugas", 5)          # deterministic, distinct
     cx, _, cz = centers["tugas"]
-    assert all(abs(p[0] - cx) < 500 and abs(p[2] - cz) < 500 for p in (canvas.place("tugas", i) for i in range(30)))
+    spots = [canvas.place("tugas", i) for i in range(30)]
+    assert all(abs(p[0] - cx) < 700 and 0 < p[2] - cz < 2100 for p in spots)                    # rows under the area's name
+    assert len({(p[0], p[2]) for p in spots}) == 30 and spots[0][2] == spots[3][2] < spots[4][2]  # four to a row, then down
+    near = sorted((abs(a[0] - b[0]), abs(a[2] - b[2])) for a in spots[:8] for b in spots[:8] if a != b)
+    assert all(dx >= 340 or dz >= 230 for dx, dz in near)                                            # two 300 × 160 cards never overlap
     assert canvas.context_of("") == "utama" and canvas.context_of("Toko Online!") == "project:toko-online"
     assert canvas.context_of("company:renature") == "company:renature" and canvas.context_company("company:renature") == "renature"
     assert canvas.parse_ref("task:12") == ("task", "12")

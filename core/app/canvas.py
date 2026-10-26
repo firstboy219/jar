@@ -37,7 +37,8 @@ COMPANY_ONLY = {"vault", "directive"}          # these exist only inside a compa
 PERSONAL_ONLY = {"memory", "goal", "playlist", "music", "shown", "meeting"}   # personal things never go to a company galaxy
 PERSONAL_KINDS = ["tugas", "tampilan", "dokumen", "rapat", "memori", "musik", "tujuan", "keputusan"]
 COMPANY_KINDS = ["tugas", "perusahaan", "arahan", "dokumen", "keputusan"]   # a company galaxy has no personal constellations (free objects, kind "papan", have no zone: they sit where the owner puts them)
-GALAXY_R = 1500.0
+GALAXY_R = 2700.0                      # the ring the areas sit on, in board units
+GRID_COLS, CELL_W, CELL_H = 4, 340, 230   # a card is about 300 × 160: this leaves a gutter
 KEEP_VERSIONS = 60
 
 
@@ -48,21 +49,18 @@ class CanvasError(ValueError):
 # ---------- pure geometry ----------
 
 def constellation_center(kind: str, company: bool = False) -> tuple[float, float, float]:
-    """Each kind sits on a spiral arm of the galaxy, at its own angle — spread over the kinds this galaxy has. Pure."""
+    """Each kind has its own area of the board, on a ring around the middle (where the desk panels sit), one angle per kind. Pure."""
     order = COMPANY_KINDS if company else PERSONAL_KINDS
     i = order.index(kind) if kind in order else len(order)
     angle = i * (2 * math.pi / len(order))
-    r = GALAXY_R * (0.42 + 0.12 * (i % 3))
-    return (round(r * math.cos(angle), 2), round(60 * math.sin(i * 1.7), 2), round(r * math.sin(angle), 2))
+    return (round(GALAXY_R * math.cos(angle), 2), 0.0, round(GALAXY_R * math.sin(angle), 2))
 
 
 def place(kind: str, index: int, company: bool = False) -> tuple[float, float, float]:
-    """The index-th card of a constellation: a golden-angle spiral around its centre, gently lifted in 3D. Pure."""
-    cx, cy, cz = constellation_center(kind, company)
-    golden = math.pi * (3 - math.sqrt(5))
-    r = 70 * math.sqrt(index + 0.5)
-    a = index * golden
-    return (round(cx + r * math.cos(a), 2), round(cy + 40 * math.sin(index * 0.9), 2), round(cz + r * math.sin(a), 2))
+    """The index-th card of an area: rows of GRID_COLS cards under the area's name, left to right, then down. Pure."""
+    cx, _, cz = constellation_center(kind, company)
+    col, row = index % GRID_COLS, index // GRID_COLS
+    return (round(cx - GRID_COLS * CELL_W / 2 + col * CELL_W + 20, 2), 0.0, round(cz + 90 + row * CELL_H, 2))
 
 
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -464,6 +462,21 @@ async def update_edge(edge_id: int, canvas_id: int, actor: str, label: str | Non
                                   row["label"] if label is None else label.strip()[:60], merged)
         await _bump(conn, canvas, actor, f"ubah garis #{edge_id}")
     return dict(out)
+
+
+async def arrange(canvas_id: int, actor: str) -> dict:
+    """Put every card that points at something (not the owner's own drawings, not locked ones) back in the grid of its area."""
+    canvas = await _canvas_row(canvas_id)
+    async with _conn(canvas["company_id"]) as conn:
+        rows = await conn.fetch("SELECT id, kind FROM canvas_nodes WHERE canvas_id = $1 AND NOT pinned AND ref NOT LIKE 'obj:%' ORDER BY kind, id", canvas_id)
+        count: dict[str, int] = {}
+        for r in rows:
+            i = count[r["kind"]] = count.get(r["kind"], -1) + 1
+            x, y, z = place(r["kind"], i, bool(canvas["company_id"]))
+            await conn.execute("UPDATE canvas_nodes SET x = $2, y = $3, z = $4, updated_at = now() WHERE id = $1", r["id"], x, y, z)
+        v = await _bump(conn, canvas, actor, f"rapikan {len(rows)} kartu")
+    await audit.record(actor, "canvas.arranged", f"canvas:{canvas_id}", cards=len(rows))
+    return {"version": v, "arranged": len(rows)}
 
 
 async def hide(node_id: int, actor: str) -> bool:
