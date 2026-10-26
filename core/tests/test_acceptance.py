@@ -581,6 +581,10 @@ async def test_v4_f1_mock_dgm_round_trip_and_the_fast_lane(pool, monkeypatch):
     async def done():
         return (await gm.get(r, d["id"]))["status"] == "completed"
     assert await _wait(done)                                                       # sent → signed callback → completed → reported
+
+    async def reported():   # the report is written just after the status flips: wait for it instead of racing it
+        return bool(await pool.fetchval("SELECT count(*) FROM reports"))
+    assert await _wait(reported)
     assert "SIMULASI" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
 
     async def never(*a, **k):
