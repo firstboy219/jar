@@ -711,6 +711,23 @@ def hold_state(task_id: int) -> dict:
     return {"status": "handed_back", "note": HANDED_BACK}
 
 
+EDITABLE_JS = ("(() => { let a = document.activeElement; while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;"
+               " if (a && a.tagName === 'IFRAME') { try { a = a.contentDocument.activeElement; } catch (e) { return true; } }"
+               " return !!a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' &&"
+               " !['button','checkbox','radio','submit','reset','image','file','range','color'].includes((a.type || '').toLowerCase()))); })()")
+
+
+async def focus_editable(task_id: int, context: str) -> bool:
+    """After the owner's tap: is the page's focus now in a field one types into? Then the phone opens its keyboard by itself."""
+    st = stations.get(task_id)
+    if not st or st.company_id != context_company(context) or not controlled(st):
+        return False
+    await asyncio.sleep(0.12)   # let the page move its focus first
+    drv = await _driver_for(st)
+    r = await drv.call("Runtime.evaluate", {"expression": EDITABLE_JS, "returnByValue": True}, wait=2)
+    return bool((r.get("result") or {}).get("value"))
+
+
 HANDED_BACK = ("Pemilik sudah membantu langsung di browser (login / captcha / langkah yang kamu tunggu). "
                "Lanjutkan dari halaman yang sekarang terbuka; ambil dulu pandangan halamannya.")
 

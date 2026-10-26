@@ -22,7 +22,7 @@ export function createTakeover({ send, toast }) {
   pasteIn.setAttribute('data-lpignore', 'true');
   const pasteGo = el('button', null, 'Kirim'); pasteGo.type = 'submit';
   pasteRow.append(pasteIn, pasteGo);
-  const kin = el('input', 'tk-input'); kin.autocapitalize = 'off'; kin.autocomplete = 'off'; kin.spellcheck = false; kin.setAttribute('aria-label', 'Ketikan ke halaman');
+  const kin = el('input', 'tk-input'); kin.type = 'text'; kin.inputMode = 'text'; kin.enterKeyHint = 'enter'; kin.autocapitalize = 'off'; kin.autocomplete = 'off'; kin.spellcheck = false; kin.setAttribute('aria-label', 'Ketikan ke halaman');
   root.append(bar, note, stage, pasteRow, kin);
   document.body.append(root);
   // nothing under the window (the 3D desk, its shortcuts) hears what happens in it
@@ -40,6 +40,7 @@ export function createTakeover({ send, toast }) {
 
   cv.addEventListener('contextmenu', (e) => e.preventDefault());
   cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();   // no compatibility mousedown: a tap on the video must not take the focus (and the keyboard) away from the field
     cv.setPointerCapture(e.pointerId);
     const p = at(e), now = performance.now();
     const same = last && now - last.t < 450 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 8;
@@ -71,7 +72,8 @@ export function createTakeover({ send, toast }) {
         const q = pageFraction(rect(), press.x0, press.y0);
         put({ t: 'mouse', k: 'move', x: q.x, y: q.y, b: 'none' });
         put({ t: 'mouse', k: 'down', x: q.x, y: q.y, b: 'left', c: press.count });
-        put({ t: 'mouse', k: 'up', x: q.x, y: q.y, b: 'left', c: press.count });
+        put({ t: 'mouse', k: 'up', x: q.x, y: q.y, b: 'left', c: press.count, f: 1 });   // f: tell me if a field got the focus
+        if (document.activeElement === kin) kin.focus({ preventScroll: true });   // the keyboard stays up while typing from field to field
       }
     } else put({ t: 'mouse', k: 'up', x: p.x, y: p.y, b: press.button, c: press.count });
     press = null;
@@ -111,7 +113,7 @@ export function createTakeover({ send, toast }) {
     if (text) { e.preventDefault(); put({ t: 'text', text }); }
   });
 
-  kb.addEventListener('click', () => kin.focus());
+  kb.addEventListener('click', () => { kin.blur(); kin.focus({ preventScroll: true }); });
   paste.addEventListener('click', () => { pasteRow.hidden = !pasteRow.hidden; if (!pasteRow.hidden) pasteIn.focus(); });
   pasteRow.addEventListener('submit', (e) => { e.preventDefault(); if (pasteIn.value) put({ t: 'text', text: pasteIn.value }); pasteIn.value = ''; kin.focus(); });
   done.addEventListener('click', () => finish(true));
@@ -154,6 +156,10 @@ export function createTakeover({ send, toast }) {
       if (m.what === 'take' && !m.ok) { toast(m.error || 'Tidak bisa mengambil alih.', true); close(); }
       else if (m.what === 'release') toast(m.told ? 'Jarvis diberi tahu dan melanjutkan.' : 'Kendali dikembalikan ke Jarvis.');
       else if (m.what === 'input' && m.ok === false && task != null) { toast(m.error || 'Kendali dikembalikan.', true); close(); }
+      else if (m.what === 'focus' && m.task === task) {   // the tap landed on a field in the page: the phone's keyboard comes up (or goes away)
+        if (m.editable) kin.focus({ preventScroll: true });
+        else if (document.activeElement === kin) kin.blur();
+      }
     },
     /** The station's latest state, from the desk's poll. */
     update(st) {

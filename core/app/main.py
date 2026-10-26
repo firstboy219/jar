@@ -638,9 +638,13 @@ async def canvas_live_ws(websocket: WebSocket):
                                 reply |= await live.take(task_id, context, who)
                                 held.add(task_id)
                             elif kind == "input":
-                                if not await live.send_input(task_id, context, msg.get("ev") or {}):
+                                ev = msg.get("ev") or {}
+                                if not await live.send_input(task_id, context, ev):
                                     reply |= {"ok": False, "error": "kendali dikembalikan"}
                                     await websocket.send_text(json.dumps(reply))
+                                elif ev.get("t") == "mouse" and ev.get("k") == "up" and ev.get("f"):   # a phone tap: open its keyboard on a field
+                                    await websocket.send_text(json.dumps({"type": "control", "task": task_id, "what": "focus",
+                                                                          "editable": await live.focus_editable(task_id, context)}))
                             else:
                                 reply |= await live.release(task_id, context, who, bool(msg.get("done")))
                                 held.discard(task_id)
