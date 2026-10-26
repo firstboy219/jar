@@ -1273,6 +1273,12 @@ async def test_v4_f7_a_worker_task_is_a_station_on_the_desk_with_steps_and_the_p
     assert st["status"] == "running" and st["browsing"] and st["ref"] == f"task:{tid}"
     assert [x["text"] for x in st["steps"]] == ["Membuka: https://www.jostreet.com/produk", "Menggulir: bawah", "Mengetik: kolom pencarian: sepatu"]
     assert st["steps"][2]["status"] == "completed" and st["thought"] == "mencari sepatu lari"   # a finished call updates its step, not a new one
+    await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": "browser_scroll-9", "name": "browser_scroll",
+                                                                          "label": '{"success": true, "output": "hasil mentah"}', "status": "completed"}})
+    await hub.broadcast({"type": "task_event", "task_id": tid, "event": {"type": "tool", "id": "x-77", "name": "browser_click",
+                                                                          "label": '{"output": "tak pernah dimulai"}', "status": "completed"}})
+    steps = (await live.snapshot("utama"))["stations"][0]["steps"]
+    assert len(steps) == 3 and steps[1]["status"] == "completed" and "hasil mentah" not in str(steps)   # paired by tool, results never shown as actions
     assert st["page_title"] == "Produk Jostreet" and st["has_frame"] and st["frame_seq"] >= 2
     assert {"n8n", "prompts", "storage"} <= set(snap)                                          # the owner's desk also has the panels
 

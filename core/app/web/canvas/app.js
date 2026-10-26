@@ -603,7 +603,7 @@ function frame(t) {
     return { c, d: camera.position.distanceTo(tmp), p: tmp.clone().project(camera) };
   }).sort((a, b) => a.d - b.d);
   list.forEach(({ c, d, p }, i) => {
-    const s = cardScale(d, c.live ? Math.max(c.data.size, 2.4) : c.data.size);
+    const s = cardScale(d, c.live ? Math.max(c.data.size, 4.2) : c.data.size);
     const visible = (i < 140 || c.live) && s && p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
     c.el.hidden = !visible;
     if (!visible) return;

@@ -118,9 +118,9 @@ export function takeAppParams(hash) {
 
 /** Where the fixed desk panels (requests, n8n, storage) hang in the galaxy: a ring around the core, at table height. */
 export const PANELS = {
-  prompts: { x: -760, y: 140, z: -430, size: 1.9, title: 'Permintaanmu' },
-  n8n: { x: 760, y: 140, z: -430, size: 1.9, title: 'Otomasi (n8n)' },
-  storage: { x: 0, y: 140, z: 880, size: 1.9, title: 'Simpanan' },
+  prompts: { x: -760, y: 140, z: -430, size: 3.6, title: 'Permintaanmu' },
+  n8n: { x: 760, y: 140, z: -430, size: 3.6, title: 'Otomasi (n8n)' },
+  storage: { x: 0, y: 140, z: 880, size: 3.6, title: 'Simpanan' },
 };
 
 /**

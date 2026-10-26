@@ -145,6 +145,10 @@ def _on_step(st: Station, e: dict) -> None:
         icon, text = step_text(name, str(e.get("label") or ""))
         sid = str(e.get("id") or "")
         known = next((s for s in st.steps if sid and s["id"] == sid), None)
+        if not known and status != "running":  # Hermes numbers every event, so a completion has its own id: it ends the latest call of that tool
+            known = next((s for s in reversed(st.steps) if s["name"] == name and s["status"] == "running"), None)
+            if known is None:
+                return  # a completion whose start we never saw: its label is a result, not an action
         if known:
             known["status"] = status
         else:
