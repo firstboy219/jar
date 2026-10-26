@@ -163,7 +163,7 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
     if (info.edge) { head.append(el('b', null, 'Garis penghubung'), close); insp.append(head, edgePanel(info.edge)); }
     else if (info.cards.length) {
       const one = info.cards.length === 1 ? info.cards[0] : null;
-      head.append(el('b', null, one ? (one.data.type ? TYPE_NAME[one.data.type] : one.data.kind) : `${info.cards.length} kartu dipilih`), close);
+      head.append(el('b', null, one ? (one.data.type ? TYPE_NAME[one.data.type] : `Kartu ${one.data.kind}`) : `${info.cards.length} kartu dipilih`), close);
       insp.append(head, ...cardPanels(info));
     } else { head.append(el('b', null, 'Papan'), close); insp.append(head, ...boardPanels()); }
   }

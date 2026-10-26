@@ -98,7 +98,7 @@ svg.wire line { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; }
 .h-nw { left: 0; top: 0; cursor: nwse-resize; } .h-n { left: 50%; top: 0; cursor: ns-resize; } .h-ne { left: 100%; top: 0; cursor: nesw-resize; }
 .h-e { left: 100%; top: 50%; cursor: ew-resize; } .h-se { left: 100%; top: 100%; cursor: nwse-resize; } .h-s { left: 50%; top: 100%; cursor: ns-resize; }
 .h-sw { left: 0; top: 100%; cursor: nesw-resize; } .h-w { left: 0; top: 50%; cursor: ew-resize; }
-.selbox.multi .handle, .selbox.locked .handle { display: none; }
+.selbox.multi .handle, .selbox.locked .handle, .selbox.tiny .handle { display: none; }
 .sizebadge { position: absolute; left: 50%; top: 100%; transform: translate(-50%, 10px); background: var(--accent); color: #04121c; font: 600 11px ui-monospace, monospace;
   padding: 2px 7px; border-radius: 6px; white-space: nowrap; pointer-events: none; }
 @media (pointer: coarse) { .handle { width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%; } }
@@ -197,7 +197,7 @@ body.taking .topbar, body.taking .toolrail, body.taking .zoombar, body.taking .m
 
 /* ---------- phone ---------- */
 @media (max-width: 700px) {
-  .topbar { left: 6px; right: 6px; } #title, #count, #search span, #search kbd, #follow, #history, .brand { display: none; } #search { min-width: 0; padding: 5px 8px; }
+  .topbar { left: 6px; right: 6px; } #title, #count, #search span, #search kbd, #follow, #history, #gesture, #admin, .brand { display: none; } #search { min-width: 0; padding: 5px 8px; }
   #search::before { content: "🔎"; } #galaxy { max-width: 120px; }
   .toolrail { left: 6px; top: 62px; padding: 3px; } .ib { width: 34px; height: 34px; }
   .zoombar { left: auto; right: 6px; transform: none; top: 62px; bottom: auto; flex-direction: column; padding: 3px; } .zoombar .sep { width: 20px; height: 1px; margin: 3px 0; }

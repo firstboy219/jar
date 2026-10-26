@@ -117,12 +117,21 @@ export function createBoard(ctx) {
   }
   const cancelFlight = () => { flight = null; };
   const insets = { left: 0, right: 0, top: 0, bottom: 0 };
-  function fit(rect, { maxK = 1.25, ms = 520, pad = 72 } = {}) {
+  function fit(rect, { maxK = 1.25, ms = 520, pad = coarse || vp.w < 700 ? 20 : 72 } = {}) {
     if (!rect) return;
     setView(fitRect(rect, vp, { pad, maxK, inset: insets }), ms);
   }
   const allRects = () => [...cards.values()].filter((c) => !c.el.classList.contains('hidden-kind')).map(rectOf);
   const fitAll = (ms) => fit(rectsBounds([...allRects(), ...[...widgets.values()].filter((w) => !w.el.hidden).map(widgetRect)]) || { x: -400, y: -300, w: 800, h: 600 }, { maxK: 1, ms });
+  /** The first look at a board: everything if that is readable, else the busiest area. */
+  function fitInitial() {
+    fitAll(0);
+    if (view.k >= 0.2) return;
+    const groups = {};
+    for (const c of cards.values()) (groups[c.data.kind] ||= []).push(rectOf(c));
+    const best = Object.values(groups).sort((a, b) => b.length - a.length)[0];
+    if (best) fit(rectsBounds(best), { maxK: 0.7, ms: 0, pad: 24 });
+  }
   const fitSelection = (ms) => { const r = rectsBounds([...sel].map((id) => rectOf(cards.get(id))).filter(Boolean)); if (r) fit(r, { maxK: 1.5, ms }); };
   function focusRect(r, k = 0.9, ms = 700) { setView(fitRect(r, vp, { pad: 120, maxK: k, inset: insets }), ms); }
   function zoomBy(f, sx = vp.w / 2, sy = vp.h / 2, ms = 0) {
@@ -291,6 +300,7 @@ export function createBoard(ctx) {
     selBox.classList.toggle('multi', list.length > 1);
     selBox.classList.toggle('locked', list.every(isLocked));
     sizeBadge.textContent = `${Math.round(b.w)} × ${Math.round(b.h)}`;
+    selBox.classList.toggle('tiny', b.w * view.k < 56 || b.h * view.k < 40);
   }
 
   // ------------------------------------------------------------ talking to the server (and remembering how to undo it)
@@ -799,6 +809,7 @@ export function createBoard(ctx) {
     wire.replaceChildren();
     if (!g.moved) return;
     const under = document.elementsFromPoint(e.clientX, e.clientY).map((n) => n.closest?.('.card:not(.widget)')).find(Boolean);
+    if (tool === 'connector') setTool('select');   // like Figma: one connection per use of the tool
     try {
       if (under && under.__card.data.id !== g.from) { await addEdge(g.from, under.__card.data.id); select([under.__card.data.id]); }
       else if (!under) {
@@ -885,7 +896,7 @@ export function createBoard(ctx) {
     get view() { return view; }, get vp() { return vp; }, get tool() { return tool; }, get shapeKind() { return shapeKind; },
     get sel() { return sel; }, get edges() { return edges; }, get zones() { return zones; }, get settings() { return { snapOn, guidesOn, gridOn, edgesOn, zonesOn, hiddenKinds }; },
     on(kind, fn) { on[kind].push(fn); return () => { on[kind] = on[kind].filter((f) => f !== fn); }; },
-    setContent, setWidget, setView, fit, fitAll, fitSelection, focusRect, zoomBy, zoomTo, worldAt, rectOf, widgetRect,
+    setContent, setWidget, setView, fit, fitAll, fitInitial, fitSelection, focusRect, zoomBy, zoomTo, worldAt, rectOf, widgetRect,
     flyToCard(id, k = 0.9, ms = 700) { const c = cards.get(id); if (c) focusRect(rectOf(c), k, ms); },
     flyToPoint(x, y, k = 0.8, ms = 800) { setView({ cx: x, cy: y, k }, ms); },
     select, selectEdge, setTool, setShape(s) { shapeKind = s; setTool('shape'); },

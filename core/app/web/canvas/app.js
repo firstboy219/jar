@@ -73,6 +73,7 @@ const board = createBoard({
   contextMenu: (m) => chrome.contextMenu(m),
   decorate: (c) => { const l = liveByRef.get(c.data.ref); if (l) { c.live = l; renderLive(c, l); } },
 });
+window.__board = board;   // for the owner's own console and the UI tests
 const kindsFor = () => {
   const count = {};
   for (const c of board.cards.values()) count[c.data.kind] = (count[c.data.kind] || 0) + 1;
@@ -84,7 +85,7 @@ const chrome = createChrome({ board, api, toast, canvasId: () => current?.id, re
   fillFromLibrary: async () => { try { const r = await api.req('POST', `/api/v1/canvases/${current.id}/fill`); toast(r.added ? `${r.added} kartu dari Simpanan ditaruh.` : 'Semua isi Simpanan sudah ada di papan.'); await refresh(true); } catch (err) { toast(err.message, true); } },
   openHistory: () => toggleHistory() });
 $('#tb-right').prepend(chrome.inspToggle);
-board.insets.top = 64; board.insets.left = 72;
+board.insets.top = 64; board.insets.left = matchMedia('(max-width: 700px)').matches ? 52 : 72;
 
 async function openUrl(url) {
   if (!url) return;
@@ -129,7 +130,7 @@ async function doRefresh(force) {
     const saved = (() => { try { return JSON.parse(LS(`jarvis_board_view_${current.context}`) || 'null'); } catch { return null; } })();
     if (link && board.cards.get(Number(link[1]))) { board.flyToCard(Number(link[1]), 1, 0); board.select([Number(link[1])]); }
     else if (saved && Number.isFinite(saved.k)) board.setView(saved);
-    else board.fitAll(0);
+    else board.fitInitial();
   }
   if (d.focus && d.focus !== lastFocus && board.cards.get(d.focus)) { board.flyToCard(d.focus, 1, 800); board.select([d.focus]); }
   lastFocus = d.focus;
