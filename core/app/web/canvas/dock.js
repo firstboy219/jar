@@ -65,7 +65,7 @@ export function initDock({ api, toast, embedded }) {
     return m;
   }
   function setStatus(text) { statusLine.textContent = text || ''; statusLine.hidden = !text; }
-  function setTyping(on) { typing = on; if (!on) setStatus(''); else if (!statusLine.textContent) setStatus('Jarvis berpikir…'); }
+  function setTyping(on) { typing = on; if (!on) setStatus(media.mic ? '🎤 Mendengarkan…' : ''); else if (!statusLine.textContent || statusLine.textContent.startsWith('🎤')) setStatus('Jarvis berpikir…'); }
   function newConversation() {
     sessionId = `meja-${Math.random().toString(36).slice(2, 10)}`; LS('jarvis_desk_session', sessionId);
     log.replaceChildren(); jarvisBubble = null; setTyping(false); addMsg('jarvis', 'Percakapan baru dimulai.', true); keep();
