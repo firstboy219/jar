@@ -32,3 +32,11 @@ test('search, diff, easing, labels', () => {
   assert.equal(ease(0), 0); assert.equal(ease(1), 1); assert.equal(ease(0.5), 0.5);
   assert.equal(contextLabel({ context: 'company:renature', title: 'PT Renature' }), '🏢 PT Renature');
 });
+
+test('the app passes its device token in the fragment and the viewer takes it out', async () => {
+  const { takeAppParams } = await import('../lib.js');
+  assert.deepEqual(takeAppParams('#t=abc%2B123&app=1'), { token: 'abc+123', embedded: true, rest: '' });
+  assert.deepEqual(takeAppParams('#kartu=12&t=xyz&app=1'), { token: 'xyz', embedded: true, rest: '#kartu=12' });
+  assert.deepEqual(takeAppParams('#kartu=7'), { token: '', embedded: false, rest: '#kartu=7' });
+  assert.deepEqual(takeAppParams(''), { token: '', embedded: false, rest: '' });
+});

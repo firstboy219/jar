@@ -3,11 +3,16 @@
 // what JARVIS showed, memories, company data); this page only lays them out in space. It can fly, select, place, move,
 // link and take cards off the canvas — it never approves, deletes data, sends or pays.
 import * as THREE from './vendor/three.module.min.js';
-import { cardScale, contextLabel, diffCards, ease, matchCards, spiralGalaxy, starField } from './lib.js';
+import { cardScale, contextLabel, diffCards, ease, matchCards, spiralGalaxy, starField, takeAppParams } from './lib.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const small = window.matchMedia('(max-width: 700px)').matches;
+
+// Opened by the Android app as "#t=<device token>&app=1": take the token out of the address at once (never sent to a server).
+const fromApp = takeAppParams(location.hash);
+if (fromApp.embedded || fromApp.token) history.replaceState(null, '', location.pathname + location.search + fromApp.rest);
+if (fromApp.embedded) document.documentElement.classList.add('in-app');
 
 // ---------- API (device token from pairing with the admin password; kept only in this browser) ----------
 const api = {
@@ -490,4 +495,5 @@ window.addEventListener('resize', resize);
 resize();
 placeCamera();
 requestAnimationFrame(frame);
+if (fromApp.token) api.token = fromApp.token;
 if (api.token) loadContexts().catch((err) => toast(err.message, true)); else showLogin();

@@ -79,3 +79,7 @@ button.danger { border-color: rgba(248, 113, 113, 0.5); color: #fecaca; }
   .card { width: 200px; }
   .card.selected { width: 250px; }
 }
+
+/* inside the Android app: the app has its own back button and signs in itself */
+.in-app #logout { display: none; }
+.in-app #bar { padding-top: max(8px, env(safe-area-inset-top)); }

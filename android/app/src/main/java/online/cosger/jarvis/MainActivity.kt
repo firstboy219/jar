@@ -38,6 +38,7 @@ import online.cosger.jarvis.ui.JarvisViewModel
 import online.cosger.jarvis.ui.console.AppUpdateScreen
 import online.cosger.jarvis.ui.console.AuditScreen
 import online.cosger.jarvis.ui.console.CompositionScreen
+import online.cosger.jarvis.ui.console.GalaxyScreen
 import online.cosger.jarvis.ui.console.JarvisVoiceScreen
 import online.cosger.jarvis.ui.console.ConsoleRoute
 import online.cosger.jarvis.ui.console.DashboardScreen
@@ -185,6 +186,7 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Memory -> MemoryScreen(vm, back)
                                     ConsoleRoute.Composition -> CompositionScreen(vm, back)
                                     ConsoleRoute.JarvisVoice -> JarvisVoiceScreen(vm, back)
+                                    ConsoleRoute.Galaxy -> GalaxyScreen(vm, back)
                                     ConsoleRoute.Studio -> StudioScreen(vm, back)
                                     ConsoleRoute.Self -> SelfScreen(vm, back)
                                     ConsoleRoute.Flow -> FlowScreen(vm, back)
