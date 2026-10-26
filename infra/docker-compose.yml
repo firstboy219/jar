@@ -218,6 +218,7 @@ services:
     command: ["python", "-m", "app.mcp_server"]
     volumes:
       - ./data/documents:/data/documents
+      - ./data/dev:/data/dev # propose_code_change runs here: its test request must reach infra/scripts/self-dev.sh (it never did before)
     environment: *core-env
     networks:
       - jarvis-network
