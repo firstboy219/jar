@@ -1363,3 +1363,11 @@ def test_v4_f12_code_habits_are_taught_to_coding_workers_only():
         assert must in workers.CODE_HABITS
     src = open(workers.__file__).read()
     assert 'if kind == "owner" and row["category"] == "coding":\n            brief += CODE_HABITS' in src
+
+
+def test_v4_f12_qaqa_verdicts_are_read_strictly():
+    from app import devteam
+    assert devteam.verdict("HASIL:\nLULUS — oke") == "lulus"
+    assert devteam.verdict("**PERBAIKI**\n1. x") == "perbaiki"
+    assert devteam.verdict("- TIDAK LULUS: kriteria 2") == "perbaiki"
+    assert devteam.verdict("Semua terlihat baik") == ""                                   # no clear verdict is never a pass

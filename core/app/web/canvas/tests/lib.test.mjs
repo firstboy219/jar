@@ -37,7 +37,7 @@ test('the desk follows the owner\'s new task once, and never grabs the camera fr
   assert.equal(ago(5), '5 dtk');
   assert.equal(ago(150), '3 mnt');
   assert.equal(ago(7200), '2.0 jam');
-  assert.deepEqual(Object.keys(PANELS).sort(), ['doc', 'draft', 'google', 'image', 'map', 'meeting', 'n8n', 'player', 'prompts', 'storage', 'text', 'video', 'web', 'workers']);
+  assert.deepEqual(Object.keys(PANELS).sort(), ['devteam', 'doc', 'draft', 'google', 'image', 'map', 'meeting', 'n8n', 'player', 'prompts', 'storage', 'text', 'video', 'web', 'workers']);
   // no two desk panels overlap (each is at most ~520 units tall)
   const r = Object.entries(PANELS).map(([n, p]) => ({ n, x: p.x, y: p.y, w: p.w, h: 520 }));
   for (const a of r) for (const b of r) if (a.n < b.n) {
@@ -215,4 +215,11 @@ test('workers card: short model names and durations', async () => {
   assert.equal(shortModel('qwen-lokal'), 'qwen-lokal');
   assert.equal(shortModel(''), '—');
   assert.equal(dur(45), '45d'); assert.equal(dur(75), '1m15d'); assert.equal(dur(3725), '1j02m');
+});
+
+test('dev team: who holds a job at each stage', async () => {
+  const { jobHolder, JOB_STATUS } = await import('../devteamcard.js');
+  assert.equal(jobHolder('analysing'), 'bisan'); assert.equal(jobHolder('coding'), 'coder'); assert.equal(jobHolder('reviewing'), 'qaqa');
+  assert.equal(jobHolder('testing'), ''); assert.equal(jobHolder('awaiting_owner'), '');
+  for (const s of ['analysing', 'coding', 'testing', 'reviewing', 'awaiting_owner', 'done', 'failed', 'cancelled']) assert.ok(JOB_STATUS[s]);
 });

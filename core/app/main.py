@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import google_auth
+from . import devteam, google_auth
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -60,6 +60,8 @@ async def lifespan(app: FastAPI):
     resumed = await workers.resume_after_restart()
     if resumed:
         log.info("resumed %d interrupted worker task(s)", resumed)
+    if waiting := await devteam.resume():
+        log.info("dev team: %d proposal(s) still under test", waiting)
     ticker = asyncio.create_task(reports.run_forever())
 
     async def purge_daily():
@@ -1554,6 +1556,27 @@ async def worker_models(device: dict = Depends(owner_device_auth)):
     own = [m for m in cat if m["tools"]]
     own.sort(key=lambda m: (not m["free"], m["price_out"], m["id"]))
     return {"models": [{"id": m["id"], "name": m["name"], "free": m["free"], "price_out": m["price_out"], "vision": m["vision"]} for m in own[:300]]}
+
+
+# ---------- the dev team (ADR-059) ----------
+
+class DevJobIn(BaseModel):
+    text: str = Field(min_length=8, max_length=6000)
+
+
+@app.post("/api/v1/devteam/jobs")
+async def devteam_request(j: DevJobIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await devteam.request(j.text, f"device:{device['name']}"))
+    except devteam.DevTeamError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/v1/devteam/jobs/{job_id}/cancel")
+async def devteam_cancel(job_id: int, device: dict = Depends(owner_device_auth)):
+    if not await devteam.cancel(job_id, f"device:{device['name']}"):
+        raise HTTPException(409, "permintaan ini sudah tidak berjalan")
+    return {"ok": True}
 
 
 # ---------- the owner's Google account, connected from the phone (ADR-057) ----------

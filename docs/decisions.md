@@ -1043,3 +1043,22 @@ Owner (2026-10-26): an area on the canvas to watch the workers — which model e
 - **Stop / Start.** `POST /workers/{id}/stop` (`workers.stop`: the task is kept as 'stopped') and `/start` (`workers.retry`, continues from its progress).
 - **Chat.** `POST /workers/{id}/say` slips the owner's words into the worker's running Hermes turn (`/v1/runs/{id}/steer`); it reads them before its
   next step. Only Hermes runs that are running can be spoken to; OpenJarvis tasks and finished ones cannot (the card says so). Audited by length only.
+
+## ADR-059 — The dev team: bisan, coder, qaqa (Blueprint v4 Fase 12)
+Owner (2026-10-26): three workers just for development, each taught for its position — bisan (business/system analyst), qaqa (QA),
+coder (expert developer) — and their activity visible on the canvas in a dashed area holding the three.
+- **Flow (core drives the hand-offs; members never pass work themselves).** `devteam.request` → bisan writes SPESIFIKASI (goal, files,
+  behaviour, numbered acceptance criteria, out of scope, risks; reads origin/main, never edits) → coder builds on `jarvis/devjob-<id>`,
+  self-checks, commits only its files and calls `propose_code_change` → the runner tests it (self-dev.sh) → qaqa reviews the REAL diff and
+  the runner's result against the spec, first line LULUS or PERBAIKI → PERBAIKI goes back to coder with the findings (≤ MAX_ROUNDS = 3 builds).
+  LULUS counts only when the runner also passed it (`awaiting_approval`); then the owner approves at the admin page as for any T1 change.
+  A coder that forgets to propose is asked again; a member whose run fails gets one retry, then the job stops and the owner is told.
+- **Teaching.** Each member's brief (`devteam.BISAN/CODER/QAQA`) is the review experience of the first panel-chat attempts written down:
+  read the code first, meet every criterion, no dead code, check CSS for stray characters, mobile media queries, state restored on load,
+  `git add <files>`, never claim before evidence; qaqa checks selectors against the real elements and never passes when in doubt.
+- **Models.** One category each (`dev-bisan`, `dev-coder`, `dev-qaqa`, seeded from `coding`, registered with Hermes' model routes), so
+  the owner sees and switches each member's model (workers area ⚙ Model).
+- **Desk.** `devteam` in the desk snapshot; the Tim Dev widget is a dashed frame with the three members (live steps of their current task,
+  model, 💬 to the running one), a request box, and the latest jobs (status, round, change, qaqa's review, cancel). The main agent hands
+  "develop JARVIS itself" requests to the team with the tool `tim_dev` instead of a generic worker.
+- Tables: `dev_jobs`; `tasks.dev_job`, `tasks.dev_role`; task kind `devteam` (migration 029).

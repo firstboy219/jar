@@ -1713,6 +1713,65 @@ async def test_v4_f12_the_workers_area_shows_models_and_the_owner_can_stop_start
     assert row["locked"] and not row["can_say"] and row["can_stop"]                         # private workers are local only: no model switch
 
 
+async def test_v4_f12_the_dev_team_hands_work_from_bisan_to_coder_to_qaqa_and_back_until_it_is_clean(pool, monkeypatch):
+    import asyncio
+
+    from app import devteam, live, workers
+    started = []
+    monkeypatch.setattr(workers, "_start", lambda task_id, context="": started.append(task_id))
+    monkeypatch.setattr(devteam, "TEST_WAIT_S", 3)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(devteam.asyncio, "sleep", lambda s: real_sleep(0.01))
+
+    async def member_of(tid):
+        return await pool.fetchrow("SELECT dev_role, kind, category, instruction FROM tasks WHERE id = $1", tid)
+    job = await devteam.request("Panel chat di Meja bisa diciutkan jadi tombol bulat", "owner")
+    b = await member_of(started[-1])
+    assert (b["dev_role"], b["kind"], b["category"]) == ("bisan", "devteam", "dev-bisan") and "SPESIFIKASI" in b["instruction"]
+    team = (await live.snapshot("utama"))["devteam"]
+    assert [m["name"] for m in team["members"]] == ["bisan", "coder", "qaqa"] and team["members"][0]["busy"]
+    assert team["jobs"][0]["status"] == "analysing"
+
+    await devteam.on_result(started[-1], "SPESIFIKASI\nTujuan: bulatan\nKriteria terima: 1. bulat 44px")
+    c = await member_of(started[-1])
+    assert c["dev_role"] == "coder" and "Kriteria terima: 1. bulat 44px" in c["instruction"] and f"jarvis/devjob-{job['id']}" in c["instruction"]
+
+    await devteam.on_result(started[-1], "selesai tanpa propose")          # coder forgot to propose: it is asked again, not passed on
+    c2 = await member_of(started[-1])
+    assert c2["dev_role"] == "coder" and "belum memanggil propose_code_change" in c2["instruction"]
+
+    async def propose(status):
+        return await pool.fetchval("INSERT INTO dev_changes (branch, title, why, status) VALUES ($1, 't', 'w', $2) RETURNING id",
+                                   devteam.branch_for(job["id"]), status)
+    ch = await propose("testing")
+    await devteam.on_result(started[-1], f"HASIL: perubahan {ch}")
+    assert (await devteam._job(job["id"]))["status"] == "testing"
+    await pool.execute("UPDATE dev_changes SET status = 'awaiting_approval' WHERE id = $1", ch)
+
+    async def qa_started():
+        return (await member_of(started[-1]))["dev_role"] == "qaqa"
+    for _ in range(200):
+        if await qa_started():
+            break
+        await real_sleep(0.02)
+    q = await member_of(started[-1])
+    assert q["dev_role"] == "qaqa" and f"perubahan #{ch}" in q["instruction"] and "awaiting_approval" in q["instruction"]
+
+    await devteam.on_result(started[-1], "PERBAIKI\n1. dock.js: judul masih tampil")   # QA sends it back to coder with the findings
+    c3 = await member_of(started[-1])
+    assert c3["dev_role"] == "coder" and "judul masih tampil" in c3["instruction"] and "PUTARAN PERBAIKAN" in c3["instruction"]
+    ch2 = await propose("awaiting_approval")
+    await devteam.on_result(started[-1], f"HASIL: perubahan {ch2}")
+    for _ in range(200):
+        if await qa_started():
+            break
+        await real_sleep(0.02)
+    await devteam.on_result(started[-1], "**LULUS** — semua kriteria terpenuhi")
+    j = await devteam._job(job["id"])
+    assert j["status"] == "awaiting_owner" and j["change_id"] == ch2 and f"#{ch2}" in j["note"]
+    assert "qaqa meluluskan" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
+
+
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
     from app import assistant
     brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200
