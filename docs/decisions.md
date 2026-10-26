@@ -1031,3 +1031,15 @@ Owner (2026-10-26): "cukup berikan akses via login dari HP, otomatis kamu bisa g
 - Google requires an OAuth client the owner registers once (Web application, redirect `https://<BACKEND_DOMAIN>/api/v1/google/callback`,
   Gmail + Calendar APIs on, consent screen "In production" so tokens do not expire after 7 days). Its id/secret come from `.env` or are pasted on
   the card. **Putuskan** revokes the token, deletes the credentials and stops the flows.
+
+## ADR-058 — A workers area on the desk (Blueprint v4 Fase 12)
+Owner (2026-10-26): an area on the canvas to watch the workers — which model each uses — switch the model, start / stop a worker, and chat to it.
+- `workers.overview()` is `workers` in the desk snapshot: running/queued tasks, then what finished in the last hour; each row has the model that
+  really answered (`tasks.model_used`, else the category's main route) and its fallback chain.
+- **Model.** Workers do not own a model: the category does (`llm_categories.routes`, resolved per request by the gateway, which Hermes reaches as
+  `jarvis-<category>`). So "⚙ Model" makes the chosen model the MAIN route of that category (`composition.set_model`, same checks and cost
+  confirmation as the app's picker) and applies from the next LLM call, also to workers already running. `privat` stays local. The model list
+  is OpenRouter's catalog, tool-capable models only, free first (`GET /workers/models`).
+- **Stop / Start.** `POST /workers/{id}/stop` (`workers.stop`: the task is kept as 'stopped') and `/start` (`workers.retry`, continues from its progress).
+- **Chat.** `POST /workers/{id}/say` slips the owner's words into the worker's running Hermes turn (`/v1/runs/{id}/steer`); it reads them before its
+  next step. Only Hermes runs that are running can be spoken to; OpenJarvis tasks and finished ones cannot (the card says so). Audited by length only.
