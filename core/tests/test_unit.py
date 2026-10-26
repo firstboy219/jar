@@ -1355,3 +1355,11 @@ def test_v4_f12_google_login_url_client_check_and_the_n8n_credential():
         google = [n for n in inbox_flows.build(kind, "p", creds)["nodes"] if n["type"].startswith("n8n-nodes-base.g")]
         assert google and google[0]["credentials"] == {want: creds[want]}
     assert all("credentials" not in n for n in inbox_flows.build("list", "p")["nodes"])     # without a login the owner picks it in n8n
+
+
+def test_v4_f12_code_habits_are_taught_to_coding_workers_only():
+    from app import workers
+    for must in ("git add <berkas>", "propose_code_change", "kode mati", "node --test"):
+        assert must in workers.CODE_HABITS
+    src = open(workers.__file__).read()
+    assert 'if kind == "owner" and row["category"] == "coding":\n            brief += CODE_HABITS' in src

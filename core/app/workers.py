@@ -45,6 +45,15 @@ WORKER_BRIEF = (
     "Pemilik juga bisa INTERVENSI kapan saja tanpa kamu minta. Kalau ada pesan bahwa pemilik mengambil alih browser, berhenti "
     "memakai browser saat itu juga dan panggil wait_for_owner(task_id) sampai hasilnya 'handed_back'.\n\n"
 )
+# Habits for a worker that changes JARVIS' own code (learned from reviewing real attempts; add a line when a review finds a new one).
+CODE_HABITS = (
+    "Kalau tugasnya MENGUBAH KODE JARVIS sendiri: (1) baca file yang diubah dan gaya sekitarnya dulu; ubah seperlunya saja, tanpa kode mati, "
+    "blok kosong, atau kode lama yang dikomentari, dan komentar singkat dalam gaya file itu. (2) Penuhi PERSIS yang diminta pemilik (bentuk, "
+    "perilaku), bukan versi setengahnya; kalau ragu, tanya lewat ask_owner. (3) Pikirkan efek sampingnya sebelum menulis (mis. sesuatu yang "
+    "membuka sendiri padahal pemilik menutupnya). (4) Jalankan pemeriksaan dan tes (node --check, node --test, atau pytest) dan baca hasilnya "
+    "sebelum mengaku selesai. (5) Commit hanya berkas yang menjadi bagian pekerjaan (git add <berkas>, bukan git add -A) dan periksa "
+    "git diff --stat. (6) Jangan mengaku sudah mengusulkan/meneruskan sesuatu sebelum propose_code_change mengembalikan id perubahan.\n"
+)
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",
                  "flowcheck": "latar-belakang", "watcher": "web"}
@@ -107,6 +116,8 @@ async def _run(task_id: int, context: str) -> None:
         await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "running", "kind": kind})
         # internal kinds carry their own instructions; the task number lets tools (ask_owner, documents) refer to it
         brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
+        if kind == "owner" and row["category"] == "coding":
+            brief += CODE_HABITS
         if kind == "owner":  # what JARVIS can already do for this, and how well it has worked (Blueprint §6.2 F: reuse first)
             asked = row["instruction"].split(quick.CONTEXT_MARK)[0]
             if row["company_id"]:  # work for ONE company: its vault only, never another company's context (ADR-042)
