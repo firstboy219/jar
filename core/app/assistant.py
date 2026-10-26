@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from . import attachments as attachments_module
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
                canvas, chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
-               workers, writer)
+               inbox, n8n, watchers, workers, writer)
 from .location import WIB, Location, context_prefix
 
 log = logging.getLogger("jarvis-core.assistant")
@@ -44,6 +44,10 @@ Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu
 pemilik menunjukkan ia sudah mendengar/menanggapinya (mis. "oke", "sip", "makasih", atau membahas isinya), \
 panggil acknowledge_reports untuk laporan itu. Jangan menanyakan "sudah dengar?" dan jangan mengulang laporan \
 kecuali ia sendiri yang minta diulang.
+
+Email & kalender: kamu hanya MEMBACA dan MENULIS DRAF; kirim email dan tulis acara selalu lewat persetujuan pemilik (alat inbox send/event). \
+Jangan bilang "sudah terkirim" sebelum pemilik menyetujui. Pantauan harga/tiket/kripto/emas (alat watch) hanya memberi tahu: tidak membeli, \
+tidak membayar, bukan nasihat investasi.
 
 Pertanyaan dari pekerjaan: daftar "PERTANYAAN UNTUK PEMILIK" berisi hal yang perlu dijawab pemilik agar \
 pekerjaan bisa lanjut. Sampaikan bila belum; begitu pemilik menjawabnya, panggil answer_question.
@@ -170,6 +174,34 @@ TOOLS = [
             "context": {"type": "string", "description": "utama | project:<nama> | company:<id>"},
             "ref": {"type": "string"}, "ref_b": {"type": "string", "description": "kartu kedua untuk link"},
             "label": {"type": "string"}}, "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "inbox",
+        "description": "Email (Gmail) dan kalender lewat n8n. check = lihat email baru yang belum dibaca dan disortir; list = daftar yang "
+                       "sudah terlihat; draft_reply = tulis DRAF balasan (belum dikirim); edit_draft = ubah draf; send = ajukan draf "
+                       "untuk DISETUJUI pemilik (baru terkirim setelah ia setuju di HP); event = ajukan acara kalender (juga butuh "
+                       "persetujuan). Kamu TIDAK pernah mengirim atau menulis sendiri.",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["check", "list", "draft_reply", "edit_draft", "send", "event"]},
+            "mail_id": {"type": "integer", "description": "id email dari check/list"},
+            "outbox_id": {"type": "integer", "description": "id draf"},
+            "instruction": {"type": "string", "description": "draft_reply: apa yang pemilik mau dibalaskan"},
+            "body": {"type": "string", "description": "edit_draft: isi baru"},
+            "title": {"type": "string"}, "start": {"type": "string", "description": "ISO dengan zona waktu, mis. 2026-11-03T14:00:00+07:00"},
+            "end": {"type": "string"}, "attendees": {"type": "array", "items": {"type": "string"}}, "location": {"type": "string"}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "watch",
+        "description": "Pantauan harga/tiket/kripto/emas: hanya MEMBERI TAHU pemilik saat syarat terpenuhi. Tidak pernah membeli, memesan, "
+                       "membayar, atau memberi nasihat investasi. kind: kripto (query = id CoinGecko, mis. bitcoin), emas, harga, tiket "
+                       "(query = apa yang dicari). op: <= (turun ke), >= (naik ke), berubah (ambang = persen).",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["add", "list", "pause", "resume", "remove"]},
+            "kind": {"type": "string", "enum": ["kripto", "emas", "harga", "tiket"]},
+            "label": {"type": "string"}, "query": {"type": "string"},
+            "op": {"type": "string", "enum": ["<=", ">=", "berubah"]},
+            "threshold": {"type": "number", "description": "harga dalam rupiah, atau persen untuk berubah"},
+            "every_min": {"type": "integer"}, "id": {"type": "integer"}},
+            "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "voice_correction",
         "description": "Pemilik bilang kamu salah dengar ucapan suaranya barusan. heard = bagian yang kamu dengar, meant = yang "
@@ -423,6 +455,8 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                         category=a.get("category"), private=private,
                                         company_id=await _company_of(a.get("company")), heavy=bool(a.get("berat")))
                 return json.dumps({"task_id": t["id"], "status": "queued", "category": t["category"]})
+            case "inbox" | "watch":
+                return json.dumps(await _inbox_tool(call.name, a), ensure_ascii=False, default=str)
             case "canvas":
                 return json.dumps(await _canvas_tool(a, actor, device_id, stt, bool(screen_text or attachments)),
                                   ensure_ascii=False, default=str)
@@ -755,6 +789,42 @@ async def _company_tool(name: str, a: dict, actor: str, session_id: str, device_
         d = await companies.decision_add(entity_type, entity, str(a.get("kind") or ""), str(a.get("text") or ""), actor)
         return {"dicatat": d["id"], "entitas": f"{entity_type}:{entity}"}
     except (companies.CompanyError, gm.GMError) as e:
+        return {"error": str(e)}
+
+
+async def _inbox_tool(name: str, a: dict) -> dict:
+    """Email / calendar / watchers (ADR-044/045): reading and drafting are free; anything that leaves JARVIS is an approval."""
+    action = str(a.get("action") or "")
+    try:
+        if name == "watch":
+            if action == "add":
+                w = await watchers.add(str(a.get("kind") or ""), str(a.get("label") or ""), str(a.get("query") or ""),
+                                       str(a.get("op") or ""), float(a.get("threshold") or 0), a.get("every_min"))
+                return {"pantauan": w["id"], "cek_tiap_menit": w["every_min"], "catatan": "hanya memberi tahu; tidak membeli/membayar"}
+            if action == "list":
+                return {"pantauan": [{"id": w["id"], "label": w["label"], "syarat": f"{w['op']} {w['threshold']}", "aktif": w["active"],
+                                      "terakhir": w["last_value"]} for w in await watchers.listing()]}
+            if action in ("pause", "resume"):
+                return {"ok": await watchers.set_active(int(a.get("id") or 0), action == "resume")}
+            if action == "remove":
+                return {"ok": await watchers.remove(int(a.get("id") or 0))}
+            return {"error": "aksi pantauan tidak dikenal"}
+        if action == "check":
+            return await inbox.check()
+        if action == "list":
+            return {"email": [{"id": m["id"], "dari": m["sender"], "subjek": m["subject"], "penting": m["importance"], "ringkas": m["summary"]}
+                              for m in await inbox.recent()]}
+        if action == "draft_reply":
+            return await inbox.draft_reply(int(a.get("mail_id") or 0), str(a.get("instruction") or ""))
+        if action == "edit_draft":
+            return await inbox.edit_draft(int(a.get("outbox_id") or 0), str(a.get("body") or ""))
+        if action == "send":
+            return await inbox.propose(int(a.get("outbox_id") or 0))
+        if action == "event":
+            return await inbox.propose_event(str(a.get("title") or ""), str(a.get("start") or ""), str(a.get("end") or ""),
+                                             list(a.get("attendees") or []), str(a.get("location") or ""))
+        return {"error": "aksi tidak dikenal"}
+    except (inbox.InboxError, watchers.WatchError, n8n.N8nError) as e:
         return {"error": str(e)}
 
 

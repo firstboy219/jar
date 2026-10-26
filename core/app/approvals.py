@@ -82,7 +82,19 @@ async def _exec_company_action(detail: dict) -> dict:
     return await gm.on_result_decision(detail)
 
 
+async def _exec_mail_send(detail: dict) -> dict:
+    from . import inbox
+    return await inbox.execute(int(detail["outbox_id"]))
+
+
+async def _exec_calendar_create(detail: dict) -> dict:
+    from . import inbox
+    return await inbox.execute(int(detail["outbox_id"]))
+
+
 EXECUTORS: dict[str, Executor] = {
+    "mail_send": _exec_mail_send,
+    "calendar_create": _exec_calendar_create,
     "company_directive": _exec_company_directive,
     "company_action": _exec_company_action,
     "code_design": _exec_code_design,
@@ -171,6 +183,9 @@ async def decide(approval_id: int, approve: bool, actor: str, channel: str = "de
                 await _set_status(conn, approval_id, "approved", "executing")
     await audit.record(actor, f"approval.{new}", f"approval:{approval_id}", kind=row["kind"])
     if not approve:
+        if row["kind"] in ("mail_send", "calendar_create"):  # a refused email / event is closed, never sent later
+            from . import inbox
+            await inbox.on_rejected(int(row["detail"]["outbox_id"]))
         return await get(approval_id)
 
     try:

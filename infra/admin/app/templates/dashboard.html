@@ -465,6 +465,46 @@
   {% for t in recent %}<tr><td>{{ t.id }}</td><td>{{ t.title }}</td><td>{{ t.status }}</td><td>{{ t.runtime }}</td><td>{{ '$%.4f' % (t.cost_usd or 0) }}</td><td>{{ t.runtime_note or '' }}</td></tr>
   {% else %}<tr><td colspan="6" class="hint">Belum ada tugas yang melewati OpenJarvis.</td></tr>{% endfor %}</table>
 </section>
+{% elif tab == 'inbox' %}
+<section class="card">
+  <h2>Email &amp; kalender (lewat n8n)</h2>
+  <p class="hint">Jarvis membaca dan menyusun <strong>draf</strong>; mengirim email atau menulis acara <strong>selalu</strong> menunggu persetujuanmu di HP
+    (tab Persetujuan). Isi email hanya dibaca model lokal. Login Google dipasang <strong>di n8n</strong> (pilih kredensial pada tiap node Google, sekali saja) —
+    Jarvis tidak pernah memegang kunci Google. <em>Belum diuji dengan akun Google sungguhan.</em></p>
+  <table class="kv"><tr><th>Alur</th><th>Dibuat</th><th>Aktif</th></tr>
+  {% for f in flows %}<tr><td>{{ f.name }}</td><td>{{ 'ya' if f.installed else 'belum' }}</td><td>{{ 'ya' if f.active else 'belum' }}</td></tr>{% endfor %}</table>
+  <form method="post" action="/inbox/install" class="inline"><button type="submit">Pasang alur n8n (dibuat nonaktif)</button></form>
+  <form method="post" action="/inbox/check" class="inline"><button type="submit">Periksa email sekarang</button></form>
+  <p>Pemeriksaan otomatis tiap 20 menit: <strong>{{ 'NYALA' if auto else 'mati' }}</strong>
+    <form method="post" action="/inbox/auto" class="inline"><input type="hidden" name="on" value="{{ 'off' if auto else 'on' }}"><button type="submit">{{ 'Matikan' if auto else 'Nyalakan' }}</button></form></p>
+</section>
+<section class="card">
+  <h2>Email terlihat</h2>
+  <table class="kv"><tr><th>#</th><th>Dari</th><th>Subjek</th><th>Penting?</th><th>Ringkas</th><th>Status</th></tr>
+  {% for m in items %}<tr><td>{{ m.id }}</td><td>{{ m.sender }}</td><td>{{ m.subject }}</td><td>{{ m.importance }}</td><td>{{ m.summary or '' }}</td><td>{{ m.status }}</td></tr>
+  {% else %}<tr><td colspan="6" class="hint">Belum ada.</td></tr>{% endfor %}</table>
+  <h3>Kotak keluar (draf, menunggu, terkirim)</h3>
+  <table class="kv"><tr><th>#</th><th>Jenis</th><th>Status</th><th>Tujuan / acara</th><th>Catatan</th></tr>
+  {% for o in outbox %}<tr><td>{{ o.id }}</td><td>{{ o.kind }}</td><td>{{ o.status }}</td><td>{{ o.to_addr or o.title }} {{ o.subject or '' }}</td><td>{{ o.error or '' }}</td></tr>
+  {% else %}<tr><td colspan="5" class="hint">Kosong.</td></tr>{% endfor %}</table>
+</section>
+<section class="card">
+  <h2>Pantauan (hanya memberi tahu)</h2>
+  <p class="hint">Tidak pernah membeli, memesan, atau membayar — tiket berhenti sebelum pembayaran. Kripto dan emas hanya informasi harga, bukan nasihat investasi.
+    Kripto dibaca langsung dari CoinGecko; yang lain dicari pekerja latar (memakai AI, jadi lebih jarang: minimal tiap 1–2 jam).</p>
+  <table class="kv"><tr><th>#</th><th>Pantauan</th><th>Syarat</th><th>Terakhir</th><th>Cek tiap</th><th></th></tr>
+  {% for w in watchers %}<tr><td>{{ w.id }}</td><td>{{ w.kind }} · {{ w.label }} <small>({{ w.query }})</small></td><td>{{ w.op }} {{ w.threshold }}</td>
+    <td>{{ w.last_value if w.last_value is not none else '—' }}{% if w.last_note %} <small>{{ w.last_note }}</small>{% endif %}</td><td>{{ w.every_min }} mnt</td>
+    <td><form method="post" action="/watchers/{{ w.id }}/active" class="inline"><input type="hidden" name="active" value="{{ 'off' if w.active else 'on' }}"><button type="submit">{{ 'Jeda' if w.active else 'Lanjut' }}</button></form>
+      <form method="post" action="/watchers/{{ w.id }}/delete" class="inline"><button type="submit" onclick="return confirm('Hapus pantauan ini?')">Hapus</button></form></td></tr>
+  {% else %}<tr><td colspan="6" class="hint">Belum ada pantauan.</td></tr>{% endfor %}</table>
+  <form method="post" action="/watchers" class="inline">
+    <select name="kind"><option>kripto</option><option>emas</option><option>harga</option><option>tiket</option></select>
+    <input name="label" placeholder="label, mis. Bitcoin" required> <input name="query" placeholder="kripto: id CoinGecko (bitcoin); lainnya: apa yang dicari" required size="34">
+    <select name="op"><option value="&lt;=">turun ke ≤</option><option value="&gt;=">naik ke ≥</option><option value="berubah">berubah (%)</option></select>
+    <input name="threshold" type="number" step="any" placeholder="ambang" required> <input name="every_min" type="number" placeholder="menit (opsional)">
+    <button type="submit">Tambah</button></form>
+</section>
 {% elif tab == 'voice' %}
 <section class="card">
   <h2>Suara JARVIS</h2>

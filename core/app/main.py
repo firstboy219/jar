@@ -26,9 +26,9 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import (approvals, openjarvis, spike, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, inbox, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
-               sensitive, stt, usage, voice, voice_id, workers)
+               n8n, sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
 from .location import Location
 
@@ -117,6 +117,11 @@ async def lifespan(app: FastAPI):
                 await dev.poll()
                 await skills_pipeline.poll()  # sandbox results of skills being tested
                 await gm.tick()  # Company Federation: due sends, callback deadlines, rejections to relay (ADR-042)
+                for periodic in (watchers.tick, inbox.tick):  # price watchers + the periodic inbox check (ADR-044/045): one failing never stops the rest
+                    try:
+                        await periodic()
+                    except Exception:
+                        log.exception("%s failed", periodic.__module__)
                 if datetime.now(awareness.WIB).hour == 4:
                     await voice.nightly()  # speech complements: prune old utterances, run the quality gate (ADR-048)
                 await perf.watch_recurring_errors()
@@ -1352,6 +1357,53 @@ def admin_page_only(request: Request) -> None:
     """Some switches belong to the admin page alone (the control point JARVIS cannot change): never the app console."""
     if request.url.path.startswith(CONSOLE + "/"):
         raise HTTPException(403, "hanya bisa diubah di halaman admin")
+
+
+@app.get("/admin/inbox")
+async def admin_inbox(_: str = admin):
+    """Fase 6: the three n8n flows (installed / active), the periodic check, mail seen, the outbox, and the watchers."""
+    return jsonable({**await inbox.status(), "watchers": await watchers.listing()})
+
+
+@app.post("/admin/inbox/install")
+async def admin_inbox_install(actor: str = admin):
+    try:
+        return jsonable(await inbox.install())
+    except inbox.InboxError as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/admin/inbox/auto")
+async def admin_inbox_auto(body: dict = Body(...), actor: str = admin):
+    await audit.record(actor, "inbox.auto", None, on=bool(body.get("on")))
+    return {"auto": await inbox.set_auto(bool(body.get("on")))}
+
+
+@app.post("/admin/inbox/check")
+async def admin_inbox_check(_: str = admin):
+    try:
+        return jsonable(await inbox.check(notify=False))
+    except (inbox.InboxError, n8n.N8nError) as e:
+        raise HTTPException(502, str(e)) from e
+
+
+@app.post("/admin/watchers")
+async def admin_watcher_add(body: dict = Body(...), _: str = admin):
+    try:
+        return jsonable(await watchers.add(str(body.get("kind") or ""), str(body.get("label") or ""), str(body.get("query") or ""),
+                                           str(body.get("op") or ""), float(body.get("threshold") or 0), body.get("every_min")))
+    except (watchers.WatchError, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post("/admin/watchers/{watcher_id}/active")
+async def admin_watcher_active(watcher_id: int, body: dict = Body(...), _: str = admin):
+    return {"ok": await watchers.set_active(watcher_id, bool(body.get("active")))}
+
+
+@app.delete("/admin/watchers/{watcher_id}")
+async def admin_watcher_remove(watcher_id: int, _: str = admin):
+    return {"ok": await watchers.remove(watcher_id)}
 
 
 @app.get("/admin/openjarvis")

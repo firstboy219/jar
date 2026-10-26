@@ -73,7 +73,7 @@ SETTINGS = [
      "Nama/istilah yang sering kamu ucapkan, pisahkan dengan koma. Dipakai juga oleh Whisper."),
 ]
 TABS = [("dashboard", "Dasbor"), ("approvals", "Persetujuan"), ("memory", "Memori"), ("ai", "Model AI"),
-        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("voice", "Suara"), ("worker", "Pekerja berat"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
+        ("studio", "Hermes Studio"), ("companies", "Perusahaan"), ("voice", "Suara"), ("worker", "Pekerja berat"), ("inbox", "Inbox & Pantau"), ("docs", "Dokumen"), ("password", "Password"), ("self", "Diri JARVIS"), ("devices", "Perangkat"),
         ("app", "Aplikasi"), ("audit", "Audit"), ("settings", "Pengaturan")]
 CATEGORIES = ["personal", "project", "knowledge", "experience", "operational"]
 KINDS = ["fact", "assumption", "preference"]
@@ -160,6 +160,8 @@ async def _tab_data(tab: str, request: Request) -> dict:
         listing = await core("GET", "/admin/companies")
         chosen = q.get("c") or next((c["id"] for c in listing["companies"]), None)
         return listing | {"chosen": chosen, "detail": await core("GET", f"/admin/companies/{chosen}") if chosen else None}
+    if tab == "inbox":
+        return await core("GET", "/admin/inbox")
     if tab == "voice":
         return await core("GET", "/admin/voice")
     if tab == "worker":
@@ -432,6 +434,52 @@ async def worker_openjarvis(request: Request, enabled: str = Form(...)):
     except CoreError as e:
         return await render(request, "worker", errors=[str(e)])
     return await render(request, "worker", notice="OpenJarvis dinyalakan." if enabled == "on" else "OpenJarvis dimatikan.")
+
+
+async def _inbox_action(request: Request, call, done) -> HTMLResponse:
+    """Inbox & Pantau tab (Blueprint v4 Fase 6): run `call()` against core, then show the tab again."""
+    if r := guard(request):
+        return r
+    try:
+        result = await call()
+    except CoreError as e:
+        return await render(request, "inbox", errors=[str(e)])
+    return await render(request, "inbox", notice=done(result) if callable(done) else done)
+
+
+@app.post("/inbox/install", response_class=HTMLResponse)
+async def inbox_install(request: Request):
+    return await _inbox_action(request, lambda: core("POST", "/admin/inbox/install"),
+                               "Alur n8n dibuat (belum aktif). Setujui pengaktifannya di tab Persetujuan, lalu pasang kredensial Google di n8n.")
+
+
+@app.post("/inbox/auto", response_class=HTMLResponse)
+async def inbox_auto(request: Request, on: str = Form(...)):
+    return await _inbox_action(request, lambda: core("POST", "/admin/inbox/auto", json={"on": on == "on"}),
+                               "Pemeriksaan email otomatis dinyalakan." if on == "on" else "Pemeriksaan email otomatis dimatikan.")
+
+
+@app.post("/inbox/check", response_class=HTMLResponse)
+async def inbox_check(request: Request):
+    return await _inbox_action(request, lambda: core("POST", "/admin/inbox/check"),
+                               lambda r: f"Diperiksa: {r.get('baru', 0)} email baru, {len(r.get('penting', []))} penting.")
+
+
+@app.post("/watchers", response_class=HTMLResponse)
+async def watcher_add(request: Request, kind: str = Form(...), label: str = Form(...), query: str = Form(...), op: str = Form(...),
+                      threshold: float = Form(...), every_min: int = Form(0)):
+    body = {"kind": kind, "label": label, "query": query, "op": op, "threshold": threshold, "every_min": every_min or None}
+    return await _inbox_action(request, lambda: core("POST", "/admin/watchers", json=body), "Pantauan ditambahkan.")
+
+
+@app.post("/watchers/{watcher_id}/active", response_class=HTMLResponse)
+async def watcher_active(request: Request, watcher_id: int, active: str = Form(...)):
+    return await _inbox_action(request, lambda: core("POST", f"/admin/watchers/{watcher_id}/active", json={"active": active == "on"}), "Pantauan diperbarui.")
+
+
+@app.post("/watchers/{watcher_id}/delete", response_class=HTMLResponse)
+async def watcher_delete(request: Request, watcher_id: int):
+    return await _inbox_action(request, lambda: core("DELETE", f"/admin/watchers/{watcher_id}"), "Pantauan dihapus.")
 
 
 @app.post("/voice/settings", response_class=HTMLResponse)
