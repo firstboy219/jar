@@ -99,6 +99,7 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(30)
     warm = asyncio.create_task(warm_local_worker())
     live.start()  # the desk listens to the events the phone gets (ADR-051)
+    hands = asyncio.create_task(live.decorate_forever())  # the cursor / clicks drawn inside the shared browser
 
     async def self_improvement():
         # Performance self-improvement (ADR-026): runner results, recurring-error repairs, weekly review.
@@ -138,7 +139,7 @@ async def lifespan(app: FastAPI):
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver, hands):
         t.cancel()
     await db.close()
 

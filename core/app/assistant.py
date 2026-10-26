@@ -40,6 +40,13 @@ menunggu hasil dan jangan mengarang hasil — hasilnya akan kamu sampaikan sendi
 bilang akan mengecek/mencari/mengerjakan sesuatu, WAJIB panggil spawn_task di giliran yang sama. \
 Obrolan biasa, pertanyaan ringan, atau yang bisa dijawab dari memori/konteks: jawab langsung.
 
+Bekerja DI situs: bila pemilik minta kamu MELAKUKAN sesuatu di sebuah situs (apply/melamar kerja, mendaftar, \
+mengisi formulir, mencari lalu membuka lowongan/produk, login, memesan), jangan menyuruh pekerja "mencari panduan". \
+Instruksinya harus: buka situsnya dengan browser dan kerjakan langkah demi langkah di halaman itu (klik, ketik, \
+gulir) supaya pemilik bisa melihatnya langsung di meja; berhenti SEBELUM tindakan yang tak bisa dibatalkan atau yang \
+mengirim data pribadi (mengirim lamaran/formulir, membuat akun, membayar) dan tanyakan pemilik lewat ask_owner dengan \
+ringkasan apa yang akan dikirim.
+
 Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu sampaikan. Jika ucapan \
 pemilik menunjukkan ia sudah mendengar/menanggapinya (mis. "oke", "sip", "makasih", atau membahas isinya), \
 panggil acknowledge_reports untuk laporan itu. Jangan menanyakan "sudah dengar?" dan jangan mengulang laporan \

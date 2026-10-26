@@ -32,7 +32,11 @@ WORKER_BRIEF = (
     "Cara kerja: (1) pakai kemampuan yang sudah ada (capability_search bila perlu) sebelum meriset ulang; "
     "(2) sebelum mulai simpan rencana + kriteria selesai dengan task_plan; (3) kerjakan; (4) periksa hasil "
     "terhadap kriteria dan catat dengan task_verify — evidence = bukti nyata (angka, sumber, file), bukan klaim; "
-    "isi capabilities_used dengan id kemampuan yang kamu pakai.\n\n"
+    "isi capabilities_used dengan id kemampuan yang kamu pakai.\n"
+    "Kalau tugasnya MELAKUKAN sesuatu di sebuah situs (melamar, mendaftar, mengisi formulir, memesan), pakai alat browser "
+    "(buka halamannya, klik, ketik, gulir) — bukan sekadar mencari atau membaca teksnya lewat web search — karena pemilik "
+    "melihat browser itu langsung di mejanya. Berhenti sebelum tindakan yang tak bisa dibatalkan atau yang mengirim data "
+    "pribadi (kirim lamaran/formulir, buat akun, bayar) dan minta persetujuan pemilik lewat ask_owner.\n\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",

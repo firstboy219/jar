@@ -1422,3 +1422,67 @@ async def test_v4_f8_the_desk_is_the_front_door_and_its_chat_voice_camera_and_sc
     assert await until(lambda e: e["type"] == "error" and "tidak valid" in e["message"])               # audio that is too short is refused
     await sock.inbox.put(WebSocketDisconnect())
     await asyncio.wait_for(server, 3)
+
+
+async def test_v4_f7_the_shared_browser_gets_the_hands_overlay_in_every_page(pool, monkeypatch):
+    import asyncio
+    import httpx
+    from app import live
+    sent = []
+
+    class FakeWS:
+        """A browser-level DevTools socket: announces one page, then (after the attach request) the session for it, then a second page."""
+        def __init__(self):
+            self.q = asyncio.Queue()
+            for m in ({"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": "T1", "type": "page", "url": "about:blank"}}},
+                      {"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": "X1", "type": "service_worker", "url": "https://x/sw.js"}}},
+                      {"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": "D1", "type": "page", "url": "devtools://devtools/x"}}}):
+                self.q.put_nowait(json.dumps(m))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def send(self, raw):
+            m = json.loads(raw)
+            sent.append(m)
+            if m["method"] == "Target.attachToTarget":
+                self.q.put_nowait(json.dumps({"method": "Target.attachedToTarget", "params": {"sessionId": "S-" + m["params"]["targetId"]}}))
+                if m["params"]["targetId"] == "T1":   # a page opened later by the worker
+                    self.q.put_nowait(json.dumps({"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": "T2", "type": "page", "url": "https://jobstreet.co.id/"}}}))
+                    self.q.put_nowait(json.dumps({"method": "Target.targetInfoChanged", "params": {"targetInfo": {"targetId": "T2", "type": "page", "url": "https://jobstreet.co.id/id"}}}))
+                if m["params"]["targetId"] == "T2":
+                    self.q.put_nowait(None)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            item = await asyncio.wait_for(self.q.get(), 2)
+            if item is None:
+                raise StopAsyncIteration
+            return item
+
+    class Browser:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return httpx.Response(200, json={"webSocketDebuggerUrl": "ws://fake/devtools/browser/1"})
+    monkeypatch.setattr(live, "_client", lambda timeout: Browser())
+    monkeypatch.setattr(live, "_ws_connect", lambda url: FakeWS())
+    await live._decorate_once()
+    attached = [m["params"]["targetId"] for m in sent if m["method"] == "Target.attachToTarget"]
+    assert attached == ["T1", "T2"]                                  # real pages only, each once (not workers, not devtools, not a repeat)
+    for sid in ("S-T1", "S-T2"):
+        mine = [m for m in sent if m.get("sessionId") == sid]
+        assert [m["method"] for m in mine] == ["Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]   # later pages of the tab, and the one open now
+        assert "__jarvisHands" in mine[0]["params"]["source"]
+    js = live.CURSOR_JS
+    assert "mode: 'closed'" in js and "pointer-events:none" in js and "aria-hidden" in js     # draws, never touches or answers the page
+    assert "fetch(" not in js and "XMLHttpRequest" not in js and "sendBeacon" not in js        # and sends nothing anywhere

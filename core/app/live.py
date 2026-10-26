@@ -16,6 +16,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
@@ -228,6 +229,58 @@ async def _capture_loop(st: Station) -> None:
 async def _last_frame(st: Station) -> None:
     if st.browser_until and time.time() < st.browser_until + 60:
         await grab(st)
+
+
+# ---------- the hands: a cursor, clicks and typing drawn inside the shared browser ----------
+
+CURSOR_JS = (Path(__file__).parent / "live_cursor.js").read_text()
+
+
+def _ws_connect(url: str):  # seam for tests
+    import websockets
+    return websockets.connect(url, max_size=2**24, open_timeout=5)
+
+
+async def _decorate_once() -> None:
+    """Attach to the shared browser and put the overlay script into every page, now and when a page is opened later."""
+    async with _client(4) as c:
+        ws_url = (await c.get(f"{BROWSER}/json/version")).json()["webSocketDebuggerUrl"]
+    seen: set[str] = set()
+    async with _ws_connect(ws_url) as ws:
+        n = 0
+
+        async def send(method: str, params: dict | None = None, session: str | None = None) -> None:
+            nonlocal n
+            n += 1
+            await ws.send(json.dumps({"id": n, "method": method, "params": params or {}, **({"sessionId": session} if session else {})}))
+        await send("Target.setDiscoverTargets", {"discover": True})
+        async for raw in ws:
+            m = json.loads(raw)
+            method, p = m.get("method"), m.get("params") or {}
+            if method in ("Target.targetCreated", "Target.targetInfoChanged"):
+                t = p.get("targetInfo") or {}
+                if t.get("type") == "page" and t.get("targetId") not in seen and not str(t.get("url", "")).startswith("devtools://"):
+                    seen.add(t["targetId"])
+                    await send("Target.attachToTarget", {"targetId": t["targetId"], "flatten": True})
+            elif method == "Target.targetDestroyed":
+                seen.discard(p.get("targetId"))
+            elif method == "Target.attachedToTarget" and p.get("sessionId"):
+                await send("Page.addScriptToEvaluateOnNewDocument", {"source": CURSOR_JS}, p["sessionId"])   # every later page of this tab
+                await send("Runtime.evaluate", {"expression": CURSOR_JS}, p["sessionId"])                    # the page that is open now
+
+
+async def decorate_forever() -> None:
+    delay = 3.0
+    while True:
+        try:
+            await _decorate_once()
+            delay = 3.0
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # browser down or restarting: try again, quietly
+            log.debug("hands: %s", type(e).__name__)
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 60.0)
 
 
 # ---------- what the viewer asks for ----------
