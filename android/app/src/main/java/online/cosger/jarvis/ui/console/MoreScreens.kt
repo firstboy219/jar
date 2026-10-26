@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
@@ -72,6 +73,7 @@ enum class ConsoleRoute(val path: String, val title: String, val hint: String, v
     Dashboard("dashboard", "Dasbor", "status layanan, anggaran, latensi suara, pemakaian", Icons.Filled.Dashboard, "Pantau"),
     Audit("audit", "Audit", "jejak semua tindakan", Icons.AutoMirrored.Filled.ReceiptLong, "Pantau"),
     Notifications("notifications", "Notifikasi", "yang diteruskan dari HP", Icons.Filled.Notifications, "Pantau"),
+    Galaxy("galaxy", "Galaksi 3D", "ruang kerjamu sebagai galaksi: tugas, dokumen, memori — terbang, seret, cari", Icons.Filled.Public, "JARVIS"),
     Library("library", "Simpanan", "semua yang pernah dibuat & ditampilkan JARVIS: lagu, playlist, dokumen, gambar…", Icons.Filled.Inventory2, "JARVIS"),
     Memory("memory", "Memori", "cari, tambah, hapus ingatan JARVIS", Icons.Filled.Memory, "JARVIS"),
     Self("self", "Diri JARVIS", "pengetahuan diri, perbaikan, pengembangan diri, error", Icons.Filled.Psychology, "JARVIS"),

@@ -98,3 +98,20 @@ export function contextLabel(c) {
   if (c.context.startsWith('company:')) return `🏢 ${c.title}`;
   return `🪐 ${c.title}`;
 }
+
+/**
+ * The Android app opens the viewer as ".../canvas/#t=<device token>&app=1". Returns the token (if any), whether the viewer
+ * is embedded in the app, and the rest of the fragment (deep links such as "#kartu=12" survive). The token lives only in the
+ * fragment, which the browser never sends to a server; the viewer removes it from the address right away.
+ */
+export function takeAppParams(hash) {
+  const parts = String(hash || '').replace(/^#/, '').split('&').filter(Boolean);
+  let token = '', embedded = false;
+  const rest = [];
+  for (const p of parts) {
+    if (p.startsWith('t=')) token = decodeURIComponent(p.slice(2));
+    else if (p === 'app=1') embedded = true;
+    else rest.push(p);
+  }
+  return { token, embedded, rest: rest.length ? `#${rest.join('&')}` : '' };
+}
