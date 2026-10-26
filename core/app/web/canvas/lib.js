@@ -121,6 +121,8 @@ export const PANELS = {
   prompts: { x: -760, y: 140, z: -430, size: 3.6, title: 'Permintaanmu' },
   n8n: { x: 760, y: 140, z: -430, size: 3.6, title: 'Otomasi (n8n)' },
   storage: { x: 0, y: 140, z: 880, size: 3.6, title: 'Simpanan' },
+  player: { x: -760, y: 140, z: 430, size: 3.6, title: 'Pemutar' },
+  meeting: { x: 760, y: 140, z: 430, size: 3.6, title: 'Rapat' },
 };
 
 /**
@@ -340,4 +342,33 @@ export function touchIntent(dx, dy, ms) {
 /** Screen pixels dragged over the video → page pixels to scroll (the video is smaller or larger than the page). */
 export function scrollDelta(screenPx, rectWidth, picWidth) {
   return Math.round(screenPx * ((picWidth || rectWidth) / (rectWidth || 1)));
+}
+
+// ---------- feature cards on the desk: player and meeting (ADR-054) ----------
+
+/** 754 → "12:34", 3725 → "1:02:05". */
+export function mmss(seconds) {
+  const s = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const two = (n) => String(n).padStart(2, '0');
+  return h ? `${h}:${two(m)}:${two(r)}` : `${two(m)}:${two(r)}`;
+}
+
+const YT = /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
+
+/** What element plays this stage panel: a YouTube video (JARVIS' own embed page), a sound or video file — fetched with the device token when it
+ *  lives on JARVIS' server (an <audio> tag cannot send a header) — or nothing we can play here. */
+export function playerSource(p) {
+  const url = String(p?.url || '');
+  const yt = YT.exec(url);
+  if (yt) return { kind: 'youtube', id: yt[1] };
+  if (!url) return { kind: 'none' };
+  const own = url.startsWith('/api/v1/media/');
+  if (!own && !url.startsWith('https://')) return { kind: 'none' };
+  return { kind: p.panel === 'video' ? 'video' : 'audio', url, auth: own };
+}
+
+/** The stop button of a voice command "selesai rapat" reached this viewer: the number only ever goes up. */
+export function stopRaised(seen, now) {
+  return seen != null && Number.isFinite(now) && now > seen;
 }

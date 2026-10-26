@@ -26,14 +26,14 @@ from pathlib import Path
 
 import httpx
 
-from . import audit, composition, db, documents, llm, memory, reports, stt, voice_id
+from . import audit, composition, db, documents, hub, llm, memory, reports, stt, voice_id
 from .config import settings
 from .location import WIB
 
 log = logging.getLogger("jarvis-core.meetings")
 ROOT = Path("/data/meetings")
 MAX_CHUNK_BYTES = 3_000_000   # 60 s of Opus/AAC at 24–32 kbps is ~250 KB; generous for other codecs
-CHUNK_EXTS = ("ogg", "aac", "m4a")  # the phone sends continuous AAC (.aac) since v0.11; older apps Ogg/Opus
+CHUNK_EXTS = ("ogg", "aac", "m4a", "webm")  # the phone sends continuous AAC (.aac) since v0.11; older apps Ogg/Opus; the desk in a browser WebM/Opus
 STALE_MINUTES = 20            # a recording with no new chunk for this long was abandoned (phone off, app killed)
 LOW_CONFIDENCE = 0.40
 AUDIO_RETENTION_DAYS = 30
@@ -61,8 +61,75 @@ async def create(title: str, confidential: bool, consent: bool, device_id=None, 
         "RETURNING id, title, status",
         title, confidential, device_id, context)
     _dir(str(row["id"])).mkdir(parents=True, exist_ok=True)
+    forget_want()   # the meeting the desk card asked for has begun
     await audit.record(actor, "meeting.started", f"meeting:{row['id']}", confidential=confidential)
     return dict(row)
+
+
+# ---------- the desk's meeting card (ADR-054) ----------
+# "Mulai rapat" by voice or chat does not record by itself — recording others needs everyone's consent — it puts the meeting card on the
+# desk with the button that starts it. The card then follows the meeting from its row (recording → processing → done), whichever device
+# holds the microphone; "stop" by voice raises stop_seq, which the recording device sees and obeys.
+WANT_TTL_S = 30 * 60
+SHOW_DONE_S = 30 * 60
+_desk: dict = {"want": None, "stop_seq": 0}
+
+
+def want_to_record(title: str = "", confidential: bool = False, participants: list[str] | None = None, agenda: str = "") -> dict:
+    _desk["want"] = {"title": (title or "").strip()[:150], "confidential": bool(confidential),
+                     "participants": [p.strip()[:60] for p in (participants or []) if p.strip()][:30],
+                     "agenda": (agenda or "").strip()[:2000], "at": time.time()}
+    return _desk["want"]
+
+
+async def want_to_stop(actor: str = "owner") -> bool:
+    """False when no meeting is being recorded (nothing to stop). Otherwise whoever holds the microphone — the app on the phone (told by
+    a meeting_cmd event) or a browser desk (sees stop_seq change) — stops and sends the recording for minutes."""
+    if not await db.pool().fetchval("SELECT 1 FROM meetings WHERE status = 'recording' LIMIT 1"):
+        return False
+    _desk["stop_seq"] += 1
+    await hub.broadcast({"type": "meeting_cmd", "cmd": "stop"})
+    await audit.record(actor, "meeting.stop_requested", None)
+    return True
+
+
+async def request_start(title: str, confidential: bool, participants: list[str], agenda: str, actor: str) -> dict:
+    """The owner ticked 'everyone agrees' on the desk card and pressed Mulai rekam in the app: the phone records. Delivered = devices told."""
+    forget_want()
+    await audit.record(actor, "meeting.start_requested", None, confidential=confidential)
+    delivered = await hub.broadcast({"type": "meeting_cmd", "cmd": "start", "title": (title or "").strip()[:150], "confidential": bool(confidential),
+                                     "participants": [p.strip()[:60] for p in participants if p.strip()][:30], "agenda": (agenda or "").strip()[:2000]})
+    return {"delivered": delivered}
+
+
+def forget_want() -> None:
+    _desk["want"] = None
+
+
+async def desk_card() -> dict | None:
+    """The card's state: recording | processing | waiting (asked, not started) | done | failed — or None when there is nothing to show."""
+    row = await db.pool().fetchrow(
+        """SELECT id, title, status, confidential, chunks, started_at, duration_s, document_id, error, coalesce(done_at, finished_at, started_at) AS ended
+           FROM meetings WHERE status IN ('recording', 'queued', 'transcribing', 'summarizing')
+              OR (status IN ('done', 'failed') AND coalesce(done_at, finished_at, started_at) > now() - make_interval(secs => $1))
+           ORDER BY started_at DESC LIMIT 1""", SHOW_DONE_S)
+    want = _desk["want"]
+    if want and time.time() - want["at"] > WANT_TTL_S:
+        want = _desk["want"] = None
+    live_row = row and row["status"] in ("recording", "queued", "transcribing", "summarizing")
+    if live_row:
+        state = "recording" if row["status"] == "recording" else "processing"
+    elif want:
+        return {"state": "waiting", "key": f"want:{want['at']}", "title": want["title"], "confidential": want["confidential"],
+                "participants": want["participants"], "agenda": want["agenda"], "stop_seq": _desk["stop_seq"]}
+    elif row:
+        state = row["status"]
+    else:
+        return None
+    return {"state": state, "key": f"{row['id']}:{state}", "id": str(row["id"]), "title": row["title"],
+            "confidential": row["confidential"], "chunks": row["chunks"], "started_at": row["started_at"].timestamp(),
+            "duration_s": row["duration_s"], "document_id": str(row["document_id"]) if row["document_id"] else None,
+            "error": (row["error"] or "")[:200] if state == "failed" else "", "status": row["status"], "stop_seq": _desk["stop_seq"]}
 
 
 def chunk_files(meeting_id: str) -> list[Path]:

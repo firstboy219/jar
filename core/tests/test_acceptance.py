@@ -1677,3 +1677,77 @@ async def test_v4_f9_a_viewer_that_vanishes_hands_the_wheel_back(pool, monkeypat
     await sock.inbox.put(WebSocketDisconnect())                                           # the tab was closed with the wheel in hand
     await asyncio.wait_for(srv, 3)
     assert not live.controlled(live.stations[tid])
+
+
+# ---------- Fase 10 / ADR-054: the player and the meeting recorder are cards on the desk ----------
+
+async def test_v4_f10_a_song_on_the_stage_is_a_player_card_on_the_desk_and_leaves_with_it(pool, monkeypatch):
+    from app import hub, live, stage
+    monkeypatch.setattr(hub, "_clients", {})
+    assert (await live.snapshot("utama"))["player"] is None                                          # nothing playing, nothing on the desk
+    await stage.show("music", {"title": "Bunga", "artist": "BCL", "url": "/api/v1/media/abc", "playlist": {"name": "Playlist saya", "index": 1, "total": 5}},
+                     "Memutar Bunga", "jarvis")
+    p = (await live.snapshot("utama"))["player"]
+    assert p["title"] == "Bunga" and p["panel"] == "music" and p["url"] == "/api/v1/media/abc" and p["playlist"]["total"] == 5
+    first = p["id"]
+    await stage.show("video", {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Klip"}, "Klip", "jarvis")
+    assert (await live.snapshot("utama"))["player"]["id"] != first                                     # a new song is a new player
+    await stage.show("map", {"title": "Rute", "markers": [{"lat": -6.2, "lon": 106.8, "label": "x"}]}, "Rute", "jarvis")
+    assert (await live.snapshot("utama"))["player"] is None                                          # a map is not a player
+    await stage.show("audio", {"url": "https://cdn.example.com/a.mp3", "title": "Suara"}, "Suara", "jarvis")
+    await stage.on_event(stage.current()["id"], "closed")
+    assert (await live.snapshot("utama"))["player"] is None
+    r, _ = await _two_companies(pool, monkeypatch)
+    assert "player" not in await live.snapshot(f"company:{r}")                                         # a company galaxy has no personal player
+
+
+async def test_v4_f10_start_a_meeting_by_voice_opens_the_card_and_recording_waits_for_consent(pool, monkeypatch, tmp_path):
+    from app import assistant, hub, meetings, router
+    monkeypatch.setattr(meetings, "ROOT", tmp_path / "meetings")
+    await pool.execute("DELETE FROM meetings")
+    meetings.forget_want()
+    seen = []
+
+    async def tap(ev):
+        seen.append(ev)
+    monkeypatch.setattr(hub, "_taps", [tap])
+    assert await meetings.desk_card() is None
+    intent = router.parse_action("Jarvis, mulai rapat tentang anggaran 2027")
+    assert intent.name == "meeting_start" and intent.args["title"] == "anggaran 2027"
+    said = await assistant._meeting("start", {"title": intent.args["title"]})
+    assert "Mulai rekam" in said["say"]
+    card = await meetings.desk_card()
+    assert card["state"] == "waiting" and card["title"] == "anggaran 2027"                           # a card, not a recording: everyone must agree first
+    assert not await pool.fetchval("SELECT count(*) FROM meetings") and not [e for e in seen if e.get("type") == "meeting_cmd"]
+    # the owner ticks consent on the card inside the app: the phone is told to record (consent is required)
+    out = await meetings.request_start("Rapat anggaran", True, ["Bu Rina"], "Q3", "device:HP")
+    cmd = [e for e in seen if e.get("type") == "meeting_cmd"][0]
+    assert cmd["cmd"] == "start" and cmd["title"] == "Rapat anggaran" and cmd["confidential"] is True and cmd["participants"] == ["Bu Rina"]
+    assert out["delivered"] == 0 and (await meetings.desk_card()) is None                              # the want is spent
+    # the phone creates the meeting (the usual API) → the card follows the row
+    m = await meetings.create("Rapat anggaran", True, True)
+    rec = await meetings.desk_card()
+    assert rec["state"] == "recording" and rec["id"] == str(m["id"]) and rec["started_at"] > 0 and rec["confidential"] is True
+    stop_before = rec["stop_seq"]
+    assert (await assistant._meeting("stop", {}))["ok"] is True                                           # "selesai rapat"
+    assert (await meetings.desk_card())["stop_seq"] == stop_before + 1
+    assert [e for e in seen if e.get("type") == "meeting_cmd" and e["cmd"] == "stop"]
+    await meetings.add_chunk(str(m["id"]), 0, b"RIFF" + b"\0" * 100, "webm")                        # a browser recorder uploads WebM
+    await meetings.finish(str(m["id"]), 61, 1, "test")
+    assert (await meetings.desk_card())["state"] == "processing"
+    await pool.execute("UPDATE meetings SET status = 'done', done_at = now() WHERE id = $1", m["id"])
+    assert (await meetings.desk_card())["state"] == "done"
+    await pool.execute("UPDATE meetings SET done_at = now() - interval '2 hours' WHERE id = $1", m["id"])
+    assert await meetings.desk_card() is None                                                          # a finished meeting leaves the desk after a while
+    assert (await assistant._meeting("stop", {}))["error"]                                              # nothing is recording any more
+
+
+async def test_v4_f10_the_meeting_endpoints_need_consent_and_an_owner_device(pool, monkeypatch):
+    from fastapi import HTTPException
+
+    from app import main
+    with pytest.raises(HTTPException) as e:
+        await main.meeting_start_request(main.MeetingStartIn(title="x", consent=False), device={"name": "HP"})
+    assert e.value.status_code == 422
+    assert (await main.meeting_start_request(main.MeetingStartIn(title="x", consent=True), device={"name": "HP"}))["delivered"] == 0
+    assert (await main.meeting_stop_request(device={"name": "HP"}))["stopping"] is False

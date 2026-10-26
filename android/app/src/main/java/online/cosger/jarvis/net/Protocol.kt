@@ -39,6 +39,11 @@ sealed interface ServerEvent {
     data class Stage(val id: String, val panel: String, val mode: String, val payload: JsonObject, val caption: String) : ServerEvent {
         override val sessionId: String? = null
     }
+    /** The desk's meeting card (or "selesai rapat") asks this phone to start / stop recording a meeting (ADR-054). */
+    data class MeetingCmd(val cmd: String, val title: String = "", val confidential: Boolean = false,
+                          val participants: List<String> = emptyList(), val agenda: String = "") : ServerEvent {
+        override val sessionId: String? = null
+    }
     /** Memories just read or written — the 3D brain flashes them. */
     /** Memories an agent just read or wrote; labels = their text (shown as "memori terlibat"). */
     data class BrainPulse(val ids: List<String>, val kind: String, val labels: List<String> = emptyList()) : ServerEvent {
@@ -130,6 +135,10 @@ object Protocol {
             "stage" -> ServerEvent.Stage(
                 o.str("id"), o.str("panel"), o.str("mode").ifEmpty { "show" },
                 o["payload"] as? JsonObject ?: JsonObject(emptyMap()), o.str("caption"),
+            )
+            "meeting_cmd" -> ServerEvent.MeetingCmd(
+                o.str("cmd"), o.str("title"), o["confidential"]?.jsonPrimitive?.booleanOrNull == true,
+                o["participants"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(), o.str("agenda"),
             )
             "brain_pulse" -> ServerEvent.BrainPulse(
                 o["ids"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(), o.str("kind"),

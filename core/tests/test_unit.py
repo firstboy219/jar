@@ -1300,3 +1300,17 @@ def test_v4_f9_no_module_has_two_functions_of_the_same_name():
     for path in sorted((Path(__file__).parent.parent / "app").glob("*.py")):
         seen = collections.Counter(n.name for n in ast.parse(path.read_text()).body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
         assert [k for k, v in seen.items() if v > 1] == [], path.name
+
+
+def test_v4_f10_meeting_voice_commands_are_understood_and_ordinary_talk_is_not_taken_for_one():
+    from app import router
+    for said, title in [("mulai rapat", ""), ("Jarvis, mulai rapat tentang anggaran 2027", "anggaran 2027"), ("kita mulai rapat sekarang", ""),
+                        ("rekam rapat ini", ""), ("tolong mulai rekam rapat dong", "")]:
+        i = router.parse_action(said)
+        assert i and i.name == "meeting_start" and i.args["title"] == title, said
+    for said in ["selesai rapat", "stop rapat", "hentikan rekaman", "rapat sudah selesai", "akhiri meeting ini"]:
+        i = router.parse_action(said)
+        assert i and i.name == "meeting_stop", said
+    for said in ["mulai rapat dengan klien lalu kirim email", "kapan rapat berikutnya", "buatkan notulen rapat kemarin", "putar lagu rapat"]:
+        i = router.parse_action(said)
+        assert not i or i.name not in ("meeting_start", "meeting_stop"), said

@@ -50,6 +50,12 @@ class ProtocolTest {
         assertEquals(listOf("a", "b"), p.ids)
     }
 
+    @Test fun meetingCommandsFromTheDeskCard() {
+        val start = Protocol.parse("""{"type":"meeting_cmd","cmd":"start","title":"Rapat anggaran","confidential":true,"participants":["Bu Rina","Pak Dedi"],"agenda":"Q3"}""")
+        assertEquals(ServerEvent.MeetingCmd("start", "Rapat anggaran", true, listOf("Bu Rina", "Pak Dedi"), "Q3"), start)
+        assertEquals(ServerEvent.MeetingCmd("stop"), Protocol.parse("""{"type":"meeting_cmd","cmd":"stop"}"""))
+    }
+
     @Test fun utteranceCarriesAudioAndScreenText() {
         val json = Protocol.utterance("s1", 7, byteArrayOf(1, 2, 3), screenText = "Bu Rina: rapat jam 9?")
         val o = kotlinx.serialization.json.Json.parseToJsonElement(json).jsonObject

@@ -1329,6 +1329,27 @@ async def meeting_finish(meeting_id: str, f: FinishIn, device: dict = Depends(ow
         raise HTTPException(422, str(e))
 
 
+class MeetingStartIn(BaseModel):
+    title: str = Field(default="", max_length=150)
+    confidential: bool = False
+    consent: bool
+    participants: list[str] = Field(default_factory=list, max_length=30)
+    agenda: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/v1/meetings/start-request")
+async def meeting_start_request(m: MeetingStartIn, device: dict = Depends(owner_device_auth)):
+    """From the desk's meeting card inside the app: tell the phone to start recording (its microphone is the one that records)."""
+    if not m.consent:
+        raise HTTPException(422, "perekaman butuh persetujuan peserta")
+    return await meetings.request_start(m.title, m.confidential, m.participants, m.agenda, f"device:{device['name']}")
+
+
+@app.post("/api/v1/meetings/stop-request")
+async def meeting_stop_request(device: dict = Depends(owner_device_auth)):
+    return {"stopping": await meetings.want_to_stop(f"device:{device['name']}")}
+
+
 @app.get("/api/v1/meetings")
 async def meeting_list(device: dict = Depends(owner_device_auth)):
     return jsonable(await meetings.list_())

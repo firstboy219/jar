@@ -193,5 +193,5 @@ export function initDock({ api, toast, embedded }) {
   const freshFrame = () => (media.frame && Date.now() - media.frame.at < FRAME_FRESH_MS ? media.frame : null);
 
   connect();
-  return { say: speak, send: sendChat };
+  return { say: speak, send: sendChat, raw: post };
 }

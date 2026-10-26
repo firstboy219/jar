@@ -7,6 +7,7 @@ import { createTakeover } from './takeover.js';
 import { PANELS, ago, parseFrameHeader, cardScale, clampPhi, contextLabel, diffCards, ease, frameNeedsFetch, matchCards, orthoHeight, shortestAngle, shouldFollow, spiralGalaxy, starField, takeAppParams } from './lib.js';
 import { initCad } from './cad.js';
 import { initDock } from './dock.js';
+import { createMeetingCard, createPlayerCard } from './deskcards.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -470,7 +471,29 @@ function panelFor(name) {
   return (deskPanels[name] = { el: e, ...PANELS[name] });
 }
 
+// The player and the meeting recorder (ADR-054): feature cards at fixed places; the camera flies to one when it shows up.
+let dockApi = null, playerCard = null, meetingCard = null;
+const arrived = {};   // card → the key of what it last showed (undefined until the first poll after loading)
+
+function renderFeatureCards(d) {
+  if (!('player' in d)) return;   // a company galaxy has neither
+  const pp = panelFor('player'), mp = panelFor('meeting');
+  playerCard ||= createPlayerCard({ box: pp.el, api, send: (o) => dockApi?.raw(o), toast });
+  meetingCard ||= createMeetingCard({ box: mp.el, api, toast, embedded: !!fromApp.embedded });
+  pp.el.hidden = !playerCard.update(d.player);
+  const m = meetingCard.update(d.meeting, d.now);
+  mp.el.hidden = !m.show;
+  const arrive = (name, key, pn) => {
+    const first = arrived[name] === undefined, fresh = key != null && arrived[name] !== key;
+    arrived[name] = key;
+    if (fresh && !first && follow && performance.now() - lastTouch > 2500) flyTo({ x: pn.x, y: pn.y, z: pn.z }, 560, 1400);
+  };
+  arrive('player', d.player?.id ?? null, pp);
+  arrive('meeting', m.show && ['waiting', 'recording'].includes(d.meeting?.state) ? m.key : null, mp);
+}
+
 function renderPanels(d) {
+  renderFeatureCards(d);
   const show = (name, on) => { if (on) panelFor(name); else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
   show('prompts', !!d.prompts); show('n8n', !!d.n8n); show('storage', !!d.storage);
   if (d.prompts) {
@@ -776,4 +799,4 @@ cad = initCad({
   cards: () => cards, selected: () => selected, select, current: () => current, api, toast, refresh, rebuildStars, linkFrom: () => linkFrom,
   contexts: () => constellationList, openFind: (q) => { const f = $('#find'); f.value = q; f.dispatchEvent(new Event('input')); f.focus(); },
 });
-initDock({ api, toast, embedded: !!fromApp.embedded });
+dockApi = initDock({ api, toast, embedded: !!fromApp.embedded });
