@@ -2,7 +2,7 @@
 // the same WebSocket the phone uses (/ws). The server does the hearing (speech recognition, voice complements) and the thinking;
 // this file only captures, sends and shows. In the Android app (embedded) the phone's own microphone, camera and screen sharing stay
 // native, so only the chat is shown here.
-import { Vad, downsample, pcm16ToBase64 } from './lib.js';
+import { Vad, downsample, pcm16ToBase64, panelOpen, panelValue } from './lib.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { /* private mode */ } return null; };
@@ -30,7 +30,7 @@ export function initDock({ api, toast, embedded }) {
   const minBtn = mk('💬', 'Ciutkan / buka', () => setOpen(!wantOpen));
   minBtn.classList.add('minimizer');
   // penanda pesan baru saat panel ditutup
-  let penandaDot = el('span', 'dot penanda');
+  const penandaDot = el('span', 'dot penanda');
   minBtn.appendChild(penandaDot);
   head.append(dot, title, buttons);
   const log = el('div', 'dockmsgs');
@@ -44,7 +44,7 @@ export function initDock({ api, toast, embedded }) {
   const previews = el('div', 'previews');
   document.body.append(previews, dock);
   setTts(ttsOn);
-  setOpen(LS('jarvis_desk_dock') !== 'closed');
+  setOpen(panelOpen(LS('jarvis_desk_dock')));
   // the conversation survives a reload and a trip to another tab of the app (kept in this browser only)
   const keep = () => LS(`jarvis_desk_log_${sessionId}`, JSON.stringify([...log.children].slice(-40).map((n) => ({ who: n.classList.contains('user') ? 'user' : 'jarvis', text: n.textContent }))));
   const history = (() => { try { return JSON.parse(LS(`jarvis_desk_log_${sessionId}`) || '[]'); } catch { return []; } })();
@@ -58,10 +58,9 @@ export function initDock({ api, toast, embedded }) {
     const isClosed = !on;
     dock.classList.toggle('closed', isClosed);
     dock.classList.toggle('minimized', isClosed);
-    if (on) {
-        penandaDot.classList.remove('visible', 'blink');
-    }
-    LS('jarvis_desk_dock', on ? 'open' : 'closed');
+    if (on) penandaDot.classList.remove('visible', 'blink');   // dibaca: penanda hilang saat dibuka
+    minBtn.title = on ? 'Ciutkan panel chat' : 'Buka panel chat';
+    LS('jarvis_desk_dock', panelValue(on));   // posisi panel kembali sama setelah refresh
   }
   function setTts(on) {
     ttsOn = on; LS('jarvis_desk_tts', on ? 'on' : 'off'); ttsBtn.classList.toggle('on', on);
@@ -72,10 +71,7 @@ export function initDock({ api, toast, embedded }) {
   function addMsg(who, text, quiet = false) {
     const m = el('div', `msg ${who}`, text);
     log.append(m); log.scrollTop = log.scrollHeight; keep();
-    if (!quiet && !wantOpen) {
-      // tampilkan penandaDot saat pesan baru tiba saat panel ditutup
-      penandaDot.classList.add('visible', 'blink');
-    }
+    if (!quiet && !wantOpen) penandaDot.classList.add('visible', 'blink');   // pesan baru saat panel ditutup
     return m;
   }
   function setStatus(text) { statusLine.textContent = text || ''; statusLine.hidden = !text; }
