@@ -1662,6 +1662,51 @@ async def test_v4_f12_the_owner_can_hand_a_worker_a_brief_word_for_word(pool, mo
     assert await pool.fetchval("SELECT instruction FROM tasks WHERE id = $1", t["id"]) == brief.strip()
 
 
+async def test_v4_f12_the_workers_area_shows_models_and_the_owner_can_stop_start_talk_and_switch_the_model(pool, monkeypatch):
+    from fastapi import HTTPException
+
+    from app import composition, devices, gateway, hermes, live, main, workers
+    _, owner = await devices.create("HP pemilik", "test", scope="owner")
+    dev = {"name": "HP pemilik", "scope": "owner"}
+    monkeypatch.setattr(workers, "_start", lambda task_id, context="": None)
+    steered = []
+
+    async def fake_steer(run_id, text):
+        steered.append((run_id, text))
+        return True
+
+    async def fake_stop(run_id):
+        steered.append(("stop", run_id))
+    monkeypatch.setattr(hermes, "steer", fake_steer)
+    monkeypatch.setattr(hermes, "stop", fake_stop)
+    run = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, hermes_run, model_used, started_at)
+                                 VALUES ('s', 'Cari lowongan', 'x', 'owner', 'web', 'running', 'run_1', 'deepseek/deepseek-v4.1-flash', now()) RETURNING id""")
+    gone = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, error, finished_at)
+                                  VALUES ('s', 'Tugas macet', 'x', 'owner', 'coding', 'failed', 'Hermes tidak dapat dihubungi', now()) RETURNING id""")
+    ws = {w["task_id"]: w for w in (await live.snapshot("utama"))["workers"]}
+    assert ws[run]["model"] == "deepseek/deepseek-v4.1-flash" and ws[run]["can_say"] and ws[run]["can_stop"] and not ws[run]["can_start"]
+    assert ws[run]["chain"] and ws[run]["main"] == ws[run]["chain"][0]                      # the category's own chain is shown too
+    assert ws[gone]["can_start"] and not ws[gone]["can_stop"] and ws[gone]["model"] == (ws[gone]["chain"] or [""])[0]
+    await main.worker_say(run, main.SayIn(text="pakai situs lain saja"), device=dev)         # a word straight to the worker
+    assert steered[0][0] == "run_1" and "pakai situs lain saja" in steered[0][1] and steered[0][1].startswith("PESAN LANGSUNG")
+    with pytest.raises(HTTPException):
+        await main.worker_say(gone, main.SayIn(text="halo"), device=dev)                    # not running: it cannot be spoken to
+    assert (await main.worker_start(gone, device=dev))["status"] == "queued"
+    assert (await main.worker_stop(gone, device=dev))["ok"]
+    assert await pool.fetchval("SELECT status FROM tasks WHERE id = $1", gone) == "stopped"
+    with pytest.raises(HTTPException):
+        await main.worker_stop(gone, device=dev)                                            # already stopped
+    async def no_probe(model):
+        return None
+    monkeypatch.setattr(composition, "_probe", no_probe)
+    await composition.set_model("web", "qwen/qwen3.7-flash", "device:hp", confirmed=True)   # the model picker
+    cats = await gateway.categories()
+    assert cats["web"]["routes"][0]["model"] == "qwen/qwen3.7-flash"
+    row = workers.overview_row({"id": 1, "title": "t", "status": "queued", "kind": "owner", "category": "privat", "runtime": "hermes",
+                                "model_used": None, "hermes_run": None, "error": None, "cost_usd": 0.0, "budget_usd": None, "seconds": 3}, cats)
+    assert row["locked"] and not row["can_say"] and row["can_stop"]                         # private workers are local only: no model switch
+
+
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
     from app import assistant
     brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200

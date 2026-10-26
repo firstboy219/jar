@@ -37,7 +37,7 @@ test('the desk follows the owner\'s new task once, and never grabs the camera fr
   assert.equal(ago(5), '5 dtk');
   assert.equal(ago(150), '3 mnt');
   assert.equal(ago(7200), '2.0 jam');
-  assert.deepEqual(Object.keys(PANELS).sort(), ['doc', 'draft', 'google', 'image', 'map', 'meeting', 'n8n', 'player', 'prompts', 'storage', 'text', 'video', 'web']);
+  assert.deepEqual(Object.keys(PANELS).sort(), ['doc', 'draft', 'google', 'image', 'map', 'meeting', 'n8n', 'player', 'prompts', 'storage', 'text', 'video', 'web', 'workers']);
   // no two desk panels overlap (each is at most ~520 units tall)
   const r = Object.entries(PANELS).map(([n, p]) => ({ n, x: p.x, y: p.y, w: p.w, h: 520 }));
   for (const a of r) for (const b of r) if (a.n < b.n) {
@@ -206,4 +206,13 @@ test('board: a connector leaves and enters through the facing sides and points i
   assert.deepEqual(up.from, { x: 50, y: 400 });
   const m = miniMapFit({ x: 0, y: 0, w: 1000, h: 500 }, { w: 200, h: 120 }, 0);
   assert.ok(Math.abs(m.s - 0.2) < 1e-9 && Math.abs(m.oy - 10) < 1e-9);
+});
+
+test('workers card: short model names and durations', async () => {
+  const { shortModel, dur } = await import('../workerscard.js');
+  assert.equal(shortModel('deepseek/deepseek-v4.1-flash'), 'deepseek-v4.1-flash');
+  assert.equal(shortModel('nvidia/nemotron-3-ultra-550b-a55b:free'), 'nemotron-3-ultra-550b-a55b (gratis)');
+  assert.equal(shortModel('qwen-lokal'), 'qwen-lokal');
+  assert.equal(shortModel(''), '—');
+  assert.equal(dur(45), '45d'); assert.equal(dur(75), '1m15d'); assert.equal(dur(3725), '1j02m');
 });

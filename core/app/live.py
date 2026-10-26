@@ -489,9 +489,10 @@ async def snapshot(context: str = "utama") -> dict:
     mine.sort(key=lambda s: (s["status"] in FINAL, -s["task_id"]))
     out = {"now": time.time(), "stations": mine}
     if company is None:  # the owner's own desk; a company galaxy shows only that company's tasks
-        from . import meetings, stage
+        from . import meetings, stage, workers
         out |= {"n8n": await n8n_recent(), "prompts": await prompts(), "storage": await storage(),
-                "player": stage.desk_player(), "cards": stage.desk_cards(), "meeting": await meetings.desk_card()}
+                "player": stage.desk_player(), "cards": stage.desk_cards(), "meeting": await meetings.desk_card(),
+                "workers": await workers.overview()}
     return out
 
 

@@ -548,3 +548,49 @@ async def resume_after_restart() -> int:
     for r in rows:
         _start(r["id"])
     return len(rows)
+
+
+# ---------- the desk's workers area (ADR-058): who is working, with which model, start / stop, and a word to the worker ----------
+
+SHOW_DONE_S = 3600   # a worker that finished stays on the desk for an hour
+
+
+def _chain(cats: dict, category: str) -> list[str]:
+    return [r.get("model", "") for r in (cats.get(category, {}).get("routes") or [])]
+
+
+def overview_row(r: dict, cats: dict) -> dict:
+    """One worker for the desk (pure; unit-tested). The model is the one that really answered ('model_used'), else the category's main one."""
+    chain = _chain(cats, r["category"] or "")
+    running = r["status"] == "running"
+    return {"task_id": r["id"], "title": r["title"], "status": r["status"], "kind": r["kind"], "category": r["category"], "runtime": r["runtime"],
+            "model": r["model_used"] or (chain[0] if chain else ""), "main": chain[0] if chain else "", "chain": chain,
+            "locked": r["category"] == "privat", "seconds": int(r["seconds"] or 0), "cost": r["cost_usd"] or 0.0, "budget": r["budget_usd"],
+            "can_say": running and bool(r["hermes_run"]), "can_stop": r["status"] in ("queued", "running"),
+            "can_start": r["status"] in ("stopped", "failed") and r["kind"] != "flowcheck", "error": (r["error"] or "")[:160]}
+
+
+async def overview() -> list[dict]:
+    """The owner's workers: the active ones, then what finished in the last hour (newest first)."""
+    cats = await gateway.categories()
+    rows = await db.pool().fetch(
+        """SELECT id, title, status, kind, category, runtime, model_used, hermes_run, error, cost_usd::float AS cost_usd, budget_usd::float AS budget_usd,
+                  EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at))) AS seconds
+           FROM tasks WHERE company_id IS NULL AND kind NOT IN ('flowcheck')
+             AND (status IN ('queued', 'running') OR COALESCE(finished_at, created_at) > now() - make_interval(secs => $1))
+           ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT 14""", float(SHOW_DONE_S))
+    return [overview_row(dict(r), cats) for r in rows]
+
+
+SAY_PREFIX = "PESAN LANGSUNG DARI PEMILIK untuk tugas ini (ikuti, lalu lanjutkan tugasnya; jawab singkat lewat hasil akhirmu bila ditanya): "
+
+
+async def say(task_id: int, text: str, actor: str) -> bool:
+    """A word from the owner straight to a running worker: slipped into its turn, read before its next step. False when it is not running."""
+    text = (text or "").strip()[:2000]
+    row = await db.pool().fetchrow("SELECT status, hermes_run FROM tasks WHERE id = $1", task_id)
+    if not text or not row or row["status"] != "running" or not row["hermes_run"]:
+        return False
+    ok = await hermes.steer(row["hermes_run"], SAY_PREFIX + text)
+    await audit.record(actor, "task.said", f"task:{task_id}", chars=len(text), delivered=ok)
+    return ok

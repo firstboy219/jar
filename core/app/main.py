@@ -1519,6 +1519,43 @@ async def document_get(doc_id: str, device: dict = Depends(device_auth)):
                         filename=f"{row['title'][:60]}.{row['format']}")
 
 
+# ---------- the desk's workers area (ADR-058) ----------
+
+class SayIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+@app.post("/api/v1/workers/{task_id}/stop")
+async def worker_stop(task_id: int, device: dict = Depends(owner_device_auth)):
+    if not await workers.stop(task_id, f"device:{device['name']}"):
+        raise HTTPException(409, "pekerja ini tidak sedang berjalan")
+    return {"ok": True}
+
+
+@app.post("/api/v1/workers/{task_id}/start")
+async def worker_start(task_id: int, device: dict = Depends(owner_device_auth)):
+    r = await workers.retry(task_id, f"device:{device['name']}")
+    if not r:
+        raise HTTPException(409, "hanya pekerja yang berhenti atau gagal yang bisa dimulai lagi")
+    return r
+
+
+@app.post("/api/v1/workers/{task_id}/say")
+async def worker_say(task_id: int, s: SayIn, device: dict = Depends(owner_device_auth)):
+    if not await workers.say(task_id, s.text, f"device:{device['name']}"):
+        raise HTTPException(409, "pekerja ini tidak sedang berjalan, atau tidak bisa disela (tekan Mulai lebih dulu)")
+    return {"ok": True}
+
+
+@app.get("/api/v1/workers/models")
+async def worker_models(device: dict = Depends(owner_device_auth)):
+    """Models a worker can be switched to (OpenRouter's catalog, only those with tool calling), cheapest first."""
+    cat = await openrouter.catalog() or []
+    own = [m for m in cat if m["tools"]]
+    own.sort(key=lambda m: (not m["free"], m["price_out"], m["id"]))
+    return {"models": [{"id": m["id"], "name": m["name"], "free": m["free"], "price_out": m["price_out"], "vision": m["vision"]} for m in own[:300]]}
+
+
 # ---------- the owner's Google account, connected from the phone (ADR-057) ----------
 
 class GoogleClientIn(BaseModel):
