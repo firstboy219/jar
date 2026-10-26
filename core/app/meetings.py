@@ -513,9 +513,14 @@ async def process(meeting_id: str) -> None:
     except Exception:
         log.exception("meeting %s not indexed", meeting_id)
     n_items = len(summary.get("action_items") or [])
+    try:   # the minutes become a page in Catatan, their action items its to-dos (ADR-060)
+        from . import notes
+        await notes.from_meeting(str(meeting_id))
+    except Exception:
+        log.exception("meeting %s: no notes page", meeting_id)
     await reports._create(None, "meeting",
                           f"Notulen rapat {meeting['title']} sudah siap. {summary.get('ringkasan', '')[:300]} "
-                          f"Ada {n_items} action item; dokumennya bisa dibuka di menu Rapat.")
+                          f"Ada {n_items} action item; dokumennya bisa dibuka di menu Rapat, tugasnya ada di Catatan.")
     log.info("meeting %s done in %.0f s (%s)", meeting_id, time.monotonic() - started, engine)
 
 

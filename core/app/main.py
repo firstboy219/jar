@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import devteam, google_auth
+from . import devteam, google_auth, notes
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -860,9 +860,10 @@ async def canvases_restore(canvas_id: int, r: RestoreIn, device: dict = Depends(
 _CANVAS_DIR = __import__("pathlib").Path(__file__).parent / "web" / "canvas"
 # The viewer and the gesture prototype: static, same origin as the API. Hand tracking (MediaPipe) runs in the browser:
 # its code and model come from jsdelivr / Google storage, camera frames never leave the device.
+# The map card (ADR-056) loads MapLibre from jsdelivr and its tiles/fonts from OpenFreeMap.
 _CANVAS_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
-               "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; img-src 'self' https: data: blob:; "
-               "media-src 'self' https: blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-ancestors 'none'")
+               "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://tiles.openfreemap.org; img-src 'self' https: data: blob:; "
+               "media-src 'self' https: blob:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; worker-src 'self' blob:; frame-ancestors 'none'")
 
 
 @app.get("/")
@@ -888,6 +889,144 @@ async def canvas_static(path: str):
                                          "Cache-Control": "no-cache",
                                          # the desk's own microphone, camera and screen sharing (dock.js), for this origin only
                                          "Permissions-Policy": "camera=(self), microphone=(self), display-capture=(self), geolocation=()"})
+
+
+_NOTES_DIR = __import__("pathlib").Path(__file__).parent / "web" / "notes"
+_NOTES_CSP = ("default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; "
+              "frame-ancestors 'none'")
+
+
+@app.get("/notes")
+async def notes_root():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/notes/")
+
+
+@app.get("/notes/{path:path}")
+async def notes_static(path: str):
+    """Catatan & Tugas (ADR-060): the app's Catatan tab and a page of its own on the web."""
+    target = (_NOTES_DIR / (path or "index.html")).resolve()
+    if not str(target).startswith(str(_NOTES_DIR.resolve())) or not target.is_file():
+        raise HTTPException(404)
+    return FileResponse(target, headers={"Content-Security-Policy": _NOTES_CSP, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+
+# ---------- notes & tasks API (ADR-060): the owner's own, so owner devices only ----------
+
+class NotePageIn(BaseModel):
+    title: str = Field(default="", max_length=200)
+    icon: str = Field(default="", max_length=8)
+    parent_id: str | None = None
+    blocks: list = Field(default_factory=list)
+
+
+class NoteSaveIn(BaseModel):
+    title: str = Field(default="", max_length=200)
+    icon: str = Field(default="", max_length=8)
+    blocks: list
+    version: int
+
+
+class NotePatchIn(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    icon: str | None = Field(default=None, max_length=8)
+    pinned: bool | None = None
+    archived: bool | None = None
+    parent_id: str | None = None
+
+
+class NoteBlockIn(BaseModel):
+    checked: bool | None = None
+    due: str | None = Field(default=None, max_length=10)
+    priority: int | None = Field(default=None, ge=0, le=3)
+    text: str | None = Field(default=None, max_length=10000)
+    who: str | None = Field(default=None, max_length=60)
+
+
+class NoteTaskIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    due: str | None = Field(default=None, max_length=10)
+    priority: int | None = Field(default=None, ge=1, le=3)
+
+
+def _notes_call(fn):
+    async def run(*a, **k):
+        try:
+            return jsonable(await fn(*a, **k))
+        except notes.NotesError as e:
+            raise HTTPException(422, str(e))
+        except notes.Stale as s:
+            return JSONResponse({"stale": True, "page": jsonable(s.page)}, status_code=409)
+    return run
+
+
+@app.get("/api/v1/notes")
+async def notes_list(archived: bool = False, device: dict = Depends(owner_device_auth)):
+    return {"pages": jsonable(await notes.list_pages(archived))}
+
+
+@app.post("/api/v1/notes")
+async def notes_create(p: NotePageIn, device: dict = Depends(owner_device_auth)):
+    return await _notes_call(notes.create)(p.title, p.icon, p.parent_id, p.blocks, f"device:{device['name']}")
+
+
+@app.get("/api/v1/notes/tasks")
+async def notes_tasks(view: str = "all", device: dict = Depends(owner_device_auth)):
+    return {"tasks": jsonable(await notes.tasks(view))}
+
+
+@app.post("/api/v1/notes/tasks")
+async def notes_add_task(t: NoteTaskIn, device: dict = Depends(owner_device_auth)):
+    text, said = notes.parse_due(t.text)   # "telepon Pak Budi besok": the date said wins over the view's default
+    return await _notes_call(notes.add_task)(text or t.text, said or t.due, t.priority, f"device:{device['name']}")
+
+
+@app.get("/api/v1/notes/search")
+async def notes_search(q: str = "", device: dict = Depends(owner_device_auth)):
+    return {"results": jsonable(await notes.search(q))}
+
+
+@app.get("/api/v1/notes/meetings")
+async def notes_meetings(device: dict = Depends(owner_device_auth)):
+    return {"meetings": jsonable(await notes.meetings_to_import())}
+
+
+@app.post("/api/v1/notes/meetings/{meeting_id}")
+async def notes_import_meeting(meeting_id: str, device: dict = Depends(owner_device_auth)):
+    page = await notes.from_meeting(meeting_id, f"device:{device['name']}")
+    if not page:
+        raise HTTPException(404, "rapat itu belum selesai atau tidak ada")
+    return jsonable(page)
+
+
+@app.get("/api/v1/notes/{page_id}")
+async def notes_get(page_id: str, device: dict = Depends(owner_device_auth)):
+    page = await notes.get(page_id)
+    if not page:
+        raise HTTPException(404, "halaman tidak ditemukan")
+    return jsonable(page)
+
+
+@app.put("/api/v1/notes/{page_id}")
+async def notes_save(page_id: str, p: NoteSaveIn, device: dict = Depends(owner_device_auth)):
+    return await _notes_call(notes.save)(page_id, p.title, p.icon, p.blocks, p.version, f"device:{device['name']}")
+
+
+@app.patch("/api/v1/notes/{page_id}")
+async def notes_patch(page_id: str, p: NotePatchIn, device: dict = Depends(owner_device_auth)):
+    return await _notes_call(notes.patch)(page_id, f"device:{device['name']}", **p.model_dump(exclude_unset=True))
+
+
+@app.patch("/api/v1/notes/{page_id}/blocks/{block_id}")
+async def notes_block(page_id: str, block_id: str, b: NoteBlockIn, device: dict = Depends(owner_device_auth)):
+    return await _notes_call(notes.set_block)(page_id, block_id, f"device:{device['name']}", **b.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/v1/notes/{page_id}")
+async def notes_delete(page_id: str, device: dict = Depends(owner_device_auth)):
+    if not await notes.delete(page_id, f"device:{device['name']}"):
+        raise HTTPException(409, "hanya halaman di tempat sampah yang bisa dihapus permanen")
+    return {"ok": True}
 
 
 class CompositionTest(BaseModel):

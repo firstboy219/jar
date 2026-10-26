@@ -8,8 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.automirrored.filled.FactCheck
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Public
@@ -39,6 +39,7 @@ import online.cosger.jarvis.ui.console.AppUpdateScreen
 import online.cosger.jarvis.ui.console.AuditScreen
 import online.cosger.jarvis.ui.console.CompositionScreen
 import online.cosger.jarvis.ui.console.GalaxyScreen
+import online.cosger.jarvis.ui.console.NotesScreen
 import online.cosger.jarvis.ui.console.JarvisVoiceScreen
 import online.cosger.jarvis.ui.console.ConsoleRoute
 import online.cosger.jarvis.ui.console.DashboardScreen
@@ -61,7 +62,6 @@ import online.cosger.jarvis.ui.console.ServerSettingsScreen
 import online.cosger.jarvis.ui.console.StudioScreen
 import online.cosger.jarvis.ui.console.TasksScreen
 import online.cosger.jarvis.ui.console.VoiceprintScreen
-import online.cosger.jarvis.ui.screens.ChatScreen
 import online.cosger.jarvis.ui.screens.LOCATION_PERMISSIONS
 import online.cosger.jarvis.ui.screens.SettingsScreen
 import online.cosger.jarvis.ui.theme.JarvisColors
@@ -69,7 +69,7 @@ import online.cosger.jarvis.ui.theme.JarvisTheme
 
 private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
     Desk("desk", "Meja", Icons.Filled.Public),
-    Chat("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
+    Notes("notes", "Catatan", Icons.Filled.EditNote),   // ADR-060: notes & to-dos; the conversation is on the desk
     Tasks("tasks", "Tugas", Icons.AutoMirrored.Filled.FactCheck),
     Meetings("meetings", "Rapat", Icons.Filled.Groups),
     More("more", "Lainnya", Icons.Filled.Apps),
@@ -174,7 +174,7 @@ class MainActivity : FragmentActivity() {
                                 onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
                                 onOpenBackground = { nav.navigate("console/${ConsoleRoute.Background.path}") })
                         }
-                        composable(Tab.Chat.route) { ChatScreen(vm) }
+                        composable(Tab.Notes.route) { NotesScreen(vm, back) }
                         composable(Tab.Tasks.route) { TasksScreen(vm, null) }
                         composable(Tab.Meetings.route) { MeetingsScreen(vm, null) { id -> nav.navigate("meeting/$id") } }
                         composable("meeting/{id}") { e -> MeetingDetailScreen(vm, e.arguments?.getString("id").orEmpty(), back) }

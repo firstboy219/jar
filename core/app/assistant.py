@@ -981,6 +981,15 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             return await model_answers.stats(a["text"])
         case "model_compare":
             return await model_answers.compare(a["text"])
+        case "todo_add":
+            from . import notes
+            text, due = notes.parse_due(a["text"])
+            await notes.add_task(text, due, None, actor)
+            return f"Oke, masuk daftar tugas: {text}" + (f" (tenggat {due})" if due else "") + "."
+        case "note_add":
+            from . import notes
+            await notes.add_note(a["text"], "", actor)
+            return "Oke, sudah kucatat di Inbox Catatan."
         case "dev_team":
             from . import devteam
             try:

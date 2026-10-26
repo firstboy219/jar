@@ -86,8 +86,18 @@ _MODEL_NAMES = re.compile(r"\b(model|deepseek|qwen\S*|claude|gpt\S*|gemini|gemma
 _DEV_TEAM = re.compile(r"^(?:(?:jarvis|tolong|hai|halo)[, ]+)*(?:tim|team)\s?dev(?:elop(?:er|ment)?)?\b[\s,:.!-]*(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
 
 
+_NOTE = re.compile(r"^(?:(?:jarvis|tolong|tlg|coba)[, ]+)*catat(?:kan|in)?(?:\s+(?:ini|ya|dong|bahwa))?\s*[:,-]?\s*(?P<text>.{3,})$",
+                   re.IGNORECASE | re.DOTALL)
+_TODO = re.compile(r"^(?:(?:jarvis|tolong|tlg|coba)[, ]+)*(?:tambah(?:kan|in)?|masuk(?:kan|in))\s+(?:ke\s+)?(?:tugas|task|to-?do|daftar tugas)"
+                   r"(?:\s+(?:saya|ku|aku|baru))?\s*[:,-]?\s*(?P<text>.{3,})$", re.IGNORECASE | re.DOTALL)
+
+
 def parse_action(text: str) -> Intent | None:
     lowered = " ".join(text.strip().lower().split())
+    if m := _TODO.match(text.strip()):   # "tambah tugas telepon pak budi besok" → Catatan's task list (ADR-060)
+        return Intent("todo_add", {"text": m["text"].strip()})
+    if m := _NOTE.match(text.strip()):   # "catat: …" → the Inbox page
+        return Intent("note_add", {"text": m["text"].strip()})
     if (m := _DEV_TEAM.match(text.strip())) and len(m["rest"].strip()) >= 8:   # "tim dev, …" goes to the dev team as said (ADR-059)
         return Intent("dev_team", {"text": text.strip()})
     if _OR_CHECK.search(lowered):

@@ -29,8 +29,8 @@ const MAP_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 let maplibre = null;
 function loadMaplibre() {
   if (!maplibre) maplibre = new Promise((ok, fail) => {
-    const css = el('link'); css.rel = 'stylesheet'; css.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css'; document.head.append(css);
-    const s = el('script'); s.src = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js';
+    const css = el('link'); css.rel = 'stylesheet'; css.href = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css'; document.head.append(css);
+    const s = el('script'); s.src = 'https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js';
     s.onload = () => ok(window.maplibregl); s.onerror = () => { maplibre = null; fail(new Error('peta tidak bisa dimuat')); };
     document.head.append(s);
   });

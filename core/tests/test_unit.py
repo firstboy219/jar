@@ -1399,3 +1399,34 @@ def test_v4_f12_a_zip_attachment_is_listed_and_its_documents_are_read():
     assert "2 berkas tidak dibaca" in note                                               # the picture and the nested archive
     with pytest.raises(attachments.AttachmentError):
         attachments.extract("rusak.zip", "", b"bukan zip")
+
+
+def test_v4_f12_note_blocks_task_views_dates_and_meeting_pages():
+    from datetime import date
+
+    from app import notes, router
+    b = notes.clean_block({"type": "todo", "text": "x" * 20000, "checked": 1, "due": "2026-10-30", "priority": 9, "who": "Rina", "evil": "<script>"})
+    assert b["type"] == "todo" and len(b["text"]) == notes.MAX_TEXT and b["checked"] is True and b["due"] == "2026-10-30"
+    assert "priority" not in b and b["who"] == "Rina" and "evil" not in b                  # out-of-range and unknown fields are dropped
+    assert notes.clean_block({"type": "script", "text": "hai"})["type"] == "p"
+    assert notes.clean_block({"type": "todo", "text": "t", "due": "besok"}).get("due") is None
+    two = notes.clean_blocks([{"id": "a", "text": "1"}, {"id": "a", "text": "2"}])
+    assert two[0]["id"] != two[1]["id"]                                                   # ids stay unique
+    today = date(2026, 10, 26)
+    late, now_, soon, later, none, done = ({"due": "2026-10-20"}, {"due": "2026-10-26"}, {"due": "2026-10-30"}, {"due": "2026-11-20"}, {}, {"checked": True})
+    assert notes.in_view(late, "overdue", today) and notes.in_view(late, "today", today) and not notes.in_view(soon, "today", today)
+    assert notes.in_view(soon, "week", today) and not notes.in_view(later, "week", today) and notes.in_view(later, "upcoming", today)
+    assert notes.in_view(none, "nodate", today) and notes.in_view(done, "done", today) and not notes.in_view(done, "all", today)
+    assert notes.parse_due("telepon pak Budi besok", today) == ("telepon pak Budi", "2026-10-27")
+    assert notes.parse_due("kirim laporan, paling lambat minggu depan", today) == ("kirim laporan", "2026-11-02")
+    assert notes.parse_due("beli susu", today) == ("beli susu", None)
+    page = notes.meeting_blocks({"started": "26 Okt 2026 10:00", "participants": ["Rina", "Budi"]},
+                                {"ringkasan": "Anggaran Q4", "keputusan": ["setuju iklan"],
+                                 "action_items": [{"siapa": "Rina", "apa": "kirim proposal", "tenggat": "2026-10-31"},
+                                                  {"siapa": "Budi", "apa": "cek vendor", "tenggat": "Jumat"}]})
+    todos = [x for x in page if x["type"] == "todo"]
+    assert [t["who"] for t in todos] == ["Rina", "Budi"] and todos[0]["due"] == "2026-10-31" and "tenggat: Jumat" in todos[1]["text"]
+    assert any(x["type"] == "h2" and x["text"] == "Keputusan" for x in page) and "Rina, Budi" in page[0]["text"]
+    assert router.parse_action("tambah tugas telepon pak Budi besok").name == "todo_add"
+    assert router.parse_action("Jarvis, tambahkan ke daftar tugas: bayar listrik").args["text"] == "bayar listrik"
+    assert router.parse_action("catat ide: aplikasi kasir untuk warung").name == "note_add"

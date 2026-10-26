@@ -1062,3 +1062,22 @@ coder (expert developer) — and their activity visible on the canvas in a dashe
   model, 💬 to the running one), a request box, and the latest jobs (status, round, change, qaqa's review, cancel). The main agent hands
   "develop JARVIS itself" requests to the team with the tool `tim_dev` instead of a generic worker.
 - Tables: `dev_jobs`; `tasks.dev_job`, `tasks.dev_role`; task kind `devteam` (migration 029).
+
+## ADR-060 — Catatan & Tugas replaces the app's Chat tab (Blueprint v4 Fase 12)
+Owner (2026-10-26): the chat panel on the desk sends files (image/PDF/ZIP); the app's Chat menu becomes "notes & my task list", advanced like
+Notion, where the owner writes notes, ticks tasks and manages meeting minutes. Also: the app may rotate to landscape for the desk.
+- **Data.** `note_pages` (migration 030): title, icon, parent (sub-pages), pinned/archived (trash), `blocks` jsonb, `version`. Blocks: p, h1–h3,
+  bullet, number, todo (checked, due, priority 1–3, who), toggle, quote, callout, code, divider; `notes.clean_block` bounds every field.
+  A to-do block IS a task: the task views (today, 7 days, all, overdue, done) query every page. Two pages always exist: 📥 Inbox, ✅ Tugas saya.
+- **Conflicts.** Every save carries the version it started from; a newer save from another device answers 409 with the current page and
+  the editor offers "muat versi terbaru" or "simpan versiku" — never a silent overwrite.
+- **Meetings.** A finished meeting becomes a page by itself (`notes.from_meeting`, from `meetings` after the minutes): summary, decisions,
+  action items as to-dos (who, due date when it is a date), open questions; older ones via "Impor notulen".
+- **Voice/chat.** Deterministic intents: "catat …" → Inbox, "tambah tugas … besok" → Tugas saya with the due date said ("catat: …" with a
+  colon still goes to memory, as before). The REST add-task endpoint understands the same words.
+- **Web app** `/notes/` (`web/notes/`: lib.js pure + node tests, editor.js, app.js): page tree, slash menu, Markdown shortcuts, Enter /
+  Backspace / Tab like a writer expects, drag by the handle, paste of multi-line text as blocks, task groups like a planner, trash, search
+  (Ctrl K), toolbar over the phone keyboard. Plain text per block (no inline bold yet). Its CSP allows only its own origin.
+- **App.** The Chat tab is replaced by Catatan (a WebView of /notes/, token in the fragment like the desk); the activity may rotate
+  (`fullUser`) and handles the configuration change itself so the desk's WebView and the recorder survive a turn.
+- Attachments: ZIP is accepted (listing + the readable documents inside; no nested archives or pictures, bomb-safe).
