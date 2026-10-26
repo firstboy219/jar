@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.PermissionRequest
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -105,6 +106,12 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
     LaunchedEffect(panelId) { if (asTab && panelId != null && panelKind !in DESK_PLAYS) talkOpen = true }
     LaunchedEffect(unheard) { if (asTab && unheard > 0) talkOpen = true }
 
+    // the desk chat's 📎 (ADR-060): a page's <input type=file> needs the app to open Android's picker and hand back what was chosen
+    var pendingFiles by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        pendingFiles?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(r.resultCode, r.data))
+        pendingFiles = null
+    }
     // the camera is only for the viewer's hand-gesture mode, only for our own origin, and only after the owner's Android consent
     val askCamera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         pendingCamera?.let { req ->
@@ -160,6 +167,12 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
                     }
                     webChromeClient = object : WebChromeClient() {
                         override fun onReceivedTitle(view: WebView?, t: String?) { if (!t.isNullOrBlank()) title = t }
+                        override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
+                            pendingFiles?.onReceiveValue(null)   // a picker left open before: Android wants every callback answered once
+                            pendingFiles = callback
+                            val intent = params.createIntent().apply { putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.mode == FileChooserParams.MODE_OPEN_MULTIPLE) }
+                            return runCatching { pickFiles.launch(intent); true }.getOrElse { pendingFiles = null; false }
+                        }
                         override fun onPermissionRequest(request: PermissionRequest) {
                             val ours = sameOrigin(appSettings.serverUrl, request.origin.toString())
                             val wantsCameraOnly = request.resources.all { it == PermissionRequest.RESOURCE_VIDEO_CAPTURE }

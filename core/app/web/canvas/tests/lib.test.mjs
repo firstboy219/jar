@@ -14,6 +14,15 @@ test('search, diff, easing, labels', () => {
   assert.equal(contextLabel({ context: 'utama', title: 'Utama' }), 'Utama');
 });
 
+test('the chat panel remembers open/minimized across a reload, and junk never locks it shut', async () => {
+  const { panelOpen, panelValue } = await import('../lib.js');
+  assert.equal(panelValue(true), 'open'); assert.equal(panelValue(false), 'closed');
+  assert.equal(panelOpen(panelValue(false)), false);   // what was saved comes back exactly
+  assert.equal(panelOpen(panelValue(true)), true);
+  assert.equal(panelOpen(null), true);          // first visit: open
+  assert.equal(panelOpen('apa saja'), true);    // private mode / junk: open, never stuck small
+});
+
 test('the app passes its device token in the fragment and the viewer takes it out', async () => {
   const { takeAppParams } = await import('../lib.js');
   assert.deepEqual(takeAppParams('#t=abc%2B123&app=1'), { token: 'abc+123', embedded: true, rest: '' });
@@ -222,4 +231,16 @@ test('dev team: who holds a job at each stage', async () => {
   assert.equal(jobHolder('analysing'), 'bisan'); assert.equal(jobHolder('coding'), 'coder'); assert.equal(jobHolder('reviewing'), 'qaqa');
   assert.equal(jobHolder('testing'), ''); assert.equal(jobHolder('awaiting_owner'), '');
   for (const s of ['analysing', 'coding', 'testing', 'reviewing', 'awaiting_owner', 'done', 'failed', 'cancelled']) assert.ok(JOB_STATUS[s]);
+});
+
+test('desk chat attachments: icons, sizes and what is refused', async () => {
+  const { attachIcon, fmtSize, attachRefusal, ATTACH_MAX } = await import('../lib.js');
+  assert.equal(attachIcon('foto.JPG'), '🖼'); assert.equal(attachIcon('x', 'image/png'), '🖼');
+  assert.equal(attachIcon('laporan.pdf'), '📕'); assert.equal(attachIcon('bahan.zip'), '🗜'); assert.equal(attachIcon('data.xlsx'), '📊');
+  assert.equal(attachIcon('surat.docx'), '📄');
+  assert.equal(fmtSize(900), '900 B'); assert.equal(fmtSize(1536), '1,5 KB'); assert.equal(fmtSize(2_500_000), '2,4 MB');
+  assert.equal(attachRefusal({ name: 'a', size: 10 }, 0), '');
+  assert.match(attachRefusal({ name: 'a', size: 10 }, ATTACH_MAX), /paling banyak/);
+  assert.match(attachRefusal({ name: 'besar.zip', size: 13_000_000 }, 0), /lebih dari 12 MB/);
+  assert.equal(attachRefusal({ name: 'kosong', size: 0 }, 0), 'berkas kosong');
 });

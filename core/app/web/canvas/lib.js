@@ -250,6 +250,10 @@ export function stopRaised(seen, now) {
 // view = {cx, cy, k}: the world point at the middle of the viewport, and the scale. vp = {w, h} is the viewport in pixels.
 // A rect is {x, y, w, h} in world units (x to the right, y down — the server's x and z).
 
+// The desk's chat panel keeps its open/minimized state in LocalStorage, so a reload brings back the same position.
+export const panelOpen = (raw) => raw !== 'closed';
+export const panelValue = (open) => (open ? 'open' : 'closed');
+
 export const MIN_ZOOM = 0.04, MAX_ZOOM = 4;
 export const clampZoom = (k) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
 export const toScreen = (v, vp, x, y) => ({ x: (x - v.cx) * v.k + vp.w / 2, y: (y - v.cy) * v.k + vp.h / 2 });
@@ -392,4 +396,36 @@ export function miniMapFit(bounds, size, pad = 200) {
   const w = bounds.w + 2 * pad, h = bounds.h + 2 * pad;
   const s = Math.min(size.w / w, size.h / h);
   return { s, ox: (size.w - w * s) / 2 - (bounds.x - pad) * s, oy: (size.h - h * s) / 2 - (bounds.y - pad) * s };
+}
+
+// ---------- the desk chat's attachments (ADR-060): what may be sent, and how a chip reads ----------
+
+export const ATTACH_ACCEPT = 'image/*,.pdf,.zip,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.html,.htm';
+export const ATTACH_MAX = 5, ATTACH_BYTES = 12_000_000;   // the server's limits (POST /api/v1/attachments, a chat message)
+
+/** 📄 / 🖼 / 🗜 … for a file name or MIME type. */
+export function attachIcon(name, type = '') {
+  const n = String(name || '').toLowerCase();
+  if (type.startsWith('image/') || /\.(jpe?g|png|webp|gif|heic)$/.test(n)) return '🖼';
+  if (n.endsWith('.pdf')) return '📕';
+  if (n.endsWith('.zip')) return '🗜';
+  if (/\.(xlsx|csv)$/.test(n)) return '📊';
+  if (n.endsWith('.pptx')) return '📽';
+  return '📄';
+}
+
+/** 1536 → "1,5 KB", 2_500_000 → "2,4 MB". */
+export function fmtSize(bytes) {
+  const b = Math.max(0, Number(bytes) || 0);
+  if (b < 1024) return `${b} B`;
+  const [v, u] = b < 1024 * 1024 ? [b / 1024, 'KB'] : [b / 1024 / 1024, 'MB'];
+  return `${(Math.round(v * 10) / 10).toString().replace('.', ',')} ${u}`;
+}
+
+/** Why a file cannot be added ('' when it can): too many, too big, empty. */
+export function attachRefusal(file, count) {
+  if (count >= ATTACH_MAX) return `paling banyak ${ATTACH_MAX} lampiran per pesan`;
+  if (!file?.size) return 'berkas kosong';
+  if (file.size > ATTACH_BYTES) return `${file.name} lebih dari ${ATTACH_BYTES / 1_000_000} MB`;
+  return '';
 }
