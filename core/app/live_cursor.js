@@ -6,7 +6,9 @@
   if (window.top !== window || window.__jarvisHands) return;
   const state = { x: -50, y: -50, shown: false };
   window.__jarvisHands = { state: () => ({ ...state }) };
-  let host, root, cursor, tag;
+  let host, root, cursor, tag, lastPing = 0;
+  // tell core (through a DevTools binding it installed — not the network) that the hands are active in this tab, at most once a second
+  const ping = () => { const t = Date.now(); if (t - lastPing > 1000 && typeof window.jarvisHands === 'function') { lastPing = t; try { window.jarvisHands('1'); } catch (e) { /* ignore */ } } };
 
   function build() {
     if (host || !document.documentElement) return;
@@ -52,16 +54,16 @@
   const centre = (el) => { const b = el.getBoundingClientRect(); return [b.left + b.width / 2, b.top + Math.min(b.height / 2, 24)]; };
 
   // real mouse events (the worker's browser dispatches them through DevTools) …
-  addEventListener('mousemove', (e) => moveTo(e.clientX, e.clientY), true);
-  addEventListener('mousedown', (e) => { moveTo(e.clientX, e.clientY); ripple(e.clientX, e.clientY); }, true);
+  addEventListener('mousemove', (e) => { moveTo(e.clientX, e.clientY); ping(); }, true);
+  addEventListener('mousedown', (e) => { moveTo(e.clientX, e.clientY); ripple(e.clientX, e.clientY); ping(); }, true);
   // … and clicks made by script (no coordinates): glide to the element, then press
   addEventListener('click', (e) => {
     if (e.clientX === 0 && e.clientY === 0 && e.target && e.target.getBoundingClientRect) {
-      const [x, y] = centre(e.target); moveTo(x, y); setTimeout(() => ripple(x, y), 200);
+      const [x, y] = centre(e.target); moveTo(x, y); setTimeout(() => ripple(x, y), 200); ping();
     }
   }, true);
   addEventListener('focusin', (e) => { if (e.target && e.target !== document.body) { outline(e.target); if (!state.shown) { const [x, y] = centre(e.target); moveTo(x, y); } } }, true);
-  addEventListener('input', (e) => outline(e.target), true);
-  addEventListener('scroll', () => { if (state.shown) cursor.classList.add('on'); }, true);
+  addEventListener('input', (e) => { outline(e.target); ping(); }, true);
+  addEventListener('scroll', () => { if (state.shown) cursor.classList.add('on'); ping(); }, true);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', build); else build();
 })();

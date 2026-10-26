@@ -82,15 +82,26 @@ def host_of(text: str) -> str:
     return (urlparse(m.group()).hostname or "") if m else ""
 
 
-def pick_target(targets: list[dict], hint_host: str, last_url: str) -> dict | None:
-    """Which browser tab is the station's: the one on the host it was told to open, else the one it was last seen on, else the newest
-    real page. Pure; unit-tested."""
+tab_activity: dict[str, float] = {}   # DevTools target id → when the worker last did something in that tab (a mouse move, a click, typing, a navigation)
+ACTIVE_S = 90.0                       # a tab touched this recently is "the one being worked in"
+KEEP_TABS, IDLE_CLOSE_S = 8, 1800.0   # past 8 open tabs, those idle for 30 minutes are closed (workers leave tabs behind)
+
+
+def pick_target(targets: list[dict], hint_host: str, last_url: str, activity: dict | None = None, now: float | None = None) -> dict | None:
+    """Which browser tab is the station's. The tab the worker is touching right now (its hands moved there in the last 90 s), preferring the
+    one on the host it was told to open; else the tab on that host, else where it was last seen, else the first real page. Pure; unit-tested."""
     pages = [t for t in targets if t.get("type") == "page" and not str(t.get("url", "")).startswith(("devtools://", "chrome-extension://"))]
     if not pages:
         return None
+    host = lambda t: urlparse(t.get("url", "")).hostname or ""   # noqa: E731
+    if activity:
+        now = time.time() if now is None else now
+        hot = sorted((t for t in pages if now - activity.get(t.get("id"), 0) < ACTIVE_S), key=lambda t: -activity[t["id"]])
+        if hot:
+            return next((t for t in hot if hint_host and host(t) == hint_host), hot[0])
     if hint_host:
         for t in pages:
-            if (urlparse(t.get("url", "")).hostname or "") == hint_host:
+            if host(t) == hint_host:
                 return t
     if last_url:
         for t in pages:
@@ -98,6 +109,15 @@ def pick_target(targets: list[dict], hint_host: str, last_url: str) -> dict | No
                 return t
     real = [t for t in pages if t.get("url") not in ("", "about:blank")]
     return (real or pages)[0]
+
+
+def idle_to_close(targets: list[dict], activity: dict, now: float) -> list[str]:
+    """Ids of old idle tabs to close so the shared browser does not grow without end. Keeps the newest KEEP_TABS and anything touched lately. Pure."""
+    pages = [t for t in targets if t.get("type") == "page" and not str(t.get("url", "")).startswith(("devtools://", "chrome-extension://"))]
+    if len(pages) <= KEEP_TABS:
+        return []
+    ranked = sorted(pages, key=lambda t: -activity.get(t.get("id"), 0))
+    return [t["id"] for t in ranked[KEEP_TABS:] if now - activity.get(t["id"], 0) > IDLE_CLOSE_S]
 
 
 OTP = re.compile(r"\b(otp|kode (verifikasi|otp|keamanan)|verification code|one[- ]time|kode rahasia|pin|cvv|password|kata sandi)\b", re.IGNORECASE)
@@ -203,7 +223,7 @@ async def grab(st: Station) -> bool:
             targets = (await c.get(f"{BROWSER}/json/list")).json()
     except (httpx.HTTPError, ValueError):
         return False
-    t = pick_target(targets, st.hint_host, st.url)
+    t = pick_target(targets, st.hint_host, st.url, tab_activity)
     if not t or not t.get("webSocketDebuggerUrl"):
         return False
     st.url, st.page_title = str(t.get("url") or "")[:300], str(t.get("title") or "")[:160]
@@ -246,6 +266,9 @@ async def _decorate_once() -> None:
     async with _client(4) as c:
         ws_url = (await c.get(f"{BROWSER}/json/version")).json()["webSocketDebuggerUrl"]
     seen: set[str] = set()
+    started = time.time()
+    session_tab: dict[str, str] = {}
+    last_sweep = [time.time()]
     async with _ws_connect(ws_url) as ws:
         n = 0
 
@@ -259,15 +282,36 @@ async def _decorate_once() -> None:
             method, p = m.get("method"), m.get("params") or {}
             if method in ("Target.targetCreated", "Target.targetInfoChanged"):
                 t = p.get("targetInfo") or {}
-                if t.get("type") == "page" and t.get("targetId") not in seen and not str(t.get("url", "")).startswith("devtools://"):
-                    seen.add(t["targetId"])
-                    await send("Target.attachToTarget", {"targetId": t["targetId"], "flatten": True})
+                if t.get("type") == "page" and not str(t.get("url", "")).startswith("devtools://"):
+                    # opened or navigated: someone is working in it — except tabs that were already there when we started (they are
+                    # remembered as "a while ago": neither hot nor yet closable)
+                    tab_activity[t["targetId"]] = time.time() if time.time() - started > 2 else tab_activity.get(t["targetId"], time.time() - IDLE_CLOSE_S / 2)
+                    if t["targetId"] not in seen:
+                        seen.add(t["targetId"])
+                        await send("Target.attachToTarget", {"targetId": t["targetId"], "flatten": True})
             elif method == "Target.targetDestroyed":
                 seen.discard(p.get("targetId"))
+                tab_activity.pop(p.get("targetId"), None)
+            elif method == "Runtime.bindingCalled" and p.get("name") == "jarvisHands":   # the hands moved in a tab: that is where the worker is
+                if tid := session_tab.get(m.get("sessionId")):
+                    tab_activity[tid] = time.time()
             elif method == "Target.attachedToTarget" and p.get("sessionId"):
+                session_tab[p["sessionId"]] = (p.get("targetInfo") or {}).get("targetId", "")
+                await send("Runtime.enable", None, p["sessionId"])
+                await send("Runtime.addBinding", {"name": "jarvisHands"}, p["sessionId"])
                 await send("Page.enable", None, p["sessionId"])   # without it Chromium keeps the script for the page that is open, not for the next one
                 await send("Page.addScriptToEvaluateOnNewDocument", {"source": CURSOR_JS}, p["sessionId"])   # every later page of this tab
                 await send("Runtime.evaluate", {"expression": CURSOR_JS}, p["sessionId"])                    # the page that is open now
+            if time.time() - last_sweep[0] > 60:
+                last_sweep[0] = time.time()
+                try:
+                    async with _client(4) as c:
+                        listing = (await c.get(f"{BROWSER}/json/list")).json()
+                    for tid in idle_to_close(listing, tab_activity, time.time()):
+                        await send("Target.closeTarget", {"targetId": tid})
+                        tab_activity.pop(tid, None)
+                except (httpx.HTTPError, ValueError):
+                    pass
 
 
 async def decorate_forever() -> None:

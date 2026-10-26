@@ -1247,3 +1247,20 @@ def test_the_desk_reads_tool_calls_and_picks_the_right_browser_tab():
     assert live.pick_target([{"type": "iframe", "url": "x"}], "", "") is None
     assert "disembunyikan" in live.mask("kode OTP saya 482913 tolong") or "disembunyikan" in live.mask("kartu 4111 1111 1111 1111")
     assert live.mask("cek harga emas hari ini") == "cek harga emas hari ini"
+
+
+def test_the_station_follows_the_tab_the_hands_are_in_and_forgotten_tabs_are_closed():
+    from app import live
+    tabs = [{"id": "A", "type": "page", "url": "https://www.iana.org/help/example-domain"}, {"id": "B", "type": "page", "url": "https://www.jobstreet.co.id/id"},
+            {"id": "C", "type": "page", "url": "about:blank"}, {"id": "D", "type": "iframe", "url": "https://iklan.net"}]
+    now = 10_000.0
+    assert live.pick_target(tabs, "", "", {"B": now - 5, "A": now - 40}, now)["id"] == "B"                 # the hands moved in B most recently
+    assert live.pick_target(tabs, "www.iana.org", "", {"B": now - 5, "A": now - 40}, now)["id"] == "A"     # both are hot: the one on the host it was told to open
+    assert live.pick_target(tabs, "", "", {"B": now - 500}, now)["id"] == "A"                              # nothing hot: the old rules (first real page)
+    assert live.pick_target(tabs, "www.jobstreet.co.id", "", {"A": now - 500}, now)["id"] == "B"           # …or the host it was told to open
+    many = [{"id": str(i), "type": "page", "url": f"https://s{i}.id/"} for i in range(12)]
+    act = {str(i): now - i * 1000 for i in range(12)}                                                      # tab 0 newest … tab 11 oldest (11000 s idle)
+    closing = live.idle_to_close(many, act, now)
+    assert closing == [str(i) for i in range(8, 12) if now - act[str(i)] > live.IDLE_CLOSE_S]               # only past the newest 8, and only idle ones
+    assert live.idle_to_close(many[:8], {}, now) == []                                                      # a few tabs are never touched
+    assert live.idle_to_close(many, {str(i): now - 10 for i in range(12)}, now) == []                       # nothing idle, nothing closed

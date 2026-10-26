@@ -4,6 +4,7 @@ Heavier mechanics have their own unit/integration tests; these check the CRITERI
 import asyncio
 import json
 import os
+import time
 
 import pytest
 
@@ -1449,11 +1450,13 @@ async def test_v4_f7_the_shared_browser_gets_the_hands_overlay_in_every_page(poo
             m = json.loads(raw)
             sent.append(m)
             if m["method"] == "Target.attachToTarget":
-                self.q.put_nowait(json.dumps({"method": "Target.attachedToTarget", "params": {"sessionId": "S-" + m["params"]["targetId"]}}))
+                self.q.put_nowait(json.dumps({"method": "Target.attachedToTarget", "params": {"sessionId": "S-" + m["params"]["targetId"],
+                                                                                   "targetInfo": {"targetId": m["params"]["targetId"]}}}))
                 if m["params"]["targetId"] == "T1":   # a page opened later by the worker
                     self.q.put_nowait(json.dumps({"method": "Target.targetCreated", "params": {"targetInfo": {"targetId": "T2", "type": "page", "url": "https://jobstreet.co.id/"}}}))
                     self.q.put_nowait(json.dumps({"method": "Target.targetInfoChanged", "params": {"targetInfo": {"targetId": "T2", "type": "page", "url": "https://jobstreet.co.id/id"}}}))
-                if m["params"]["targetId"] == "T2":
+                if m["params"]["targetId"] == "T2":   # the worker's hands move in the second tab
+                    self.q.put_nowait(json.dumps({"method": "Runtime.bindingCalled", "sessionId": "S-T2", "params": {"name": "jarvisHands", "payload": "1"}}))
                     self.q.put_nowait(None)
 
         def __aiter__(self):
@@ -1476,13 +1479,16 @@ async def test_v4_f7_the_shared_browser_gets_the_hands_overlay_in_every_page(poo
             return httpx.Response(200, json={"webSocketDebuggerUrl": "ws://fake/devtools/browser/1"})
     monkeypatch.setattr(live, "_client", lambda timeout: Browser())
     monkeypatch.setattr(live, "_ws_connect", lambda url: FakeWS())
+    live.tab_activity.clear()
     await live._decorate_once()
     attached = [m["params"]["targetId"] for m in sent if m["method"] == "Target.attachToTarget"]
     assert attached == ["T1", "T2"]                                  # real pages only, each once (not workers, not devtools, not a repeat)
     for sid in ("S-T1", "S-T2"):
         mine = [m for m in sent if m.get("sessionId") == sid]
-        assert [m["method"] for m in mine] == ["Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]   # later pages of the tab, and the one open now
-        assert "__jarvisHands" in mine[1]["params"]["source"]
+        assert [m["method"] for m in mine] == ["Runtime.enable", "Runtime.addBinding", "Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]
+        assert mine[1]["params"] == {"name": "jarvisHands"}                # the hands tell core where they are (DevTools only, not the network)
+        assert "__jarvisHands" in mine[3]["params"]["source"]
+    assert live.tab_activity["T2"] > live.tab_activity["T1"] - 1 and time.time() - live.tab_activity["T2"] < 5   # the tab the hands moved in is the live one
     js = live.CURSOR_JS
     assert "mode: 'closed'" in js and "pointer-events:none" in js and "aria-hidden" in js     # draws, never touches or answers the page
     assert "fetch(" not in js and "XMLHttpRequest" not in js and "sendBeacon" not in js        # and sends nothing anywhere
