@@ -77,9 +77,10 @@ export const PANELS = {
   text: { x: -420, y: 1300, w: 400, title: 'Catatan' },
   draft: { x: 40, y: 1300, w: 400, title: 'Draf balasan' },
   google: { x: 860, y: -430, w: 340, title: 'Akun Google' },   // ADR-057
+  workers: { x: -1560, y: -430, w: 420, title: 'Pekerja' },   // ADR-058
 };
 /** The feature cards (ADR-054/056): what each of them is called on the server's desk poll. */
-export const FEATURE_CARDS = ['player', 'video', 'image', 'doc', 'map', 'web', 'text', 'draft', 'meeting', 'google'];
+export const FEATURE_CARDS = ['player', 'video', 'image', 'doc', 'map', 'web', 'text', 'draft', 'meeting', 'google', 'workers'];
 
 /**
  * Should the camera fly to a worker station that just showed up? Only for the owner's own task, once, while following is on and the

@@ -320,3 +320,16 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 .lightbox { position: fixed; inset: 0; z-index: 26000; background: rgba(2, 3, 10, .94); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; cursor: zoom-out; }
 .lightbox img { max-width: 94vw; max-height: 86vh; object-fit: contain; border-radius: 6px; }
 .lightbox .lbcap { color: var(--muted); font-size: 13px; padding: 0 16px; text-align: center; }
+
+/* ADR-058: the workers area */
+.workerscard .wbody { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; overscroll-behavior: contain; margin-top: 6px; }
+.wrow { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .03); }
+.wrow.running { border-color: rgba(103, 232, 249, .5); }
+.wtop { display: flex; align-items: center; gap: 6px; } .wtitle { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtime { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.wmeta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.wmeta .chip { font-size: 11px; } .wmeta .wmodel { color: var(--cyan); border-color: rgba(103, 232, 249, .4); }
+.wrow .pctl { margin-top: 6px; } .wstop { border-color: var(--red); color: var(--red); } .wgo { border-color: var(--green); color: var(--green); }
+.wbad { color: var(--red); } .wedit .pctl input, .wsay input { flex: 1; min-width: 0; }
+.wsay { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; } .wsay .snippet { flex-basis: 100%; }
+.wedit { margin-top: 6px; }
