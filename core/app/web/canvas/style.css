@@ -382,3 +382,6 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 .dfx { padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 13px; }
 .dock.dropping { outline: 2px dashed var(--cyan); outline-offset: -4px; }
 .dock .msg { white-space: pre-wrap; }
+
+/* in the phone app the minimized chat is a native button in the left strip, beside the microphone (ADR-060) */
+.host-chat .dock.minimized { display: none; }

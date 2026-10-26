@@ -10,6 +10,12 @@ const FRAME_MAX_W = 1024, FRAME_EVERY_MS = 1500, FRAME_FRESH_MS = 9000;
 
 export function initDock({ api, toast, embedded }) {
   let ws = null, connected = false, retry = 0, pingTimer = null, wantOpen = true;
+  // In the phone app the chat button is a native one in the left strip next to the microphone (GalaxyScreen.kt): the app tells us to
+  // toggle, we tell it whether the panel is open and whether something unread is waiting. The round bubble is then hidden (host-chat).
+  const host = window.JarvisHost?.dockState ? window.JarvisHost : null;
+  if (host) document.documentElement.classList.add('host-chat');
+  function tellHost() { try { host?.dockState(wantOpen, penandaDot.classList.contains('visible')); } catch { /* the app is closing */ } }
+  window.__jarvisDockToggle = () => { setOpen(!wantOpen); return wantOpen; };
   let sessionId = LS('jarvis_desk_session') || `meja-${Math.random().toString(36).slice(2, 10)}`;
   LS('jarvis_desk_session', sessionId);
   let jarvisBubble = null, typing = false;
@@ -64,6 +70,7 @@ export function initDock({ api, toast, embedded }) {
     if (on) penandaDot.classList.remove('visible', 'blink');   // dibaca: penanda hilang saat dibuka
     minBtn.title = on ? 'Ciutkan panel chat' : 'Buka panel chat';
     LS('jarvis_desk_dock', panelValue(on));   // posisi panel kembali sama setelah refresh
+    tellHost();
   }
   function setTts(on) {
     ttsOn = on; LS('jarvis_desk_tts', on ? 'on' : 'off'); ttsBtn.classList.toggle('on', on);
@@ -74,7 +81,7 @@ export function initDock({ api, toast, embedded }) {
   function addMsg(who, text, quiet = false) {
     const m = el('div', `msg ${who}`, text);
     log.append(m); log.scrollTop = log.scrollHeight; keep();
-    if (!quiet && !wantOpen) penandaDot.classList.add('visible', 'blink');   // pesan baru saat panel ditutup
+    if (!quiet && !wantOpen) { penandaDot.classList.add('visible', 'blink'); tellHost(); }   // pesan baru saat panel ditutup
     return m;
   }
   function setStatus(text) { statusLine.textContent = text || ''; statusLine.hidden = !text; }

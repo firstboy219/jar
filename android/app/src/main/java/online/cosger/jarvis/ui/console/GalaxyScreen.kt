@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -52,6 +53,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -96,6 +98,9 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
     var pendingCamera by remember { mutableStateOf<PermissionRequest?>(null) }
     var title by remember { mutableStateOf("Galaksi 3D") }
     var talkOpen by remember { mutableStateOf(false) }
+    // the desk page's chat panel (dock.js): whether it is open and whether something unread waits; the strip's chat button shows and drives it
+    var chatOpen by remember { mutableStateOf(true) }
+    var chatUnread by remember { mutableStateOf(false) }
     val stage by vm.stage.collectAsStateWithLifecycle()
     val board by vm.board.collectAsStateWithLifecycle()
     // what needs the owner's eyes comes to the front by itself: something JARVIS put on the screen, or a report not yet heard
@@ -185,6 +190,10 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
                             }
                         }
                     }
+                    // dock.js reports the chat panel's state here (only numbers/booleans cross; nothing else is exposed to the page)
+                    addJavascriptInterface(object {
+                        @JavascriptInterface fun dockState(open: Boolean, unread: Boolean) { post { chatOpen = open; chatUnread = unread } }
+                    }, "JarvisHost")
                     loadUrl(url)
                     webView = this
                 }
@@ -196,7 +205,8 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
         if (talkOpen) DeskTalkSheet(vm, { talkOpen = false }, onOpenServer, onOpenBackground, Modifier.align(Alignment.BottomCenter))
         else {
             DeskCaption(vm, { talkOpen = true }, Modifier.align(Alignment.TopCenter).padding(top = 104.dp, start = 16.dp, end = 16.dp))
-            DeskMediaStrip(vm, { talkOpen = true }, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 44.dp))
+            DeskMediaStrip(vm, { talkOpen = true }, chatOpen, chatUnread, { webView?.evaluateJavascript("window.__jarvisDockToggle&&window.__jarvisDockToggle()", null) },
+                Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 44.dp))
         }
     }
     }
@@ -208,7 +218,7 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
  * so nothing is captured twice.
  */
 @Composable
-private fun DeskMediaStrip(vm: JarvisViewModel, onOpenTalk: () -> Unit, modifier: Modifier) {
+private fun DeskMediaStrip(vm: JarvisViewModel, onOpenTalk: () -> Unit, chatOpen: Boolean, chatUnread: Boolean, onChat: () -> Unit, modifier: Modifier) {
     val board by vm.board.collectAsStateWithLifecycle()
     val busy = board.workers.count { it.active }
     val waiting = board.openReports.size + board.stoppedWorkers.size
@@ -236,6 +246,8 @@ private fun DeskMediaStrip(vm: JarvisViewModel, onOpenTalk: () -> Unit, modifier
             StripButton(Icons.Filled.GraphicEq, "Bicara: percakapan, tugas, laporan, server", mic != MicState.Muted,
                 badge = if (waiting > 0) waiting.toString() else if (busy > 0) busy.toString() else null, alert = waiting > 0,
                 onClick = onOpenTalk)
+            StripButton(Icons.AutoMirrored.Filled.Chat, if (chatOpen) "Ciutkan panel chat" else "Buka panel chat", chatOpen,
+                badge = if (chatUnread && !chatOpen) "•" else null, alert = true, onClick = onChat)
             StripButton(if (mic == MicState.Muted) Icons.Filled.MicOff else Icons.Filled.Mic, "Mikrofon", mic != MicState.Muted) {
                 if (hasMic) vm.toggleMute()
                 else askMic.launch(buildList {
