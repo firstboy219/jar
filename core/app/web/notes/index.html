@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>Catatan · JARVIS</title>
+<link rel="stylesheet" href="notes.css">
+</head>
+<body>
+<aside id="side">
+  <div class="sidehead"><strong>Catatan</strong><span class="muted">JARVIS</span></div>
+  <label class="searchbox"><span>🔎</span><input id="search" placeholder="Cari catatan… (Ctrl K)" autocomplete="off"></label>
+  <nav id="nav"></nav>
+</aside>
+<div id="scrim"></div>
+
+<main>
+  <header class="top">
+    <button id="menu" class="iconbtn" title="Menu">☰</button>
+    <div id="crumbs"></div>
+    <span id="status" class="status"></span>
+  </header>
+
+  <section id="pageview" hidden>
+    <div id="conflict" class="conflict" hidden></div>
+    <div class="pagehead">
+      <button id="icon" class="pageicon" title="Ganti ikon">📄</button>
+      <div id="iconpick" class="iconpick" hidden></div>
+      <h1 id="title" class="pagetitle" data-ph="Tanpa judul"></h1>
+      <div class="pageactions">
+        <button id="addtodo" class="btn">☑ Tugas</button>
+        <button id="subpage" class="btn">＋ Sub-halaman</button>
+        <button id="pin" class="btn">📌 Sematkan</button>
+        <button id="archive" class="btn bad">🗑</button>
+      </div>
+    </div>
+    <div id="editor"></div>
+    <p class="hint">Ketik <kbd>/</kbd> untuk jenis blok · <kbd>#</kbd> judul · <kbd>-</kbd> poin · <kbd>[]</kbd> tugas · <kbd>&gt;</kbd> kutipan · <kbd>Tab</kbd> menjorok · seret <b>⋮⋮</b> untuk memindah</p>
+  </section>
+
+  <section id="tasksview" hidden>
+    <h1 id="tasks-title" class="pagetitle"></h1>
+    <form id="quickadd" class="quickadd"><input placeholder="Tambah tugas… (mis. &quot;telepon Pak Budi besok&quot;)" autocomplete="off"><button class="btn primary">Tambah</button></form>
+    <div id="tasklist"></div>
+  </section>
+
+  <section id="trashview" hidden>
+    <h1 class="pagetitle">🗑 Sampah</h1>
+    <div id="trashlist"></div>
+  </section>
+
+  <section id="searchview" hidden>
+    <h1 class="pagetitle">🔎 Hasil pencarian</h1>
+    <div id="searchlist"></div>
+  </section>
+</main>
+
+<div id="dialog" class="dialog" hidden><div class="dbody"></div></div>
+<div id="login" class="dialog" hidden>
+  <form id="login-form" class="dbody">
+    <h3>Masuk ke Catatan</h3>
+    <p class="muted">Pakai kata sandi pemilik JARVIS (sama dengan Meja).</p>
+    <input id="password" type="password" autocomplete="current-password" placeholder="Kata sandi">
+    <button class="btn primary">Masuk</button>
+    <div id="login-error" class="bad"></div>
+  </form>
+</div>
+<div id="toasts"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

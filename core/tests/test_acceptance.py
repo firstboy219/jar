@@ -1772,6 +1772,45 @@ async def test_v4_f12_the_dev_team_hands_work_from_bisan_to_coder_to_qaqa_and_ba
     assert "qaqa meluluskan" in await pool.fetchval("SELECT text FROM reports ORDER BY id DESC LIMIT 1")
 
 
+async def test_v4_f12_notes_pages_tasks_conflicts_and_meeting_minutes(pool):
+    from fastapi.responses import JSONResponse
+
+    from app import main, notes
+    dev = {"name": "HP pemilik", "scope": "owner"}
+    pages = (await main.notes_list(device=dev))["pages"]
+    assert [p["kind"] for p in pages[:2]] == ["inbox", "tasks"]                           # the two pages that always exist
+    p = await main.notes_create(main.NotePageIn(title="Proyek kasir", icon="💡", blocks=[
+        {"type": "h1", "text": "Rencana"}, {"type": "todo", "text": "riset harga", "due": "2026-10-20"}, {"type": "todo", "text": "desain", "checked": True}]), device=dev)
+    pid, v = p["id"], p["version"]
+    saved = await main.notes_save(pid, main.NoteSaveIn(title="Proyek kasir", icon="💡", blocks=p["blocks"] + [{"type": "p", "text": "catatan"}], version=v), device=dev)
+    assert saved["version"] == v + 1
+    stale = await main.notes_save(pid, main.NoteSaveIn(title="lama", blocks=[], version=v), device=dev)   # another device's old copy
+    assert isinstance(stale, JSONResponse) and stale.status_code == 409
+    assert (await notes.get(pid))["title"] == "Proyek kasir"                               # nothing was overwritten
+    open_ = (await main.notes_tasks(view="all", device=dev))["tasks"]
+    assert [t["text"] for t in open_] == ["riset harga"]
+    assert [t["text"] for t in (await main.notes_tasks(view="overdue", device=dev))["tasks"]] == ["riset harga"]
+    assert [t["text"] for t in (await main.notes_tasks(view="done", device=dev))["tasks"]] == ["desain"]
+    t = open_[0]
+    await main.notes_block(t["page_id"], t["id"], main.NoteBlockIn(checked=True), device=dev)   # ticked from the task list
+    assert not (await main.notes_tasks(view="all", device=dev))["tasks"]
+    await main.notes_add_task(main.NoteTaskIn(text="bayar listrik", due="2026-11-01", priority=3), device=dev)
+    assert (await main.notes_tasks(view="all", device=dev))["tasks"][0]["page_kind"] == "tasks"
+    assert (await main.notes_search(q="kasir", device=dev))["results"][0]["title"] == "Proyek kasir"
+    with pytest.raises(main.HTTPException):
+        await main.notes_delete(pid, device=dev)                                          # only from the trash
+    await main.notes_patch(pid, main.NotePatchIn(archived=True), device=dev)
+    assert (await main.notes_delete(pid, device=dev))["ok"] and not await notes.get(pid)
+    mid = await pool.fetchval("""INSERT INTO meetings (title, status, consent, summary, context) VALUES ('Anggaran', 'done', true, $1, $2) RETURNING id""",
+                              {"ringkasan": "Q4", "keputusan": ["iklan"], "action_items": [{"siapa": "Rina", "apa": "proposal", "tenggat": "2026-10-31"}]},
+                              {"participants": ["Rina"]})
+    assert [str(m["id"]) for m in (await main.notes_meetings(device=dev))["meetings"]] == [str(mid)]
+    page = await main.notes_import_meeting(str(mid), device=dev)
+    assert page["kind"] == "meeting" and (await main.notes_import_meeting(str(mid), device=dev))["id"] == page["id"]   # made once
+    assert any(x["who"] == "Rina" and x["text"] == "proposal" for x in (await main.notes_tasks(view="all", device=dev))["tasks"])
+    assert not (await main.notes_meetings(device=dev))["meetings"]
+
+
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
     from app import assistant
     brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200

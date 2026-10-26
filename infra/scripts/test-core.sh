@@ -12,6 +12,10 @@ if command -v node >/dev/null && [ -d app/web/canvas/tests ]; then
   (cd app/web/canvas && node --test tests/ >/tmp/jarvis-canvas-js.log 2>&1) || { cat /tmp/jarvis-canvas-js.log; echo "canvas JS tests failed"; exit 1; }
   echo "canvas JS: $(grep -E '^# pass' /tmp/jarvis-canvas-js.log)"
 fi
+if command -v node >/dev/null && [ -d app/web/notes/tests ]; then   # Catatan's editor helpers (ADR-060)
+  (cd app/web/notes && node --test tests/ >/tmp/jarvis-notes-js.log 2>&1) || { cat /tmp/jarvis-notes-js.log; echo "notes JS tests failed"; exit 1; }
+  echo "notes JS: $(grep -E '^# pass' /tmp/jarvis-notes-js.log)"
+fi
 docker build -q --build-arg DEV=1 -t jarvis-core:test . >/dev/null
 docker network create "$NET" >/dev/null
 docker run -d --name "$NET-db" --network "$NET" -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jarvis postgres:16.15-alpine >/dev/null
