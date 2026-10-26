@@ -219,6 +219,9 @@ async def _run(task_id: int, context: str) -> None:
             # reported once by billing.notify_exhausted instead of once per task.
             if kind in ("owner", "selfcheck") and "saldo OpenRouter habis" not in str(e):
                 await reports.from_failure(task_id, row["title"], str(e), row["session_id"])
+            if kind == "devteam":
+                from . import devteam
+                await devteam.on_failed(task_id, str(e))
             if kind == "owner" and "saldo OpenRouter habis" not in str(e):  # JARVIS looks for its own way next time
                 from . import perf
                 await perf.capability_gap("tugas", row["title"] + ": " + row["instruction"][:300], str(e))
@@ -343,6 +346,9 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
     elif kind == "watcher":  # a price / ticket check (ADR-044): judged against the watcher's condition, not spoken as it is
         from . import watchers
         await watchers.on_result(task_id, result)
+    elif kind == "devteam":   # a dev team member finished: core hands the work to the next member (ADR-059)
+        from . import devteam
+        await devteam.on_result(task_id, result)
     elif kind == "selfcheck":
         from . import selfimprove
         await reports._create(task_id, session_id, await selfimprove.on_selfcheck(task_id, result))

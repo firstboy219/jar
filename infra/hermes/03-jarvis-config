@@ -24,7 +24,8 @@ with open(path) as f:
 
 env = os.environ.get
 GATEWAY = "http://jarvis-core:8000/llm/v1"
-CATEGORIES = ["web", "coding", "produktivitas", "analisis", "latar-belakang", "privat", "penglihatan", "cepat"]
+CATEGORIES = ["web", "coding", "produktivitas", "analisis", "latar-belakang", "privat", "penglihatan", "cepat",
+              "dev-bisan", "dev-coder", "dev-qaqa"]   # the dev team (ADR-059): one model category per member
 
 # --- every model call → JARVIS' LLM gateway ---
 providers = cfg.get("providers") if isinstance(cfg.get("providers"), dict) else {}

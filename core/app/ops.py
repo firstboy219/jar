@@ -153,7 +153,7 @@ async def _restore_after_reset() -> None:
         await asyncio.sleep(10)
 
 
-KIND_TEXT = {"owner": "tugasmu", "meeting": "notulen rapat", "selfimprove": "perbaikan diri", "selfcheck": "cek diri harian",
+KIND_TEXT = {"owner": "tugasmu", "devteam": "tim dev", "meeting": "notulen rapat", "selfimprove": "perbaikan diri", "selfcheck": "cek diri harian",
              "routine": "belajar kebiasaanmu", "situation": "menyiapkan info situasi", "flowcheck": "pengawas alur", "watcher": "pantauan harga"}
 
 

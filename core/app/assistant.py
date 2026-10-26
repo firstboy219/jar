@@ -46,7 +46,9 @@ Instruksinya harus: buka situsnya dengan browser dan kerjakan langkah demi langk
 gulir) supaya pemilik bisa melihatnya langsung di meja; berhenti SEBELUM tindakan yang tak bisa dibatalkan atau yang \
 mengirim data pribadi (mengirim lamaran/formulir, membuat akun, membayar) dan tanyakan pemilik lewat ask_owner dengan \
 ringkasan apa yang akan dikirim. Kalau pemilik bilang pekerja kesulitan (captcha, login), arahkan: buka Meja, klik \
-"Intervensi" di kartu tugasnya (bisa kapan saja, pekerja langsung diam), lalu tekan "Selesai, lanjutkan Jarvis" — jangan minta kata sandi atau kode lewat chat.
+"Intervensi" di kartu tugasnya (bisa kapan saja, pekerja langsung diam), lalu tekan "Selesai, lanjutkan Jarvis" — jangan minta kata sandi atau kode lewat chat. \
+Permintaan untuk MENGEMBANGKAN JARVIS SENDIRI (ubah tampilan meja/aplikasi, perbaiki fitur, tambah kemampuan kecil) selalu lewat \
+tim_dev — bukan spawn_task — dan jangan mengaku sudah dikerjakan sebelum tim_dev mengembalikan dev_job.
 
 Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu sampaikan. Jika ucapan \
 pemilik menunjukkan ia sudah mendengar/menanggapinya (mis. "oke", "sip", "makasih", atau membahas isinya), \
@@ -358,6 +360,12 @@ TOOLS = [
             "participants": {"type": "array", "items": {"type": "string"}}, "agenda": {"type": "string"}},
             "required": ["action"]}}},
     {"type": "function", "function": {
+        "name": "tim_dev",
+        "description": "Serahkan permintaan PENGEMBANGAN JARVIS SENDIRI (perbaiki/ubah/tambah fitur aplikasi, meja, panel, perilaku Jarvis) ke "
+                       "Tim Dev: bisan menulis spesifikasi, coder membangun, qaqa memeriksa; pemilik menyetujui hasilnya di halaman admin. "
+                       "Tulis permintaan pemilik SELENGKAPNYA dengan kata-katanya sendiri (jangan diringkas, jangan dipecah).",
+        "parameters": {"type": "object", "properties": {"permintaan": {"type": "string"}}, "required": ["permintaan"]}}},
+    {"type": "function", "function": {
         "name": "close_stage",
         "description": "Tutup panel yang sedang tampil di layar HP (musik, video, peta, web, dokumen, draf).",
         "parameters": {"type": "object", "properties": {}}}},
@@ -517,6 +525,14 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps(await stage.close())
             case "meeting":
                 return json.dumps(await _meeting(str(a.get("action") or ""), a), ensure_ascii=False)
+            case "tim_dev":
+                from . import devteam
+                try:
+                    job = await devteam.request(str(a.get("permintaan") or ""), actor)
+                except devteam.DevTeamError as e:
+                    return json.dumps({"error": str(e)})
+                return json.dumps({"dev_job": job["id"], "status": "bisan sedang menulis spesifikasi",
+                                   "say": "Tim dev sudah mulai; pantau di area Tim Dev di Meja."}, ensure_ascii=False)
             case "memory_correct":
                 if (refused := await chat_settings.guard("memory_correct", device_id, stt, bool(screen_text or attachments))):
                     return json.dumps({"error": refused})

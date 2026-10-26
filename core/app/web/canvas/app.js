@@ -11,6 +11,7 @@ import { createMeetingCard, createPlayerCard } from './deskcards.js';
 import { SHOW_CARDS, createShowCard } from './showcards.js';
 import { createGoogleCard } from './googlecard.js';
 import { createWorkersCard } from './workerscard.js';
+import { createDevTeamCard } from './devteamcard.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -311,7 +312,7 @@ function panelFor(name) {
 }
 
 // The player and the meeting recorder (ADR-054): feature cards at fixed places; the camera flies to one when it shows up.
-let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null, workersCard = null;
+let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null, workersCard = null, devteamCard = null;
 const showCards = {};
 const arrived = {};   // card → the key of what it last showed (undefined until the first poll after loading)
 
@@ -345,7 +346,10 @@ function renderFeatureCards(d) {
   panelFor('google').el.hidden = !googleCard.allowed;
   workersCard ||= createWorkersCard({ box: panelFor('workers').el, api, toast });
   workersCard.update(d.workers);
-  panelFor('workers').el.hidden = false;   // only the owner's own device sees it
+  panelFor('workers').el.hidden = false;
+  devteamCard ||= createDevTeamCard({ box: panelFor('devteam').el, api, toast });
+  devteamCard.update(d.devteam, d.stations);
+  panelFor('devteam').el.hidden = !d.devteam;   // only the owner's own device sees it
 }
 
 function renderPanels(d) {

@@ -333,3 +333,22 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 .wbad { color: var(--red); } .wedit .pctl input, .wsay input { flex: 1; min-width: 0; }
 .wsay { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; } .wsay .snippet { flex-basis: 100%; }
 .wedit { margin-top: 6px; }
+
+/* ADR-059: the dev team's dashed area */
+.card.panel.devteam { background: rgba(56, 189, 248, .03); border: 2px dashed rgba(103, 232, 249, .55); border-radius: 18px; padding: 18px 20px; }
+.devteam .dttitle { font-size: 20px; font-weight: 700; margin: 2px 0 2px; }
+.dtmembers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.dtmember { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--glass); min-height: 170px; display: flex; flex-direction: column; gap: 6px; }
+.dtmember.busy { border-color: rgba(103, 232, 249, .7); box-shadow: 0 0 0 1px rgba(103, 232, 249, .25), 0 0 18px rgba(103, 232, 249, .12); }
+.dttop { display: flex; align-items: center; gap: 10px; } .dtavatar { font-size: 26px; width: 44px; height: 44px; display: grid; place-items: center;
+  border-radius: 50%; background: rgba(255, 255, 255, .06); border: 1px solid var(--line); }
+.dtname { flex: 1; display: flex; flex-direction: column; } .dtname b { font-size: 15px; } .dtname span { font-size: 11px; color: var(--muted); }
+.dtnow { font-size: 12px; color: var(--cyan); } .dtmember .steps { margin: 0; padding-left: 16px; font-size: 12px; max-height: 7.5em; overflow: hidden; }
+.dtmember .steps li.now { color: var(--text); font-weight: 600; } .dtmember .thought { font-size: 11px; color: var(--muted); max-height: 4.5em; overflow: hidden; }
+.dtlast { white-space: pre-wrap; max-height: 6em; }
+.dtask { display: flex; gap: 8px; margin-top: 14px; align-items: stretch; } .dtask textarea { flex: 1; resize: vertical; min-height: 44px; }
+.dtjobs { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; margin-top: 12px; } .dtjobs > .slabel { grid-column: 1 / -1; }
+.dtjob { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
+.dtjob.awaiting_owner { border-color: var(--amber); } .dtjob.failed { border-color: var(--red); } .dtjob.done { opacity: .7; }
+.dtreview { max-height: 5em; overflow: hidden; }
+@media (max-width: 700px) { .dtmembers { grid-template-columns: 1fr; } }

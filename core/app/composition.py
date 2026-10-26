@@ -19,7 +19,7 @@ STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whispe
 LOCKED = {"privat"}  # always local, not editable
 BUILTIN = {"ngobrol", "cepat", "penglihatan", "balas-pesan", "web", "coding", "produktivitas", "analisis", "rapat",
            "latar-belakang", "privat"}
-NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "review"}  # tool calling: chat agent, Hermes
+NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "review", "dev-bisan", "dev-coder", "dev-qaqa"}  # tool calling: chat agent, Hermes
 NEEDS_VISION = {"penglihatan"}
 EXPENSIVE_OUT_USD = 15.0  # per 1M output tokens: above this the owner confirms first
 
