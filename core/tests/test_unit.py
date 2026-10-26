@@ -1380,3 +1380,22 @@ def test_v4_f12_tim_dev_is_a_direct_action():
         assert a and a.name == "dev_team" and a.args["text"] == said.strip()        # the owner's words go whole, case kept
     assert router.parse_action("tim dev") is None                                     # nothing to do yet
     assert router.parse_action("timnya developer bagus") is None
+
+
+def test_v4_f12_a_zip_attachment_is_listed_and_its_documents_are_read():
+    import io
+    import zipfile
+
+    from app import attachments
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("catatan/rapat.txt", "Keputusan: anggaran disetujui")
+        z.writestr("data.csv", "nama,nilai\nOmzet,120")
+        z.writestr("foto.jpg", b"\xff\xd8\xff")
+        z.writestr("dalam.zip", b"PK\x05\x06" + b"\x00" * 18)
+    kind, text, note = attachments.extract("bahan.zip", "application/zip", buf.getvalue())
+    assert kind == "zip" and "[isi arsip: 4 berkas]" in text and "catatan/rapat.txt" in text and "foto.jpg" in text
+    assert "anggaran disetujui" in text and "Omzet,120" in text
+    assert "2 berkas tidak dibaca" in note                                               # the picture and the nested archive
+    with pytest.raises(attachments.AttachmentError):
+        attachments.extract("rusak.zip", "", b"bukan zip")

@@ -35,7 +35,10 @@ KINDS = {  # extension → kind
     ".txt": "text", ".md": "text", ".csv": "text", ".tsv": "text", ".json": "text", ".log": "text", ".xml": "text",
     ".yaml": "text", ".yml": "text", ".html": "html", ".htm": "html", ".srt": "text", ".vtt": "text", ".ics": "text",
     ".jpg": "image", ".jpeg": "image", ".png": "image", ".webp": "image", ".gif": "image", ".heic": "image",
+    ".zip": "zip",
 }
+ZIP_MEMBERS = 40          # files inside an archive that are read
+ZIP_MEMBER_BYTES = 8_000_000
 
 
 class AttachmentError(ValueError):
@@ -135,6 +138,38 @@ def _pptx(data: bytes) -> tuple[str, str]:
     return "\n\n".join(slides), ""
 
 
+def _zip(data: bytes) -> tuple[str, str]:
+    """An archive: its listing, then the text of every file inside that JARVIS can read (not nested archives, not pictures)."""
+    try:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as e:
+        raise AttachmentError("berkas ZIP rusak") from e
+    with z:
+        files = [i for i in z.infolist() if not i.is_dir()]
+        if sum(i.file_size for i in files) > MAX_UNZIPPED:
+            raise AttachmentError("berkas ZIP terlalu besar setelah dibuka")
+        listing = "\n".join(f"- {i.filename} ({i.file_size:,} byte)" for i in files[:300])
+        parts, skipped, read = [f"[isi arsip: {len(files)} berkas]\n{listing}"], [], 0
+        for i in files:
+            kind = kind_of(i.filename)
+            if kind in ("image", "zip", "other") or i.file_size > ZIP_MEMBER_BYTES or i.flag_bits & 0x1:   # 0x1: encrypted member
+                skipped.append(i.filename)
+                continue
+            if read >= ZIP_MEMBERS:
+                skipped.append(i.filename)
+                continue
+            try:
+                _, text, _ = extract(i.filename, "", z.read(i))
+            except Exception:
+                skipped.append(i.filename)
+                continue
+            read += 1
+            if text.strip():
+                parts.append(f"[berkas {i.filename}]\n{text.strip()}")
+    note = f"{len(skipped)} berkas tidak dibaca (gambar, arsip di dalam arsip, terkunci, terlalu besar, atau jenisnya belum didukung)" if skipped else ""
+    return "\n\n".join(parts), note
+
+
 def _html(data: bytes) -> tuple[str, str]:
     text = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", " ", _decode(data), flags=re.DOTALL | re.IGNORECASE)
     return "\n".join(l.strip() for l in html.unescape(re.sub(r"<[^>]+>", "\n", text)).splitlines() if l.strip()), ""
@@ -154,13 +189,15 @@ def extract(name: str, content_type: str, data: bytes, ocr_text: str = "") -> tu
         text, note = _pptx(data)
     elif kind == "html":
         text, note = _html(data)
+    elif kind == "zip":
+        text, note = _zip(data)
     elif kind == "text":
         text = _decode(data)
     elif kind == "image":
         text = (ocr_text or "").strip()
         note = "" if text else "tidak ada teks yang terbaca di gambar"
     else:
-        raise AttachmentError("jenis berkas ini belum didukung (PDF, Word, Excel, PowerPoint, teks, gambar)")
+        raise AttachmentError("jenis berkas ini belum didukung (PDF, Word, Excel, PowerPoint, teks, gambar, ZIP)")
     return kind, text.strip()[:MAX_TEXT], note
 
 
