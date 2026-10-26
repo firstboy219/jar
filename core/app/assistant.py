@@ -401,11 +401,17 @@ async def _history(session_id: str, limit: int = 16, private: bool = False) -> l
     return turns
 
 
+LAST_ASK = 4000   # characters of the owner's latest message a worker gets
+
+
 async def _conversation(session_id: str, private: bool, turns: int = 4) -> str:
     """The last few turns, for a worker to understand what the owner meant (the main agent's
     instruction may be terse — especially from a small local model)."""
     rows = (await _history(session_id, limit=turns, private=private))
-    return "\n".join(f"{'Pemilik' if r['role'] == 'user' else 'JARVIS'}: {r['content'][:240]}" for r in rows)
+    last = max((i for i, r in enumerate(rows) if r["role"] == "user"), default=-1)
+    # the owner's latest words reach the worker whole (a long brief was cut at 240 characters and the worker never saw the real ask)
+    return "\n".join(f"{'Pemilik' if r['role'] == 'user' else 'JARVIS'}: {r['content'][:LAST_ASK if i == last else 240]}"
+                     for i, r in enumerate(rows))
 
 
 async def _situation(text: str, location: Location | None, compact: bool = False) -> str:

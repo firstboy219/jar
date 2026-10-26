@@ -1652,6 +1652,16 @@ async def test_v4_f12_logging_in_to_google_from_the_phone_puts_the_account_into_
     assert again.status_code == 400                                                       # a state works once
 
 
+async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
+    from app import assistant
+    brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200
+    for role, text in (("user", "halo " * 100), ("assistant", "Siap."), ("user", brief)):
+        await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('s-brief', $1, $2, 'assistant')", role, text)
+    ctx = await assistant._conversation("s-brief", False)
+    assert brief in ctx                                                                  # the long brief arrives whole
+    assert ("halo " * 100) not in ctx                                                    # older turns stay short
+
+
 async def test_v4_f12_every_thing_jarvis_shows_has_its_own_card_on_the_desk(pool, monkeypatch):
     from app import hub, live, stage
 
