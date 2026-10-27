@@ -1113,3 +1113,13 @@ it has a full-screen button that fills the phone, fitted to it; Keluar leaves.
   with a title bar and "✕ Keluar" (Escape too); the board hears no shortcuts meanwhile. In a browser the page also asks for real full screen.
   In the app the page tells it through the JS bridge (`JarvisHost.fullscreen`): the app hides its bottom tabs, the native strip and the system
   bars (swipe from the edge shows them briefly), and the phone's Back leaves full screen.
+
+## ADR-063 — Catatan and Rapat on the web (Blueprint v4 Fase 12)
+Owner (2026-10-27): the notes and the meetings must be reachable on the web too (the app has its own tabs).
+- The desk's top bar on the web gets **Catatan** (/notes/) and **Rapat** (/notes/#meetings); hidden inside the app, which has its own tabs.
+  Catatan gets "← Meja" back.
+- **Rapat** lives in the Catatan app (`web/notes/meetings.js`): the list (status, date, length, action items, confidential), and per meeting
+  the minutes (summary, decisions, action items with who/due, open questions, topics), "Tanya rapat ini" (the existing `/meetings/{id}/ask`,
+  each source plays from its moment), the transcript as speaker turns with search and a play button per turn (the minute-long audio pieces),
+  renaming a speaker (rebuilds the minutes), the .docx, "Buka di Catatan" (the meeting's page with its to-dos), delete, and "Mulai rapat"
+  (opens the desk's meeting card, which records in the browser after the consent tick). No new server API; the notes CSP allows `media-src blob:`.

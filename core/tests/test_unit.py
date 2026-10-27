@@ -1478,3 +1478,8 @@ def test_v4_f12_an_area_layout_is_bounded_and_named_safely():
     for bad in ("", "../x", "Devteam", "a" * 40, "x y"):
         with pytest.raises(canvas.CanvasError):
             canvas.clean_area(bad, {"w": 300})
+
+
+def test_v4_f12_the_notes_page_may_play_a_meetings_recording():
+    from app import main
+    assert "media-src 'self' blob:" in main._NOTES_CSP and "script-src 'self';" in main._NOTES_CSP

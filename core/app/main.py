@@ -913,8 +913,8 @@ async def canvas_static(path: str):
 
 
 _NOTES_DIR = __import__("pathlib").Path(__file__).parent / "web" / "notes"
-_NOTES_CSP = ("default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; "
-              "frame-ancestors 'none'")
+_NOTES_CSP = ("default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' https: data: blob:; media-src 'self' blob:; "
+              "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'")   # media: a meeting's recording, played from the transcript
 
 
 @app.get("/notes")
