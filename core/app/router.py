@@ -71,7 +71,10 @@ _CHART = re.compile(r"\b(top ?\d*|terpopuler|paling populer|populer|hits|tangga 
 _PLAY_PLAYLIST = re.compile(_POLITE + r"(?:putar(?:kan|in)?|mainkan|setel(?:kan)?|play)\s+playlist(?:\s+(?P<name>.{1,60}?))?[.!?]*$")
 _DRAFT = re.compile(r"\b(buat|bikin|buatkan|bikinin|draftkan|draftin|tuliskan|tulis|susun|susunkan|siapkan)\b.{0,40}"
                     r"\b(draft?|draf|konsep|balasan|reply)\b.{0,30}\b(email|e-mail|surel|surat|pesan|wa|whatsapp|chat|ini)\b"
-                    r"|\b(draftkan|draftin)\b|\breply draft\b|\b(balas|bales)(kan)? email\b")
+                    r"|\b(draftkan|draftin)\b|\breply draft\b|\b(balas|bales)(kan)? email\b"
+                    # "tolong bantu saya menjawab email ini", "balasin chat ini" (ADR-069) — not a question like "sudah kubalas emailnya?"
+                    r"|^(?!\s*(sudah|udah|apakah|apa|kapan|siapa|kenapa)\b).{0,40}\b(jawab|jawabin|jawabkan|menjawab|balas|balasin|balaskan|membalas|"
+                    r"bales|balesin)\b.{0,25}\b(email|e-mail|surel|surat|pesan|chat|wa|whatsapp)\b")
 _NOT_A_SONG = {"lagi", "ulang", "terus", "balik", "kembali", "sebelumnya", "berikutnya", "selanjutnya", "video", "film"}
 _SHORT_NEWS = re.compile(r"^(?:\w+\s+)?" + _NEWS_WORD + r"\s*(?P<topic>(?:\w+\s*){0,4}?)[.!?]*$")
 _NO_TOPIC = re.compile(r"^(hari ini|terkini|terbaru|sekarang|apa|apa saja|apa aja|hari ini apa|pagi ini|malam ini)?$")

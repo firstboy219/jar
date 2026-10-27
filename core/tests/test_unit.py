@@ -1302,8 +1302,13 @@ def test_v4_f9_no_module_has_two_functions_of_the_same_name():
     import collections
     from pathlib import Path
     for path in sorted((Path(__file__).parent.parent / "app").glob("*.py")):
-        seen = collections.Counter(n.name for n in ast.parse(path.read_text()).body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+        body = ast.parse(path.read_text()).body
+        seen = collections.Counter(n.name for n in body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
         assert [k for k, v in seen.items() if v > 1] == [], path.name
+        # ...and a function must not take the name of a module-level variable (a `_progress` function once replaced the `_progress` dict)
+        names = {t.id for n in body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+        names |= {n.target.id for n in body if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
+        assert sorted(names & set(seen)) == [], path.name
 
 
 def test_v4_f10_meeting_voice_commands_are_understood_and_ordinary_talk_is_not_taken_for_one():

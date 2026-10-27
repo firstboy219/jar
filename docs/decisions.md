@@ -1167,3 +1167,14 @@ Owner (2026-10-27): when sharing the screen on the web, the browser only shows i
   moves into a small always-on-top window — messages, typing, paste, attachments, and a microphone button — and moves back when it closes.
 - 📌 in the chat's header opens it; starting a screen share tries to open it at once (the browser may refuse without a fresh click — then 📌
   pulses). Browsers without the API keep the chat on the desk page as before.
+
+## ADR-069 — Progress and the result in the chat that asked (Blueprint v4 Fase 12)
+Owner (2026-10-27, sharing an Outlook email in the floating chat): "tolong bantu saya menjawab email ini" got "Oke, aku buat 3 draf…" twice and
+no draft at all — the phrase was not a draft intent, and with a screen shared the turn went to the vision model, which cannot call tools. He asked
+for a percentage loader in the chat and the result shown there.
+- "jawab/balas(in/kan)/menjawab/membalas … email/pesan/chat/WA" is now the direct draft intent (questions like "sudah kubalas emailnya?" are not).
+- `workers._tell_progress` broadcasts `{"type": "progress", session_id, task_id, pct, text}` for the owner's tasks: 5% at start; the writer's
+  real stages (15 reading, 30–85 writing — the bar creeps while the single model call runs, 90 saving the .docx, 100 with the draft itself);
+  Hermes workers by their steps (`step_pct`: fast at first, never past 92 before done); `pct: null` when it fails.
+- The desk chat (also in the floating window) shows a bar per task it asked for, and at 100% the draft — to, subject, text, 📋 Salin, ⬇ .docx.
+- Guard test widened: a module function may not take a module variable's name (the new helper first shadowed the `_progress` dict).
