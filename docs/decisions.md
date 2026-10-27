@@ -1081,3 +1081,23 @@ Notion, where the owner writes notes, ticks tasks and manages meeting minutes. A
 - **App.** The Chat tab is replaced by Catatan (a WebView of /notes/, token in the fragment like the desk); the activity may rotate
   (`fullUser`) and handles the configuration change itself so the desk's WebView and the recorder survive a turn.
 - Attachments: ZIP is accepted (listing + the readable documents inside; no nested archives or pictures, bomb-safe).
+
+## ADR-061 — Teaching JARVIS to code fast and right (Blueprint v4 Fase 12)
+Owner (2026-10-27): "ajarin Jarvis cara coding yang cepat dan benar". Taken from what actually went wrong: a CSS file with stray `|` that every
+test passed (panel-chat attempt 1), a mirror of `main` that was days old, an approved change that failed to deploy on a merge conflict in a
+shared test file (job 1 / #7), a model that stalled (bisan #2: two calls held 92–154 s, Hermes gave up), 34% of coding tasks failing in a week.
+- **`core/app/preflight.py`** — one command, run from the repo/worktree, that coder and qaqa use: the runner's own policy on the real diff
+  (tier, protected zone, weakened tests), "does it merge cleanly with origin/main" (`git merge-tree`, the check that would have caught #7),
+  CSS sanity (stray leading characters, braces, open comment), `node --check` / `py_compile`, leftovers in the added lines (debug output, merge
+  markers, commented-out code, empty blocks), uncommitted files, "code changed but no test", "tests added to a shared test file", and the JS
+  tests of the folders touched. PASS / WARN / FAIL; exit 1 on FAIL. Server tests still run in the runner (they need Postgres).
+- **Habits in the briefs** (devteam.BISAN/CODER/QAQA, workers.CODE_HABITS): fresh `origin/main`, a git worktree per job (jobs never share a
+  working tree), read by range (`git grep`, `sed -n`), one script per file with asserted replacements, new tests in a NEW test file, preflight
+  twice (after writing, and after the last rebase), read your own diff once as a suspicious reviewer, `git add <files>`; bisan has a step budget
+  and must name the new test file; qaqa runs preflight first and treats every FAIL as a finding.
+- **Fresh mirror.** `dev.sync_mirror()` makes the runner refresh Hermes' read-only copy of main (a `0-sync` request that the runner just
+  moves aside after refreshing); bisan and coder are never spawned before it.
+- **Deploy failure is not the end.** `devteam.check_deploys()` (every 60 s): an owner-approved change that failed to deploy sends the job back to coder
+  with the deploy log (rebase, keep both sides, propose again; the owner approves once more); deployed → done; rejected → cancelled.
+- Not changed, owner's call (cost): the dev team's categories start from `coding`, whose first model is a free one that stalls now and then;
+  switching them to a cheap paid model is a click on the desk (⚙ Model).

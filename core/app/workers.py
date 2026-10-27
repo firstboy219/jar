@@ -60,7 +60,10 @@ CODE_HABITS = (
     "perilaku), bukan versi setengahnya; kalau ragu, tanya lewat ask_owner. (3) Pikirkan efek sampingnya sebelum menulis (mis. sesuatu yang "
     "membuka sendiri padahal pemilik menutupnya). (4) Jalankan pemeriksaan dan tes (node --check, node --test, atau pytest) dan baca hasilnya "
     "sebelum mengaku selesai. (5) Commit hanya berkas yang menjadi bagian pekerjaan (git add <berkas>, bukan git add -A) dan periksa "
-    "git diff --stat. (6) Jangan mengaku sudah mengusulkan/meneruskan sesuatu sebelum propose_code_change mengembalikan id perubahan.\n"
+    "git diff --stat. (6) Jangan mengaku sudah mengusulkan/meneruskan sesuatu sebelum propose_code_change mengembalikan id perubahan. "
+    "(7) Sebelum propose: git fetch origin && git rebase origin/main, lalu python3 core/app/preflight.py (di folder repo) — nol FAIL. "
+    "(8) Tes baru di berkas tes BARU, bukan di akhir berkas bersama (konflik merge saat deploy). (9) Hemat langkah: git grep + sed -n untuk "
+    "membaca, satu skrip untuk semua penggantian dalam satu berkas.\n"
 )
 WORKER_CATEGORIES = ("web", "coding", "produktivitas", "analisis", "latar-belakang", "privat")
 KIND_CATEGORY = {"situation": "web", "routine": "latar-belakang", "selfcheck": "latar-belakang", "selfimprove": "coding",

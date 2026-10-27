@@ -1716,8 +1716,14 @@ async def test_v4_f12_the_workers_area_shows_models_and_the_owner_can_stop_start
 async def test_v4_f12_the_dev_team_hands_work_from_bisan_to_coder_to_qaqa_and_back_until_it_is_clean(pool, monkeypatch):
     import asyncio
 
-    from app import devteam, live, workers
+    from app import dev, devteam, live, workers
     started = []
+    synced = []
+
+    async def fake_sync(wait_s=40.0):
+        synced.append(1)
+        return True
+    monkeypatch.setattr(dev, "sync_mirror", fake_sync)
     monkeypatch.setattr(workers, "_start", lambda task_id, context="": started.append(task_id))
     monkeypatch.setattr(devteam, "TEST_WAIT_S", 3)
     real_sleep = asyncio.sleep
@@ -1809,6 +1815,33 @@ async def test_v4_f12_notes_pages_tasks_conflicts_and_meeting_minutes(pool):
     assert page["kind"] == "meeting" and (await main.notes_import_meeting(str(mid), device=dev))["id"] == page["id"]   # made once
     assert any(x["who"] == "Rina" and x["text"] == "proposal" for x in (await main.notes_tasks(view="all", device=dev))["tasks"])
     assert not (await main.notes_meetings(device=dev))["meetings"]
+
+
+async def test_v4_f12_a_failed_deploy_sends_the_job_back_to_coder_and_a_deployed_one_is_done(pool, monkeypatch):
+    from app import dev, devteam, workers
+    started = []
+    monkeypatch.setattr(workers, "_start", lambda task_id, context="": started.append(task_id))
+
+    async def fake_sync(wait_s=40.0):
+        return True
+    monkeypatch.setattr(dev, "sync_mirror", fake_sync)
+
+    async def waiting_job(change_status, log=""):
+        j = await pool.fetchrow("INSERT INTO dev_jobs (request, status, branch, spec, round) VALUES ('minta x yang jelas', 'awaiting_owner', 'jarvis/devjob-9', 'spek', 1) RETURNING id")
+        c = await pool.fetchval("INSERT INTO dev_changes (branch, title, why, status, deploy_log) VALUES ('jarvis/devjob-9', 't', 'w', $1, $2) RETURNING id", change_status, log)
+        await pool.execute("UPDATE dev_jobs SET change_id = $2 WHERE id = $1", j["id"], c)
+        return j["id"]
+    ok = await waiting_job("deployed")
+    bad = await waiting_job("deploy_failed", "CONFLICT (content): Merge conflict in core/app/web/canvas/tests/lib.test.mjs")
+    no = await waiting_job("rejected")
+    still = await waiting_job("awaiting_approval")
+    assert await devteam.check_deploys() == 3
+    st = {j: (await devteam._job(j))["status"] for j in (ok, bad, no, still)}
+    assert st == {ok: "done", bad: "coding", no: "cancelled", still: "awaiting_owner"}
+    c = await pool.fetchrow("SELECT dev_role, instruction FROM tasks WHERE id = $1", started[-1])
+    assert c["dev_role"] == "coder" and "DEPLOY GAGAL" in c["instruction"] and "Merge conflict in core/app/web/canvas/tests/lib.test.mjs" in c["instruction"]
+    assert "git rebase origin/main" in c["instruction"] and devteam.dir_for(bad) in c["instruction"]
+    assert await devteam.check_deploys() == 0                                              # nothing is moved twice
 
 
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):

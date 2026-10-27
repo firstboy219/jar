@@ -1430,3 +1430,26 @@ def test_v4_f12_note_blocks_task_views_dates_and_meeting_pages():
     assert router.parse_action("tambah tugas telepon pak Budi besok").name == "todo_add"
     assert router.parse_action("Jarvis, tambahkan ke daftar tugas: bayar listrik").args["text"] == "bayar listrik"
     assert router.parse_action("catat ide: aplikasi kasir untuk warung").name == "note_add"
+
+
+def test_v4_f12_preflight_catches_what_the_reviews_kept_finding():
+    from app import devteam, preflight
+    good = ".dock { position: fixed; }\n/* ok */\n.dock.minimized { width: 44px; }\n"
+    assert preflight.check_css(good) == []
+    bad = ".dock { position: fixed; }\n|.dock.closed .x { display: none; }\n.y {\n"
+    probs = preflight.check_css(bad)
+    assert any("karakter nyasar" in p and "|.dock.closed" in p for p in probs) and any("tidak seimbang" in p for p in probs)
+    assert preflight.check_css("a { color: red; } /* tidak ditutup") == ["komentar /* tidak ditutup"]
+    diff = "+++ b/core/app/web/canvas/dock.js\n@@ -10,0 +11,5 @@\n+  console.log(x)\n+  // penandaDot.classList.add(\'a\');\n+  if (on) {\n+  }\n+  // Pesan biasa yang menjelaskan alasannya\n"
+    adds = preflight.added_lines(diff)
+    assert [n for _, n, _ in adds] == [11, 12, 13, 14, 15] and adds[0][0] == "core/app/web/canvas/dock.js"
+    found = preflight.lint_added(adds)
+    assert any("sisa debug" in f for f in found) and any("kode yang dikomentari" in f for f in found) and any("blok kosong" in f for f in found)
+    assert not any(":15:" in f for f in found)                                             # a plain explanatory comment is left alone
+    assert devteam.dir_for(7) == "/opt/data/workspace/devjob-7" and devteam.branch_for(7) == "jarvis/devjob-7"
+    brief = devteam.CODER.format(branch="jarvis/devjob-7", dir=devteam.dir_for(7))
+    for must in ("git worktree add -B jarvis/devjob-7", "preflight.py", "BERKAS TES BARU", "git rebase origin/main", "SATU skrip"):
+        assert must in brief
+    qa = devteam.QAQA.format(branch="jarvis/devjob-7", change=9, dir=devteam.dir_for(7))
+    assert "preflight.py" in qa and "perubahan #9" in qa and "BERKAS TES BARU" not in devteam.BISAN.split("Tes baru:")[0]
+

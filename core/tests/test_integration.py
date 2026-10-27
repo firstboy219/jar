@@ -17,7 +17,7 @@ async def pool(monkeypatch):
     monkeypatch.setattr(config.settings, "qdrant_url", os.getenv("TEST_QDRANT_URL", ""))
     p = await db.connect(os.environ["TEST_DATABASE_URL"])
     await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
-                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts, flow_issues, stage_history, library_kept "
+                    "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts, flow_issues, stage_history, library_kept, dev_jobs, note_pages "
                     "RESTART IDENTITY CASCADE")
     # factory composition: everything local, no category budgets
     await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE

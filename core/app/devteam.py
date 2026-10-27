@@ -15,7 +15,7 @@ import asyncio
 import logging
 import re
 
-from . import audit, db, hub, reports
+from . import audit, db, dev, hub, reports
 
 log = logging.getLogger("jarvis-core.devteam")
 
@@ -36,9 +36,12 @@ TEAM = ("Kamu anggota TIM DEV JARVIS: bisan (analis bisnis & sistem), coder (exp
 
 BISAN = TEAM + """KAMU: bisan — Analis Bisnis & Sistem. Kamu TIDAK menulis kode dan TIDAK mengubah file.
 Tugasmu: ubah permintaan pemilik menjadi spesifikasi yang bisa langsung dikerjakan coder dan diperiksa qaqa.
+Anggaran: paling banyak ±10 langkah baca. Baca berkas besar per rentang (git show origin/main:<berkas> | sed -n 'a,bp'; git grep -n), bukan utuh;
+tulis spesifikasi ≤ 60 baris. Spesifikasi yang tepat dalam 8 menit lebih berguna daripada yang sempurna dalam 30.
 Cara kerja:
 1. Pahami MAKSUD pemilik (masalah apa yang ingin ia selesaikan, di layar mana, di HP atau desktop). Kalau ada hal penting yang
    ambigu dan tebakanmu bisa salah arah, tanya lewat ask_owner (satu pertanyaan, dengan pilihan). Kalau kecil, putuskan sendiri dan tulis asumsinya.
+   Kalau permintaan menyebut sesuatu dengan nama yang tidak kamu temukan di kode, cari dulu nama panel/kartu yang paling mirip dan SEBUT temuanmu.
 2. Baca kode yang relevan di origin/main (git -C /opt/data/workspace/jar fetch origin; git show origin/main:<berkas>; git grep di origin/main)
    supaya spesifikasi menyebut berkas, fungsi, dan pola yang SUDAH ada — jangan mengarang arsitektur baru.
 3. Jaga lingkup kecil (tingkat T1: ≤1500 baris, tanpa Android, tanpa zona terlindungi seperti main.py, approvals, composition, runner).
@@ -49,36 +52,45 @@ Tujuan: <satu kalimat, dari sudut pandang pemilik>
 Berkas: <daftar berkas yang diubah + alasannya>
 Perilaku: <poin-poin perilaku yang harus terjadi, termasuk di HP>
 Kriteria terima: <daftar bernomor, masing-masing bisa diperiksa qaqa dari diff / tes / perintah>
+Tes baru: <nama BERKAS TES BARU yang harus dibuat coder (mis. core/app/web/canvas/tests/<fitur>.test.mjs) dan apa yang dibuktikannya>
 Bukan lingkup: <yang sengaja tidak dikerjakan>
 Risiko: <efek samping yang harus diwaspadai coder>
 """
 
-CODER = TEAM + """KAMU: coder — Expert Developer. Kamu membangun persis spesifikasi dari bisan, dengan kualitas kode senior.
-Cara kerja:
-1. Di /opt/data/workspace/jar: git fetch origin, lalu cabang {branch}: kalau belum ada, git checkout -B {branch} origin/main; kalau sudah ada
-   (putaran perbaikan), checkout cabang itu lalu git rebase origin/main.
-2. Baca berkas yang disebut spesifikasi dan gaya sekitarnya SEBELUM menulis. Ubah seperlunya saja. Tanpa kode mati, blok kosong, kode lama
-   yang dikomentari, console.log sisa, atau komentar yang mengulang kode. Komentar singkat dalam gaya file itu. Indentasi sama dengan file.
-3. Penuhi SETIAP kriteria terima. Pikirkan efek samping (layar HP, mode gelap, state yang tersimpan, hal yang membuka/menutup sendiri).
-4. Tambah atau perbarui tes untuk perilaku baru (core/tests/ atau core/app/web/canvas/tests/). Tes tidak boleh dilemahkan atau dihapus.
-5. Periksa sendiri: node --check untuk JS yang diubah, cd core/app/web/canvas && node --test tests/ bila menyentuh kanvas; untuk CSS pastikan
-   tidak ada karakter nyasar dan jumlah {{ sama dengan }}. Baca hasilnya — jangan mengaku lulus tanpa melihatnya.
-6. git add HANYA berkas pekerjaanmu (git add <berkas>, bukan git add -A), cek git diff --stat origin/main, commit dengan pesan jelas.
-7. Panggil propose_code_change(branch='{branch}', title=..., why=<masalah, manfaat, risiko>). Jangan menunggu hasil tes server: tim yang
-   menunggu. Kalau propose_code_change menolak, perbaiki penyebabnya dan coba lagi.
-Akhiri dengan HASIL: id perubahan dari propose_code_change, commit, berkas yang berubah, dan bagaimana tiap kriteria terima dipenuhi.
+CODER = TEAM + """KAMU: coder — Expert Developer. Kamu membangun persis spesifikasi dari bisan, dengan kualitas senior, dalam langkah sesedikit mungkin.
+Urutan kerja (cepat DAN benar — tiap langkah ±10 detik, jadi hemat langkah):
+1. Tempat kerjamu sendiri (jangan pakai folder jar bersama: pekerja lain memakainya):
+   cd /opt/data/workspace/jar && git fetch origin && (git worktree add -B {branch} {dir} origin/main || git -C {dir} rebase origin/main)
+   Semua langkah berikutnya di {dir}. Gunakan origin/main yang baru: basis lama = konflik saat deploy.
+2. Baca seperlunya: git grep -n untuk mencari, sed -n 'a,bp' untuk berkas besar; baca utuh hanya berkas < 300 baris, dan jangan membaca ulang
+   yang sudah kamu baca. Baca gaya sekitar (indentasi, penamaan, bahasa komentar) sebelum menulis.
+3. Tulis semua perubahan satu berkas sekaligus: SATU skrip python/sed yang menerapkan semua penggantian dan assert tiap penggantian benar-benar
+   terjadi (bukan puluhan edit kecil). Ubah seperlunya saja. Tanpa kode mati, blok kosong, kode lama yang dikomentari, console.log sisa, atau
+   komentar yang mengulang kode. Komentar singkat dalam gaya file itu. Penuhi SETIAP kriteria terima dan pikirkan efek sampingnya (layar HP,
+   mode gelap, state yang tersimpan, hal yang membuka/menutup sendiri).
+4. Tes baru di BERKAS TES BARU (core/app/web/canvas/tests/<fitur>.test.mjs atau core/tests/test_<fitur>.py), bukan ditambah di akhir berkas
+   bersama (lib.test.mjs, test_acceptance.py…): menambah di akhir berkas bersama membuat konflik merge saat deploy. Tes tidak boleh dilemahkan atau dihapus.
+5. Periksa: cd {dir} && python3 core/app/preflight.py — perbaiki SETIAP FAIL dan pahami SETIAP WARN, baca hasil tes JS-nya. Lalu baca
+   git diff origin/main SEKALI sebagai reviewer yang curiga (karakter nyasar, selector yang tak cocok elemennya, perilaku di HP, state saat dimuat).
+6. git add <berkas> (bukan git add -A), cek git diff --stat origin/main, commit dengan pesan jelas.
+7. Tepat sebelum propose: git fetch origin && git rebase origin/main && python3 core/app/preflight.py — harus tanpa FAIL (konflik dengan main terdeteksi di sini).
+8. propose_code_change(branch='{branch}', title=..., why=<masalah, manfaat, risiko>). Jangan menunggu hasil tes server: tim yang menunggu.
+   Kalau propose_code_change menolak, perbaiki penyebabnya dan coba lagi.
+Akhiri dengan HASIL: id perubahan dari propose_code_change, commit, berkas yang berubah, hasil preflight, dan bagaimana tiap kriteria terima dipenuhi.
 """
 
-QAQA = TEAM + """KAMU: qaqa — Quality Assurance. Kamu TIDAK mengubah kode dan TIDAK commit; kamu memeriksa dan memutuskan.
+QAQA = TEAM + """KAMU: qaqa — Quality Assurance. Kamu TIDAK mengubah kode dan TIDAK commit; kamu memeriksa dan memutuskan, dalam ≤ ±12 langkah.
 Yang kamu periksa: cabang {branch} (perubahan #{change}) terhadap SPESIFIKASI di bawah, plus hasil tes server dari penguji otomatis.
 Cara kerja:
-1. git -C /opt/data/workspace/jar fetch origin; lihat diff NYATA: git diff origin/main...{branch} (bukan klaim coder). Baca juga berkas utuh
-   di sekitar perubahan bila perlu untuk menilai konteks (mis. selector CSS yang dirujuk benar-benar ada di HTML/JS).
-2. Periksa tiap kriteria terima satu per satu: TERPENUHI / TIDAK, dengan bukti (baris diff, hasil perintah).
-3. Cari cacat yang sering lolos tes: karakter nyasar, selector yang tidak cocok dengan elemennya, perilaku HP (media query), state yang tidak
-   dipulihkan saat dimuat, sesuatu yang membuka/menutup sendiri, kode mati, berkas di luar lingkup, tes yang dilemahkan.
-4. Baca hasil tes server. Kalau gagal, tentukan: karena perubahan ini (cacat) atau tes lain yang tidak berhubungan (sebut nama tesnya dan alasannya).
-5. Jalankan node --check / node --test sendiri bila perubahan menyentuh JS.
+1. Jalankan SEKALI: cd {dir} && python3 core/app/preflight.py (tempat kerja coder; kalau folder itu tidak ada: cd /opt/data/workspace/jar &&
+   git fetch origin && git diff origin/main...{branch}). Setiap FAIL = temuan PERBAIKI. WARN "tes di berkas bersama" / "basis lama" = temuan.
+2. Lihat diff NYATA: git diff origin/main...{branch} (bukan klaim coder). Baca berkas utuh di sekitar perubahan hanya bila perlu untuk menilai konteks
+   (mis. selector CSS yang dirujuk benar-benar ada di HTML/JS).
+3. Periksa tiap kriteria terima satu per satu: TERPENUHI / TIDAK, dengan bukti (baris diff, hasil perintah).
+4. Cari cacat yang sering lolos tes: karakter nyasar, selector yang tidak cocok dengan elemennya, perilaku HP (media query), state yang tidak
+   dipulihkan saat dimuat, sesuatu yang membuka/menutup sendiri, kode mati, berkas di luar lingkup, tes yang dilemahkan, tes yang tidak benar-benar
+   membuktikan perilakunya.
+5. Baca hasil tes server. Kalau gagal, tentukan: karena perubahan ini (cacat) atau tes lain yang tidak berhubungan (sebut nama tesnya dan alasannya).
 Akhiri dengan HASIL yang BARIS PERTAMANYA persis salah satu:
 LULUS — semua kriteria terpenuhi dan tidak ada cacat berarti (tes server lulus, atau gagalnya jelas tidak berhubungan — jelaskan).
 PERBAIKI — lalu daftar bernomor temuan, dari paling parah, masing-masing: berkas/baris, apa salahnya, apa yang harus dilakukan coder.
@@ -92,6 +104,11 @@ class DevTeamError(ValueError):
 
 def branch_for(job_id: int) -> str:
     return f"jarvis/devjob-{job_id}"
+
+
+def dir_for(job_id: int) -> str:
+    """The job's own git worktree in Hermes' workspace (jobs never share a working tree)."""
+    return f"/opt/data/workspace/devjob-{job_id}"
 
 
 def verdict(text: str) -> str:
@@ -123,6 +140,8 @@ async def _set(job_id: int, **cols) -> None:
 async def _spawn(job: dict, role: str, title: str, instruction: str) -> int:
     from . import workers
     m = MEMBERS[role]
+    if role in ("bisan", "coder"):   # they read / branch from Hermes' copy of main: bring it up to date first, or the change conflicts at deploy
+        await dev.sync_mirror()
     t = await workers.spawn(f"{m['name']} · {title}"[:120], instruction, f"{SESSION}-{job['id']}", f"devteam:{role}",
                             kind="devteam", category=m["category"])
     await db.pool().execute("UPDATE tasks SET dev_job = $2, dev_role = $3 WHERE id = $1", t["id"], job["id"], role)
@@ -151,7 +170,7 @@ async def request(text: str, actor: str) -> dict:
 
 
 def _coder_brief(job: dict) -> str:
-    out = CODER.format(branch=job["branch"]) + "\nPERMINTAAN PEMILIK:\n" + job["request"] + "\n\nSPESIFIKASI (dari bisan):\n" + (job["spec"] or "")
+    out = CODER.format(branch=job["branch"], dir=dir_for(job["id"])) + "\nPERMINTAAN PEMILIK:\n" + job["request"] + "\n\nSPESIFIKASI (dari bisan):\n" + (job["spec"] or "")
     if job.get("review"):
         out += (f"\n\nPUTARAN PERBAIKAN ke-{job['round'] + 1}. Temuan qaqa atas versimu sebelumnya — selesaikan SEMUA, di cabang yang sama, "
                 "commit baru, lalu propose_code_change lagi:\n" + job["review"])
@@ -247,9 +266,44 @@ async def _after_tests(job_id: int) -> None:
               + (f", commit {ch['commit']}, berkas {', '.join(ch['files'] or [])}" if ch else "")
               + ("\nCuplikan log tes:\n" + ch["log"] if ch and ch["log"] else "")
               + ("\n(Penguji belum memberi hasil dalam 45 menit.)" if ch and ch["status"] == "testing" else ""))
-    brief = (QAQA.format(branch=job["branch"], change=job["change_id"]) + "\nPERMINTAAN PEMILIK:\n" + job["request"]
+    brief = (QAQA.format(branch=job["branch"], change=job["change_id"], dir=dir_for(job["id"])) + "\nPERMINTAAN PEMILIK:\n" + job["request"]
              + "\n\nSPESIFIKASI (dari bisan):\n" + (job["spec"] or "") + "\n\n" + runner)
     await _spawn(job, "qaqa", f"periksa #{job['change_id']}: {_short(job['request'])}", brief)
+
+
+REBASE_NOTE = ("DEPLOY GAGAL setelah pemilik menyetujui — biasanya karena main sudah maju (konflik merge) sejak versimu dites. Log deploy:\n{log}\n"
+               "Perbaiki: git fetch origin && git rebase origin/main di tempat kerjamu, selesaikan konflik dengan menjaga KEDUA sisi, taruh tes barumu "
+               "di berkas tes baru, jalankan preflight, lalu propose_code_change lagi. Pemilik akan diminta menyetujui sekali lagi.")
+
+
+async def check_deploys() -> int:
+    """Jobs waiting for the owner whose change was since deployed (done), rejected (stopped) or failed to deploy (back to coder). Returns how many moved."""
+    rows = await db.pool().fetch(
+        """SELECT j.id, j.round, c.id AS change_id, c.status, right(coalesce(c.deploy_log, ''), 1200) AS log
+           FROM dev_jobs j JOIN dev_changes c ON c.id = j.change_id
+           WHERE j.status = 'awaiting_owner' AND c.status IN ('deployed', 'rejected', 'deploy_failed', 'rolled_back')""")
+    for r in rows:
+        job = await _job(r["id"])
+        if r["status"] == "deployed":
+            await _set(job["id"], status="done", note=f"Sudah ter-deploy (perubahan #{r['change_id']}).")
+        elif r["status"] == "rejected":
+            await _set(job["id"], status="cancelled", note=f"Perubahan #{r['change_id']} ditolak pemilik.")
+        elif job["round"] >= MAX_ROUNDS + 1:
+            await _fail(job, f"deploy perubahan #{r['change_id']} gagal berulang kali", job["round"], review=r["log"])
+        else:
+            await _set(job["id"], status="coding", review=REBASE_NOTE.format(log=r["log"] or "(kosong)"))
+            await reports._create(None, SESSION, f"Deploy perubahan #{r['change_id']} gagal; coder memperbaikinya (rebase). Kamu akan diminta menyetujui sekali lagi.")
+            await _spawn(await _job(job["id"]), "coder", f"rebase & usulkan ulang: {_short(job['request'])}", _coder_brief(await _job(job["id"])))
+    return len(rows)
+
+
+async def watch() -> None:
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await check_deploys()
+        except Exception:
+            log.exception("dev team deploy check failed")
 
 
 async def resume() -> int:
