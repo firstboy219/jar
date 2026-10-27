@@ -7,6 +7,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.EditNote
@@ -85,6 +88,7 @@ class MainActivity : FragmentActivity() {
         (application as JarvisApp).engine.checkUpdateSoon()
     }
 
+    @OptIn(ExperimentalLayoutApi::class)   // consumeWindowInsets (stable in newer Compose; harmless when it already is)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -169,7 +173,9 @@ class MainActivity : FragmentActivity() {
                     NavHost(
                         nav,
                         startDestination = if (settings.isConfigured) Tab.Desk.route else "console/app",
-                        modifier = Modifier.padding(padding),
+                        // edge-to-edge: Android no longer shrinks the window for the keyboard, so every tab makes room for it itself — the desk's
+                        // chat box and the notes editor stay above the keyboard instead of under it
+                        modifier = Modifier.padding(padding).consumeWindowInsets(padding).imePadding(),
                     ) {
                         val back: () -> Unit = { nav.popBackStack() }
                         composable(Tab.Desk.route) {
