@@ -1101,3 +1101,15 @@ shared test file (job 1 / #7), a model that stalled (bisan #2: two calls held 92
   with the deploy log (rebase, keep both sides, propose again; the owner approves once more); deployed → done; rejected → cancelled.
 - Not changed, owner's call (cost): the dev team's categories start from `coding`, whose first model is a free one that stalls now and then;
   switching them to a cheap paid model is a click on the desk (⚙ Model).
+
+## ADR-062 — Desk areas the owner sizes, locks and opens full screen (Blueprint v4 Fase 12)
+Owner (2026-10-27): an area (a group of cards, like Tim Dev) can be resized from the canvas by dragging with a finger, except when locked;
+it has a full-screen button that fills the phone, fitted to it; Keluar leaves.
+- Every desk widget (n8n, Simpanan, Pemutar, Rapat, Video…, Pekerja, Tim Dev) gets three grips (right edge, bottom edge, corner) and a small bar
+  (🔓/🔒, ⛶) outside its top-right corner. Grips and bar keep their screen size at any zoom (`--inv`); a locked area has no grips. Width 220–2600,
+  height 140–2600 or "grows with its content" (`lib.clampArea`); a fixed height scrolls inside.
+- The layout (`settings_kv` `desk:areas`, `canvas.clean_area`) is the owner's and shared by every device: `GET /canvas/areas`, `PUT /canvas/areas/{name}`.
+- Full screen moves the area itself (with everything it is doing — live steps, player, map) into a layer over the page at the screen's own size,
+  with a title bar and "✕ Keluar" (Escape too); the board hears no shortcuts meanwhile. In a browser the page also asks for real full screen.
+  In the app the page tells it through the JS bridge (`JarvisHost.fullscreen`): the app hides its bottom tabs, the native strip and the system
+  bars (swipe from the edge shows them briefly), and the phone's Back leaves full screen.

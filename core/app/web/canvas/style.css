@@ -385,3 +385,28 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 
 /* in the phone app the minimized chat is a native button in the left strip, beside the microphone (ADR-060) */
 .host-chat .dock.minimized { display: none; }
+
+/* ADR-062: areas the owner sizes, locks and opens full screen */
+.widget.sized { overflow: auto; overscroll-behavior: contain; }
+.areabar { position: absolute; left: 0; top: 0; z-index: 30; display: flex; gap: 4px; transform-origin: 0 0; pointer-events: auto; }
+.areabtn { width: 40px; height: 40px; padding: 0; display: grid; place-items: center; font-size: 17px; border-radius: 10px;
+  background: var(--glass); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
+.areabtn:hover { border-color: var(--accent); }
+.areagrip { position: absolute; left: 0; top: 0; z-index: 29; pointer-events: auto; touch-action: none; }
+.areagrip.g-e { width: calc(22px * var(--inv, 1)); margin-left: calc(-11px * var(--inv, 1)); cursor: ew-resize; }
+.areagrip.g-s { height: calc(22px * var(--inv, 1)); margin-top: calc(-11px * var(--inv, 1)); cursor: ns-resize; }
+.areagrip.g-se { width: calc(30px * var(--inv, 1)); height: calc(30px * var(--inv, 1)); margin: calc(-15px * var(--inv, 1)) 0 0 calc(-15px * var(--inv, 1)); cursor: nwse-resize; }
+.areagrip.g-se::after { content: ''; position: absolute; inset: 25%; border-right: calc(3px * var(--inv, 1)) solid var(--accent); border-bottom: calc(3px * var(--inv, 1)) solid var(--accent); border-radius: 2px; opacity: .8; }
+.areagrip.g-e::after, .areagrip.g-s::after { content: ''; position: absolute; background: var(--accent); opacity: 0; transition: opacity .15s; border-radius: 3px; }
+.areagrip.g-e::after { left: 40%; right: 40%; top: 0; bottom: 0; } .areagrip.g-s::after { top: 40%; bottom: 40%; left: 0; right: 0; }
+.areagrip:hover::after, .areagrip.on::after { opacity: .8; }
+.lod2 .areabar, .lod2 .areagrip { display: none; }
+.fsarea { position: fixed; inset: 0; z-index: 26500; display: flex; flex-direction: column; background: var(--bg); }
+.fsbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); background: var(--glass); }
+.fsbar b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.fsexit { min-height: 44px; padding: 0 16px; font-size: 14px; border-color: var(--accent); }
+.fsbody { flex: 1; min-height: 0; overflow: auto; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.fsbody > .widget { position: static !important; transform: none !important; width: 100% !important; height: auto !important; min-height: 100%; max-height: none; margin: 0; overflow: visible; }
+.fsbody > .widget .wbody, .fsbody > .widget .sread, .fsbody > .widget .dtjobs { max-height: none; }
+.fsbody > .widget .smap { height: calc(100vh - 220px); }
+body.area-full .dock, body.area-full .toolrail, body.area-full .zoombar, body.area-full .topbar { visibility: hidden; }
