@@ -264,6 +264,9 @@ export function initDock({ api, toast, embedded }) {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 5 }, audio: false });
       media.scr = { stream, ...previewTile('screen', stream) }; scrBtn.classList.add('on');
       stream.getVideoTracks()[0].addEventListener('ended', stopScreen); startFrames();
+      addMsg('jarvis', '🖥 Aku melihat layarmu. Bicara atau ketik, mis. "buatkan balasan email ini" — kalau perlu aku tanya dulu. '
+        + 'Kalau emailnya tidak muat di layar, tempel teks lengkapnya di sini.', true);
+      if (!wantOpen) setOpen(true);
     } catch (err) { if (err.name !== 'NotAllowedError') toast(`Layar tidak bisa dibagikan: ${err.message || err.name}`, true); }
   }
   function stopScreen() { const s = media.scr; if (!s) return; s.stream.getTracks().forEach((t) => t.stop()); s.tile.remove(); media.scr = null; scrBtn?.classList.remove('on'); stopFrames(); }

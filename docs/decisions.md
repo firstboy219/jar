@@ -1139,3 +1139,16 @@ found it and rightly did not propose half of it, but the orchestrator kept askin
   protected zone, its first line is `BUTUH MANUSIA — <files, why>` and it still writes the full spec for a human developer. coder may end the
   same way when preflight shows the protected-zone FAIL. `devteam.needs_human` reads it; the job stops as `needs_human` (migration 031), the
   spec is kept, and the owner is told — no coder loop, no tokens burnt.
+
+## ADR-066 — Talking to Jarvis about a screen shared in the browser, and drafts from it (Blueprint v4 Fase 12)
+Owner (2026-10-27): while sharing the screen on the web, talk with Jarvis — e.g. share an email and ask for a draft right away; Jarvis may confirm
+something to fit the context; if the screen does not show the whole email, the owner pastes it into the chat.
+- Voice and typed messages already carried the latest screen frame. What was missing: the draft writer only reads "screen text", which only the
+  phone sends (ML Kit). `screen_reader.read` now reads the frame once with the vision model (never a free endpoint: a shared screen counts as the
+  owner's document; local only for a private turn), cached per frame; the direct "buatkan balasan/draf…" path and the model's own
+  write_draft/draft_reply tools use it.
+- Before writing, `screen_reader.question` may ask ONE question (agree or decline, a figure or date to state, who it goes to); an email cut off
+  at the screen's edge (`[TERPOTONG]`) asks for the full text instead. The owner's next words answer it (kept 15 minutes per conversation):
+  a short answer joins the request, a long paste joins the material as "TEKS YANG DITEMPEL PEMILIK", "lanjut" writes from what is visible.
+- The draft brief now carries the owner's earlier messages whole (an email pasted before the request is no longer cut to 240 characters).
+- Sharing the screen on the desk says in the chat what to do next.
