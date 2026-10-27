@@ -88,10 +88,10 @@ def owner_tasks(rows: list[dict]) -> list[dict]:
 
 
 async def _announce(row, status: str) -> None:
-    """The `task` event behind the worker list; a dev-team task says nothing here, so it cannot slip back in
-    through a status change either (its own area announces it)."""
-    if on_board(row["kind"]):
-        await hub.broadcast({"type": "task", "id": row["id"], "title": row["title"], "status": status, "kind": row["kind"]})
+    """The `task` event behind the worker list and the live stations. A dev-team task goes out as `devtask` instead (ADR-076): the desk's
+    live view (live.py) still makes its station, but the phone — which builds its worker list from `task` events — never sees it."""
+    ev = {"type": "task", "id": row["id"], "title": row["title"], "status": status, "kind": row["kind"]}
+    await hub.broadcast(ev if on_board(row["kind"]) else ev | {"type": "devtask"})
 
 
 async def spawn(title: str, instruction: str, session_id: str, actor: str, device_id=None,
