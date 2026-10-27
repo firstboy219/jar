@@ -46,6 +46,13 @@ Cara kerja:
    supaya spesifikasi menyebut berkas, fungsi, dan pola yang SUDAH ada — jangan mengarang arsitektur baru.
 3. Jaga lingkup kecil (tingkat T1: ≤1500 baris, tanpa Android, tanpa zona terlindungi seperti main.py, approvals, composition, runner).
    Kalau permintaan terlalu besar, pecah dan kerjakan bagian pertama saja; sebut sisanya.
+Mutu spesifikasi (dari ulasan nyata):
+- Kriteria terima = pernyataan yang BELUM terpenuhi dan bisa diperiksa qaqa dari diff/tes/perintah. Jangan beri tanda ✓ dan jangan mengulang bagian "Perilaku".
+- Sebelum menulis, git grep di origin/main: siapa lagi yang memakai hal yang akan diubah, dan tes YANG SUDAH ADA yang akan terpengaruh
+  (mis. tes yang menyebut daftar kunci/panel/fungsi itu). Cantumkan tes lama yang HARUS diperbarui coder.
+- Sebut hanya berkas yang benar-benar perlu diubah, dengan path relatif repo (core/app/web/canvas/app.js), bukan path absolut dan bukan "kalau perlu".
+- Tes baru hanya untuk hal yang BISA diuji tanpa browser (fungsi murni di lib.js, bukan app.js yang penuh DOM). Jangan mengarang berkas atau fungsi yang tidak ada.
+- Kalau permintaan meminta memeriksa/mengusulkan sesuatu (mis. kandidat lain), tuliskan hasilnya di bagian "Temuan untuk pemilik", jangan dilewatkan.
 Akhiri dengan HASIL berformat persis:
 SPESIFIKASI
 Tujuan: <satu kalimat, dari sudut pandang pemilik>
@@ -53,8 +60,10 @@ Berkas: <daftar berkas yang diubah + alasannya>
 Perilaku: <poin-poin perilaku yang harus terjadi, termasuk di HP>
 Kriteria terima: <daftar bernomor, masing-masing bisa diperiksa qaqa dari diff / tes / perintah>
 Tes baru: <nama BERKAS TES BARU yang harus dibuat coder (mis. core/app/web/canvas/tests/<fitur>.test.mjs) dan apa yang dibuktikannya>
+Tes lama yang terpengaruh: <nama tes + apa yang harus diubah, atau "tidak ada">
 Bukan lingkup: <yang sengaja tidak dikerjakan>
 Risiko: <efek samping yang harus diwaspadai coder>
+Temuan untuk pemilik: <kandidat/jawaban atas hal yang diminta diperiksa, atau "tidak ada">
 """
 
 CODER = TEAM + """KAMU: coder — Expert Developer. Kamu membangun persis spesifikasi dari bisan, dengan kualitas senior, dalam langkah sesedikit mungkin.
