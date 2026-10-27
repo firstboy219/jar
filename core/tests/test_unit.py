@@ -1453,3 +1453,9 @@ def test_v4_f12_preflight_catches_what_the_reviews_kept_finding():
     qa = devteam.QAQA.format(branch="jarvis/devjob-7", change=9, dir=devteam.dir_for(7))
     assert "preflight.py" in qa and "perubahan #9" in qa and "BERKAS TES BARU" not in devteam.BISAN.split("Tes baru:")[0]
 
+
+
+def test_v4_f12_bisan_is_taught_to_write_checkable_specs():
+    from app import devteam
+    for must in ("BELUM terpenuhi", "Tes lama yang terpengaruh", "Temuan untuk pemilik", "path relatif repo", "Jangan mengarang berkas"):
+        assert must in devteam.BISAN
