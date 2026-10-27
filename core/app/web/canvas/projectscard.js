@@ -1,5 +1,6 @@
 // The desk's Proyek area (ADR-073): the owner's projects — goal, schedule, and a team of workers by role (how many, which AI model, whether they
 // operate websites) — with what the latest run's workers are doing, and the schedules Jarvis made in chat (Hermes' cron jobs).
+import { openResults } from './resultview.js';
 import { shortModel } from './workerscard.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -63,7 +64,8 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
     for (const r of p.roles) roles.append(el('span', 'chip wmodel', `${r.web ? '🌐 ' : ''}${r.role} ×${r.workers} · ${r.model ? shortModel(r.model) : 'model kategori'}`));
     c.append(roles);
     const ctl = el('div', 'pctl');
-    ctl.append(button('▶ Jalankan', 'pbtn wgo', () => act(() => api.req('POST', `/api/v1/projects/${p.id}/run`), `Run baru "${p.name}" dimulai — pekerjanya muncul di Meja.`)),
+    ctl.append(button('📑 Hasil', 'pbtn', () => openResults({ api, toast, projectId: p.id, onShowTask }), 'Buka hasil run: tabel, grafik, gambar, dokumen'),
+      button('▶ Jalankan', 'pbtn wgo', () => act(() => api.req('POST', `/api/v1/projects/${p.id}/run`), `Run baru "${p.name}" dimulai — pekerjanya muncul di Meja.`)),
       button(p.status === 'active' ? '⏸ Jeda' : '▶ Aktifkan jadwal', 'pbtn', () => act(() => api.req('PATCH', `/api/v1/projects/${p.id}`, { status: p.status === 'active' ? 'paused' : 'active' }))),
       button('✎ Kelola', 'pbtn', () => { editing = { ...p, roles: p.roles.map((r) => ({ ...r, model: r.model || '' })) }; render(); }),
       button('🗑', 'pbtn wstop', () => { if (confirm(`Hapus proyek "${p.name}"? Pekerja yang sedang jalan dihentikan; hasil tugas tetap ada.`)) act(() => api.req('DELETE', `/api/v1/projects/${p.id}`), 'Proyek dihapus.'); }, 'Hapus proyek'));
@@ -76,9 +78,11 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
         r.append(el('span', `dot ${w.status === 'stopped' ? 'cancelled' : w.status}`), el('b', null, w.role || w.title),
           el('span', 'chip', STATUS[w.status] || w.status), el('span', 'chip wmodel', shortModel(w.model_used || w.model_override || '')));
         if (['queued', 'running'].includes(w.status)) r.append(button('Lihat', 'pbtn', () => onShowTask(w.id), 'Lihat pekerja ini di Meja'));
+        else r.append(button('Buka hasil ›', 'pbtn wgo', () => openResults({ api, toast, projectId: p.id, run: w.project_run, onShowTask }), 'Tabel, grafik, gambar, dan catatan lengkap'));
         c.append(r);
+        const open = () => openResults({ api, toast, projectId: p.id, run: w.project_run, onShowTask });
         if (w.error) c.append(el('div', 'snippet wbad', w.error));
-        else if (w.result && w.status === 'completed') c.append(el('div', 'snippet pjres', w.result));
+        else if (w.result && w.status === 'completed') { const s = el('div', 'snippet pjres clickable', w.result); s.title = 'Ketuk untuk membuka hasil lengkap'; s.addEventListener('click', open); c.append(s); }
       }
     }
     return c;

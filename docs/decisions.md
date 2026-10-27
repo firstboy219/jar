@@ -1221,3 +1221,17 @@ recognises the pattern when the same kind of work comes again.
 - **Projects from the chat**: tool `proyek` (list / status / run / pause / resume / create with roles) and plain commands handled before the
   model ("jalankan proyek lamar kerja", "jeda/lanjutkan proyek X", "status proyek", "proyek saya apa saja?"); the name is matched loosely
   (`projects.find`); an unknown name goes to the chat model, which has the list.
+
+## ADR-075 — Project results you can open: tables, charts, pictures (Blueprint v4 Fase 12)
+Owner (2026-10-27): the result of a project could not be clicked for detail and was only text; show it as a table, picture, chart or similar.
+- **Workers write structured results.** The project brief now ends with a fenced ```hasil JSON block (`results.FORMAT_HELP`): summary, points,
+  tables, charts (bar / line / pie), pictures (https URLs), links — followed by the plain text. `results.split` checks and trims it (≤ 6 tables ×
+  200 rows × 12 columns, ≤ 6 charts × 40 points, http(s) URLs only); bad JSON stays as text. The report that is spoken (`results.spoken`) and the
+  card's preview never contain the block.
+- **`GET /api/v1/projects/{id}/results?run=N`**: every worker of a run (latest by default) in full — structured part, text, documents it made,
+  and the list of runs.
+- **The desk opens it full screen** (`resultview.js`; "📑 Hasil" on a project, "Buka hasil ›" on a worker, tap the preview): per worker a summary,
+  points, tables (scrollable; any numeric column can be drawn as a bar / line / pie chart with one tap — Indonesian numbers like "Rp1.900.000" and
+  "25 jt" are read), charts as inline SVG (no library), pictures, links, downloadable documents, and the worker's full text (also markdown:
+  headings, lists, tables, images) folded behind the structure. A run picker shows earlier runs. Nothing from a worker is inserted as HTML.
+- Not covered: pictures a worker only saved as a file (not a URL); results of ordinary (non-project) tasks keep their current report/card.

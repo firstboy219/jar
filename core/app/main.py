@@ -1771,6 +1771,15 @@ async def projects_status(project_id: int, s: ProjectStatusIn, device: dict = De
     return await _projects_call(projects.set_status)(project_id, s.status, f"device:{device['name']}")
 
 
+@app.get("/api/v1/projects/{project_id}/results")
+async def projects_results(project_id: int, run: int | None = None, device: dict = Depends(owner_device_auth)):
+    """The workers' full results of a run, structured for the desk (ADR-075)."""
+    found = await projects.run_results(project_id, run)
+    if not found:
+        raise HTTPException(404, "proyek tidak ditemukan")
+    return jsonable(found)
+
+
 @app.post("/api/v1/projects/{project_id}/run")
 async def projects_run(project_id: int, device: dict = Depends(owner_device_auth)):
     return await _projects_call(projects.run)(project_id, f"device:{device['name']}")

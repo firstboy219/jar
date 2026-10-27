@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import audit, db
+from . import audit, db, results
 
 log = logging.getLogger("jarvis-core.projects")
 TZ = ZoneInfo("Asia/Jakarta")
@@ -28,7 +28,8 @@ BRIEF = """[PROYEK: {name} · run #{run}] Kamu pekerja proyek ini dengan peran: 
 TUJUAN PROYEK: {goal}
 TUGAS PERANMU: {brief}
 {split}{web}Akhiri dengan HASIL: apa yang sudah kamu kerjakan dalam run ini (fakta, tautan, angka), apa yang tidak berhasil dan kenapa, dan apa
-yang sebaiknya dikerjakan run berikutnya."""
+yang sebaiknya dikerjakan run berikutnya.
+{format}"""
 SPLIT = ("Ada {total} pekerja dengan peran ini yang bekerja bersamaan: ambil bagian ke-{n} (mis. item, halaman, perusahaan, atau rentang yang berbeda) "
          "supaya tidak mengulang pekerjaan rekanmu; sebut bagian mana yang kamu ambil.\n")
 WEB = ("Peran ini MENGOPERASIKAN SITUS: kerjakan di browser (buka halaman, klik, ketik, gulir) — pemilik melihatnya langsung di Meja. "
@@ -172,9 +173,11 @@ async def get(project_id: int) -> dict | None:
     p["schedule_text"] = schedule_text(p)
     p["workers"] = [dict(r) for r in await db.pool().fetch(
         """SELECT t.id, t.title, t.status, t.model_used, t.model_override, t.project_run, r.role, left(coalesce(t.error, ''), 160) AS error,
-                  left(coalesce(t.result, ''), 400) AS result, t.created_at, t.finished_at
+                  left(coalesce(t.result, ''), 8000) AS result, t.created_at, t.finished_at
            FROM tasks t LEFT JOIN project_roles r ON r.id = t.project_role
            WHERE t.project_id = $1 AND t.project_run >= $2 - 1 ORDER BY t.project_run DESC, t.id""", project_id, p["runs"])]
+    for w in p["workers"]:   # the card shows a short plain preview; the full structured result is opened from it (ADR-075)
+        w["result"] = results.spoken(w["result"])[:400]
     return p
 
 
@@ -205,7 +208,7 @@ async def run(project_id: int, actor: str, trigger: str = "manual") -> dict:
         for n in range(1, r["workers"] + 1):
             brief = BRIEF.format(name=p["name"], run=n_run, role=r["role"], n=n, total=r["workers"], goal=p["goal"] or "(lihat tugas peran)",
                                  brief=r["brief"] or r["role"], split=SPLIT.format(n=n, total=r["workers"]) if r["workers"] > 1 else "",
-                                 web=WEB if r["web"] else "")
+                                 web=WEB if r["web"] else "", format=results.FORMAT_HELP)
             t = await workers.spawn(f"{p['name']} · {r['role']}" + (f" {n}/{r['workers']}" if r["workers"] > 1 else ""),
                                     brief, f"project-{project_id}", actor, category="web" if r["web"] else "analisis")
             await db.pool().execute("UPDATE tasks SET project_id = $2, project_role = $3, project_run = $4, model_override = $5 WHERE id = $1",
@@ -276,4 +279,27 @@ async def situation_block() -> str:
     rows = [await get(i) for i in ids]
     return ("PROYEK PEMILIK (kamu yang mengawasinya; alat proyek untuk lihat/jalankan/jeda/lanjutkan/buat):\n"
             + "\n".join(f"- {status_text(p)}" for p in rows if p))
+
+
+async def run_results(project_id: int, run: int | None = None) -> dict | None:
+    """What the workers of one run handed back, in full and structured for the desk (ADR-075): the latest run unless one is named."""
+    p = await db.pool().fetchrow("SELECT id, name, goal, runs FROM projects WHERE id = $1", project_id)
+    if not p:
+        return None
+    runs = [r["project_run"] for r in await db.pool().fetch(
+        "SELECT DISTINCT project_run FROM tasks WHERE project_id = $1 AND project_run IS NOT NULL ORDER BY project_run DESC LIMIT 30", project_id)]
+    run = run if run in runs else (runs[0] if runs else None)
+    workers = []
+    for t in await db.pool().fetch(
+            """SELECT t.id, t.title, t.status, t.model_used, t.model_override, t.error, left(coalesce(t.result, ''), 60000) AS result,
+                      t.started_at, t.finished_at, r.role
+               FROM tasks t LEFT JOIN project_roles r ON r.id = t.project_role WHERE t.project_id = $1 AND t.project_run = $2 ORDER BY t.id""",
+            project_id, run):
+        doc, text = results.split(t["result"])
+        docs = [dict(d) for d in await db.pool().fetch(
+            "SELECT id::text AS id, title, format FROM documents WHERE task_id = $1 ORDER BY created_at", t["id"])]
+        workers.append({"id": t["id"], "role": t["role"] or t["title"], "title": t["title"], "status": t["status"],
+                        "model": t["model_used"] or t["model_override"] or "", "error": t["error"] or "", "doc": doc, "text": text,
+                        "documents": docs, "started_at": t["started_at"], "finished_at": t["finished_at"]})
+    return {"project": {"id": p["id"], "name": p["name"], "goal": p["goal"]}, "run": run, "runs": runs, "workers": workers}
 
