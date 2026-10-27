@@ -1152,3 +1152,11 @@ something to fit the context; if the screen does not show the whole email, the o
   a short answer joins the request, a long paste joins the material as "TEKS YANG DITEMPEL PEMILIK", "lanjut" writes from what is visible.
 - The draft brief now carries the owner's earlier messages whole (an email pasted before the request is no longer cut to 240 characters).
 - Sharing the screen on the desk says in the chat what to do next.
+
+## ADR-067 — The desk shows only work in progress (dev job 6, built by a human from bisan's spec)
+Owner (2026-10-27): "hapus semua card tugas yang sudah completed dari Meja… cukup tampilkan yang aktif saja". The dev team could not do it (it needs
+canvas.py / live.py, the protected zone — ADR-065), so a human built it from bisan's spec, criteria and test plan as written.
+- `canvas.view()` first sweeps: task cards whose task ended (`completed`, `failed`, `cancelled`, `stopped`; an unknown status counts as going)
+  are deleted from `canvas_nodes` — links go with them — unless the owner pinned the card; one version bump per sweep, audited. The sweep runs
+  before the "unchanged" answer, so a viewer polling with `?since=` sees the cards go. Tasks, results, reports, documents and Simpanan are untouched.
+- A finished task no longer re-adds its card (`workers`: only `canvas.touch`), so nothing churns; results stay reachable in reports, Catatan and Tugas.
