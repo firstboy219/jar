@@ -160,7 +160,9 @@ def main(argv: list[str]) -> int:
             "taruh tes barumu di BERKAS TES BARU (mis. tests/<fitur>.test.mjs atau tests/test_<fitur>.py)")
     for d in ("core/app/web/canvas", "core/app/web/notes"):
         if any(f.startswith(d + "/") for f in files) and Path(root, d, "tests").is_dir():
-            rc, out = sh("node", "--test", "tests/", cwd=str(Path(root, d)))
+            # explicit files, not a directory: newer Node (≥ 24) reads the argument as a glob and refuses a bare directory
+            tests_js = sorted(str(t.relative_to(Path(root, d))) for t in Path(root, d, "tests").glob("*.test.mjs"))
+            rc, out = sh("node", "--test", *tests_js, cwd=str(Path(root, d)))
             m = re.search(r"# pass (\d+)", out), re.search(r"# fail (\d+)", out)
             add("PASS" if rc == 0 else "FAIL", f"tes JS {d}", f"lulus {m[0].group(1) if m[0] else '?'}" if rc == 0 else out[-400:])
     if any(f.startswith("core/") and f.endswith(".py") for f in files):

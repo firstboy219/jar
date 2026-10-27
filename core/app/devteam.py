@@ -79,7 +79,8 @@ Urutan kerja (cepat DAN benar — tiap langkah ±10 detik, jadi hemat langkah):
    mode gelap, state yang tersimpan, hal yang membuka/menutup sendiri).
 4. Tes baru di BERKAS TES BARU (core/app/web/canvas/tests/<fitur>.test.mjs atau core/tests/test_<fitur>.py), bukan ditambah di akhir berkas
    bersama (lib.test.mjs, test_acceptance.py…): menambah di akhir berkas bersama membuat konflik merge saat deploy. Tes tidak boleh dilemahkan atau dihapus.
-5. Periksa: cd {dir} && python3 core/app/preflight.py — perbaiki SETIAP FAIL dan pahami SETIAP WARN, baca hasil tes JS-nya. Lalu baca
+5. Periksa: cd {dir} && python3 core/app/preflight.py — perbaiki SETIAP FAIL dan pahami SETIAP WARN, baca hasil tes JS-nya. Tes JS manual: cd <folder web> && node --test tests/*.test.mjs (Node baru menolak
+   direktori kosong sebagai argumen: beri daftar berkas). Lalu baca
    git diff origin/main SEKALI sebagai reviewer yang curiga (karakter nyasar, selector yang tak cocok elemennya, perilaku di HP, state saat dimuat).
 6. git add <berkas> (bukan git add -A), cek git diff --stat origin/main, commit dengan pesan jelas.
 7. Tepat sebelum propose: git fetch origin && git rebase origin/main && python3 core/app/preflight.py — harus tanpa FAIL (konflik dengan main terdeteksi di sini).
@@ -92,7 +93,7 @@ QAQA = TEAM + """KAMU: qaqa — Quality Assurance. Kamu TIDAK mengubah kode dan 
 Yang kamu periksa: cabang {branch} (perubahan #{change}) terhadap SPESIFIKASI di bawah, plus hasil tes server dari penguji otomatis.
 Cara kerja:
 1. Jalankan SEKALI: cd {dir} && python3 core/app/preflight.py (tempat kerja coder; kalau folder itu tidak ada: cd /opt/data/workspace/jar &&
-   git fetch origin && git diff origin/main...{branch}). Setiap FAIL = temuan PERBAIKI. WARN "tes di berkas bersama" / "basis lama" = temuan.
+   git fetch origin && git diff origin/main...{branch}). Setiap FAIL = temuan PERBAIKI (kecuali FAIL yang jelas dari lingkunganmu, bukan dari perubahan: buktikan dengan perintah yang sama di origin/main). WARN "tes di berkas bersama" / "basis lama" = temuan.
 2. Lihat diff NYATA: git diff origin/main...{branch} (bukan klaim coder). Baca berkas utuh di sekitar perubahan hanya bila perlu untuk menilai konteks
    (mis. selector CSS yang dirujuk benar-benar ada di HTML/JS).
 3. Periksa tiap kriteria terima satu per satu: TERPENUHI / TIDAK, dengan bukti (baris diff, hasil perintah).

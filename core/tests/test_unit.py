@@ -1459,3 +1459,12 @@ def test_v4_f12_bisan_is_taught_to_write_checkable_specs():
     from app import devteam
     for must in ("BELUM terpenuhi", "Tes lama yang terpengaruh", "Temuan untuk pemilik", "path relatif repo", "Jangan mengarang berkas"):
         assert must in devteam.BISAN
+
+
+def test_v4_f12_preflight_runs_js_tests_with_explicit_files_for_newer_node():
+    import inspect
+
+    from app import devteam, preflight
+    src = inspect.getsource(preflight.main)
+    assert '"node", "--test", *tests_js' in src and '"--test", "tests/"' not in src       # a bare directory fails on Node ≥ 24
+    assert "tests/*.test.mjs" in devteam.CODER
