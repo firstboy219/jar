@@ -164,10 +164,12 @@ async def _run(task_id: int, context: str) -> None:
         try:
             result = None
             turn = await _yield_to_owner(task_id, kind, row)
+            await _tell_progress(row, task_id, 5, "Mulai…")
             if row["instruction"].startswith(writer.MARK):  # a draft (email, reply, letter): written by core, minutes not hours
                 await hub.broadcast({"type": "task_event", "task_id": task_id,
                                      "event": {"type": "thought", "text": "menulis draf"}})
-                result = hermes.HermesReply(await writer.produce(task_id, row["instruction"], row["private"]), None, None, 0)
+                result = hermes.HermesReply(await writer.produce(
+                    task_id, row["instruction"], row["private"], lambda pct, text, extra=None: _tell_progress(row, task_id, pct, text, extra)), None, None, 0)
             elif await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
                 await hub.broadcast({"type": "task_event", "task_id": task_id,
                                      "event": {"type": "thought", "text": "mencari cepat di web"}})
@@ -175,6 +177,7 @@ async def _run(task_id: int, context: str) -> None:
                     result = hermes.HermesReply(text, None, None, 0)
             if row["runtime"] == "openjarvis" and result is None:
                 result = await _try_openjarvis(task_id, row, OPENJARVIS_BRIEF.format(id=task_id) + context + row["instruction"])
+            steps = 0
             for attempt in range(HERMES_RETRIES + 1):
                 events = _nothing() if result else hermes.stream(
                     context + brief + row["instruction"], f"task-{task_id}", row["image"],
@@ -191,6 +194,9 @@ async def _run(task_id: int, context: str) -> None:
                             continue
                         await hub.broadcast({"type": "task_event", "task_id": task_id, "event": ev})
                         _note(task_id, ev)
+                        if ev["type"] == "tool" and ev.get("status") == "running":
+                            steps += 1
+                            await _tell_progress(row, task_id, step_pct(steps), str(ev.get("label") or ev.get("name") or "bekerja")[:120])
                         if ev["type"] == "tool" and ev["name"] == "memory_search" and ev["status"] == "running":
                             await hub.broadcast({"type": "task_event", "task_id": task_id,
                                                  "event": await memory.context_event(ev["label"])})
@@ -212,6 +218,8 @@ async def _run(task_id: int, context: str) -> None:
                    prompt_tokens = $3, completion_tokens = $4 WHERE id = $1""",
                 task_id, text, result.prompt_tokens, result.completion_tokens)
             await _announce(row, "completed")
+            if not row["instruction"].startswith(writer.MARK):   # the writer already said 100% with its draft
+                await _tell_progress(row, task_id, 100, "Selesai")
             await _deliver(task_id, kind, row["title"], text, row["session_id"])
             await _remember_episode(task_id)
             if kind == "owner" and not row["private"]:  # its card (made when the task began) shows the result until the board sweeps it (ADR-067)
@@ -227,6 +235,7 @@ async def _run(task_id: int, context: str) -> None:
             raise
         except Exception as e:
             log.exception("worker %s failed", task_id)
+            await _tell_progress(row, task_id, None, f"Gagal: {str(e)[:160]}")
             if kind == "owner" and await _auto_recover(task_id, row, e, context):
                 return  # one more attempt, a different way: the owner hears about it only if that fails too
             await db.pool().execute(
@@ -463,6 +472,20 @@ async def cancel(task_id: int, actor: str) -> bool:
     if ok:
         await audit.record(actor, "task.cancelled", f"task:{task_id}")
     return ok
+
+
+def step_pct(steps: int) -> int:
+    """How far a worker looks after this many steps (pure; unit-tested): quick at first, slower later, never 100 before it is done."""
+    return min(92, 10 + round(82 * (1 - 0.88 ** max(0, steps))))
+
+
+async def _tell_progress(row, task_id: int, pct: int | None, text: str, extra: dict | None = None) -> None:
+    """The chat that asked sees how far its task is (ADR-069): a percentage, what it is doing, and — for a draft — the result itself.
+    pct None = it failed. Only the owner's own tasks; the session tells the chat which bubble is its own."""
+    if row["kind"] != "owner":
+        return
+    await hub.broadcast({"type": "progress", "session_id": row["session_id"], "task_id": task_id, "title": row["title"][:120],
+                         "pct": pct, "text": text, **({"extra": extra} if extra else {})})
 
 
 def _note(task_id: int, ev: dict) -> None:

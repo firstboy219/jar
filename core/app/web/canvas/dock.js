@@ -137,6 +137,7 @@ export function initDock({ api, toast, embedded }) {
         if (ev.text) addMsg('user', `🎤 ${ev.text}`); else if (ev.error) toast(ev.error, true);
         if (ev.text) setTyping(true); break;
       case 'report': addMsg('jarvis', `🔔 ${ev.text}`); post({ type: 'report_spoken', report_id: ev.id }); speak(ev.speech || ev.text); break;
+      case 'progress': if (ev.session_id === sessionId) showProgress(ev); break;
       case 'proactive': case 'announce': addMsg('jarvis', `🔔 ${ev.text}`); speak(ev.speech || ev.text); break;
       case 'error': if (mine) { toast(ev.message || 'Terjadi kesalahan', true); setTyping(false); jarvisBubble = null; } break;
       default: break;   // tasks, stage, brain… the desk itself shows those
@@ -157,6 +158,56 @@ export function initDock({ api, toast, embedded }) {
     return true;
   }
   form.addEventListener('submit', (e) => { e.preventDefault(); if (sendChat(input.value.trim())) input.value = ''; });
+
+  // ---------- what a task asked from this chat is doing (ADR-069): a bar with its percentage, then the result itself ----------
+  const bars = new Map();   // task id → its bubble
+  function showProgress(ev) {
+    let b = bars.get(ev.task_id);
+    if (!b) {
+      const m = el('div', 'msg jarvis prog'), head = el('div', 'progtitle', ev.title), bar = el('div', 'progbar'), fill = el('i'), line = el('div', 'progline');
+      bar.append(fill); m.append(head, bar, line);
+      log.append(m); log.scrollTop = log.scrollHeight;
+      b = { m, fill, line };
+      bars.set(ev.task_id, b);
+    }
+    if (ev.pct == null) { b.m.classList.add('bad'); b.fill.style.width = '100%'; b.line.textContent = ev.text; bars.delete(ev.task_id); return; }
+    b.fill.style.width = `${Math.max(3, Math.min(100, ev.pct))}%`;
+    b.line.textContent = `${Math.round(ev.pct)}% · ${ev.text}`;
+    if (ev.pct >= 100) {
+      b.m.classList.add('done'); bars.delete(ev.task_id);
+      if (ev.extra?.draft) b.m.after(draftBubble(ev.extra.draft));
+      log.scrollTop = log.scrollHeight;
+    }
+    if (!wantOpen && ev.pct >= 100) { penandaDot.classList.add('visible', 'blink'); tellHost(); }
+  }
+  function draftBubble(d) {
+    const m = el('div', 'msg jarvis draftmsg');
+    m.append(el('b', null, d.title || 'Draf'));
+    if (d.to || d.email) m.append(el('div', 'dmeta', `Kepada: ${[d.to, d.email && `<${d.email}>`].filter(Boolean).join(' ')}`));
+    if (d.subject) m.append(el('div', 'dmeta', `Subjek: ${d.subject}`));
+    m.append(el('div', 'dtext', d.text));
+    const row = el('div', 'drow');
+    const copy = el('button', null, '📋 Salin'); copy.dataset.gesture = 'ok';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(d.text); toast('Draf disalin — tempel di emailmu.'); }
+      catch { const t = el('textarea'); t.value = d.text; m.append(t); t.select(); document.execCommand('copy'); t.remove(); toast('Draf disalin.'); }
+    });
+    row.append(copy);
+    if (d.doc_url) {
+      const dl = el('button', null, '⬇ .docx'); dl.dataset.gesture = 'ok';
+      dl.addEventListener('click', async () => {
+        try {
+          const r = await fetch(d.doc_url, { headers: { Authorization: `Bearer ${api.token}` } });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const a = el('a'); a.href = URL.createObjectURL(await r.blob()); a.download = `${d.title || 'Draf'}.docx`; a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        } catch (err) { toast(err.message, true); }
+      });
+      row.append(dl);
+    }
+    m.append(row);
+    return m;
+  }
 
   // ---------- the floating chat (ADR-068): while another tab, window or app is shared, the chat floats above it ----------
   // Document Picture-in-Picture (Chrome / Edge): the dock itself moves into a small always-on-top window — same messages, typing, paste,

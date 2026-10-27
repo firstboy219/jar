@@ -49,9 +49,16 @@ def markdown(d: dict) -> str:
     return "\n".join(["# Draf " + d["jenis"], *head, "", d["isi"]])
 
 
-async def produce(task_id: int, instruction: str, private: bool = False) -> str:
-    """Write the draft, show it and save the .docx. Returns the short result the owner is told."""
+async def produce(task_id: int, instruction: str, private: bool = False, progress=None) -> str:
+    """Write the draft, show it and save the .docx. Returns the short result the owner is told.
+    progress(pct, text, extra=None): how far it is, for the chat that asked (ADR-069)."""
+    import asyncio
     from . import modelrouter
+
+    async def say(pct, text, extra=None):
+        if progress:
+            await progress(pct, text, extra)
+    await say(15, "Membaca email dan obrolan…")
     modelrouter.NO_FREE.set(True)  # an email and its attachments: not for endpoints that may log prompts
     request = instruction.removeprefix(MARK).strip()  # the owner's words + the email/attachments + the conversation
     try:
@@ -59,16 +66,31 @@ async def produce(task_id: int, instruction: str, private: bool = False) -> str:
     except Exception:
         about = []
     user = request + ("\n\nTENTANG PEMILIK (memori): " + " | ".join(about) if about else "")
-    raw = await llm.complete([{"role": "system", "content": PROMPT}, {"role": "user", "content": user[:14000]}],
-                             category="balas-pesan", caller="worker", private=private, max_tokens=900, temperature=0.4)
+    await say(30, "Menulis draf…")
+
+    async def creep():   # the model answers in one go: the bar moves on its own meanwhile, never past 85%
+        pct = 30
+        while pct < 85:
+            await asyncio.sleep(2.5)
+            pct = min(85, pct + max(2, (85 - pct) // 6))
+            await say(pct, "Menulis draf…")
+    ticker = asyncio.create_task(creep())
+    try:
+        raw = await llm.complete([{"role": "system", "content": PROMPT}, {"role": "user", "content": user[:14000]}],
+                                 category="balas-pesan", caller="worker", private=private, max_tokens=900, temperature=0.4)
+    finally:
+        ticker.cancel()
     d = parse(raw)
     if not d["isi"]:
         raise RuntimeError("model tidak menghasilkan draf")
     title = f"Draf {d['jenis']}" + (f" — {d['subjek']}" if d["subjek"] else (f" untuk {d['kepada']}" if d["kepada"] else ""))
+    await say(90, "Menyimpan file .docx…")
     doc = await documents.create(title[:140], "docx", markdown(d), "jarvis-writer", task_id=task_id)
     draft = {"kind": "draft", "to": d["kepada"][:80], "channel": "email" if d["jenis"] == "email" else "whatsapp" if d["jenis"] == "pesan" else "lainnya",
              "email": d["email"][:120], "subject": d["subjek"][:150], "summary": d["ringkas"][:300],
              "variants": [{"label": "Draf", "text": d["isi"][:6000]}]}
     await stage.show("board", {"title": title, "blocks": [  # copy / open email + the downloadable file
         draft, {"kind": "doc", "title": title, "url": doc["url"], "format": "docx"}]}, title, "jarvis", drafts=True)
+    await say(100, "Selesai", {"draft": {"title": title, "to": d["kepada"][:80], "subject": d["subjek"][:150], "email": d["email"][:120],
+                                         "text": d["isi"][:6000], "doc_url": doc["url"]}})
     return f"{title} sudah jadi — teksnya di layar dan file .docx-nya bisa diunduh (menu Dokumen)."
