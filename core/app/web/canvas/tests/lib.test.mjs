@@ -241,7 +241,7 @@ test('dev team: who holds a job at each stage', async () => {
   const { jobHolder, JOB_STATUS } = await import('../devteamcard.js');
   assert.equal(jobHolder('analysing'), 'bisan'); assert.equal(jobHolder('coding'), 'coder'); assert.equal(jobHolder('reviewing'), 'qaqa');
   assert.equal(jobHolder('testing'), ''); assert.equal(jobHolder('awaiting_owner'), '');
-  for (const s of ['analysing', 'coding', 'testing', 'reviewing', 'awaiting_owner', 'done', 'failed', 'cancelled']) assert.ok(JOB_STATUS[s]);
+  for (const s of ['analysing', 'coding', 'testing', 'reviewing', 'awaiting_owner', 'done', 'failed', 'cancelled', 'needs_human']) assert.ok(JOB_STATUS[s]);
 });
 
 test('desk chat attachments: icons, sizes and what is refused', async () => {

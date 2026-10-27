@@ -1483,3 +1483,12 @@ def test_v4_f12_an_area_layout_is_bounded_and_named_safely():
 def test_v4_f12_the_notes_page_may_play_a_meetings_recording():
     from app import main
     assert "media-src 'self' blob:" in main._NOTES_CSP and "script-src 'self';" in main._NOTES_CSP
+
+
+def test_v4_f12_a_member_can_say_the_job_needs_a_human():
+    from app import devteam
+    assert devteam.needs_human("HASIL\nBUTUH MANUSIA — core/app/canvas.py dan live.py zona terlindungi\nSPESIFIKASI ...") == "core/app/canvas.py dan live.py zona terlindungi"
+    assert devteam.needs_human("**Butuh manusia:** main.py") == "main.py"
+    assert devteam.needs_human("SPESIFIKASI\nTujuan: x\nBUTUH MANUSIA nanti") == ""                        # only as the first line
+    assert devteam.needs_human("") == ""
+    assert "BUTUH MANUSIA" in devteam.BISAN and "selfdev_policy" in devteam.BISAN and "BUTUH MANUSIA" in devteam.CODER

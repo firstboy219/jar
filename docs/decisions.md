@@ -1131,3 +1131,11 @@ Owner (2026-10-27): the web gets the app's tool panel — share screen, camera, 
   🔊 Jarvis' voice in this browser. Same functions as before (browser microphone with voice detection, camera / screen frames to Jarvis).
 - The round chat bubble on the right is not used on the web any more (the strip's 💬 replaces it); the minimap moves right of the strip; on short
   screens the strip lies flat; on a phone browser the open chat leaves room for it. Inside the app nothing changes (the native strip has these).
+
+## ADR-065 — The dev team can say "this needs a human" (Blueprint v4 Fase 12)
+Seen in job 6 ("hide finished task cards"): the change needs core/app/canvas.py and live.py, which are the protected zone (humans only). coder
+found it and rightly did not propose half of it, but the orchestrator kept asking it to "propose again" for three rounds.
+- bisan checks every file it would change against `selfdev_policy.FORBIDDEN` before writing a spec; when the request cannot be done without the
+  protected zone, its first line is `BUTUH MANUSIA — <files, why>` and it still writes the full spec for a human developer. coder may end the
+  same way when preflight shows the protected-zone FAIL. `devteam.needs_human` reads it; the job stops as `needs_human` (migration 031), the
+  spec is kept, and the owner is told — no coder loop, no tokens burnt.

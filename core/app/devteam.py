@@ -46,6 +46,10 @@ Cara kerja:
    supaya spesifikasi menyebut berkas, fungsi, dan pola yang SUDAH ada — jangan mengarang arsitektur baru.
 3. Jaga lingkup kecil (tingkat T1: ≤1500 baris, tanpa Android, tanpa zona terlindungi seperti main.py, approvals, composition, runner).
    Kalau permintaan terlalu besar, pecah dan kerjakan bagian pertama saja; sebut sisanya.
+4. Cek zona terlindungi SEBELUM menulis spesifikasi — untuk setiap berkas yang perlu diubah:
+   cd /opt/data/workspace/jar && python3 -c "import sys; sys.path.insert(0, 'core/app'); import selfdev_policy as p; print([f for f in sys.argv[1:] if p.FORBIDDEN.match(f)])" <berkas…>
+   Kalau permintaan MUSTAHIL tanpa berkas terlindungi (hanya manusia yang boleh mengubahnya), BARIS PERTAMA HASIL-mu: BUTUH MANUSIA — <berkas
+   terlindungi + alasan>; tim berhenti di situ dan pemilik diberi tahu. Tetap tulis spesifikasi lengkap di bawahnya untuk pengembang manusia.
 Mutu spesifikasi (dari ulasan nyata):
 - Kriteria terima = pernyataan yang BELUM terpenuhi dan bisa diperiksa qaqa dari diff/tes/perintah. Jangan beri tanda ✓ dan jangan mengulang bagian "Perilaku".
 - Sebelum menulis, git grep di origin/main: siapa lagi yang memakai hal yang akan diubah, dan tes YANG SUDAH ADA yang akan terpengaruh
@@ -86,6 +90,8 @@ Urutan kerja (cepat DAN benar — tiap langkah ±10 detik, jadi hemat langkah):
 7. Tepat sebelum propose: git fetch origin && git rebase origin/main && python3 core/app/preflight.py — harus tanpa FAIL (konflik dengan main terdeteksi di sini).
 8. propose_code_change(branch='{branch}', title=..., why=<masalah, manfaat, risiko>). Jangan menunggu hasil tes server: tim yang menunggu.
    Kalau propose_code_change menolak, perbaiki penyebabnya dan coba lagi.
+Kalau ternyata perubahan ini HANYA bisa dibuat dengan mengubah berkas zona terlindungi (preflight: "FAIL kebijakan — zona terlindungi"), jangan
+mengakalinya dan jangan mengusulkan setengahnya: BARIS PERTAMA HASIL-mu: BUTUH MANUSIA — <berkas + alasan>, lalu apa yang sudah kamu siapkan.
 Akhiri dengan HASIL: id perubahan dari propose_code_change, commit, berkas yang berubah, hasil preflight, dan bagaimana tiap kriteria terima dipenuhi.
 """
 
@@ -119,6 +125,17 @@ def branch_for(job_id: int) -> str:
 def dir_for(job_id: int) -> str:
     """The job's own git worktree in Hermes' workspace (jobs never share a working tree)."""
     return f"/opt/data/workspace/devjob-{job_id}"
+
+
+def needs_human(text: str) -> str:
+    """'BUTUH MANUSIA — <why>' as a member's first line (pure; unit-tested): the job can only be done by a human developer. Returns the why, or ''."""
+    for line in (text or "").splitlines():
+        s = re.sub(r"^[\s>*#_`-]+", "", line).strip()
+        if not s or s.upper().startswith("HASIL"):
+            continue
+        m = re.match(r"BUTUH MANUSIA\W*(.*)$", s, re.IGNORECASE)
+        return (m.group(1).strip() or "butuh pengembang manusia") if m else ""
+    return ""
 
 
 def verdict(text: str) -> str:
@@ -193,9 +210,15 @@ async def on_result(task_id: int, result: str) -> None:
     if not t or not t["dev_job"]:
         return
     job = await _job(t["dev_job"])
-    if not job or job["status"] in ("done", "failed", "cancelled"):
+    if not job or job["status"] in ("done", "failed", "cancelled", "needs_human"):
         return
     role = t["dev_role"]
+    if role in ("bisan", "coder") and (why := needs_human(result)):
+        await _set(job["id"], status="needs_human", note=f"Butuh pengembang manusia: {why}"[:500],
+                   **({"spec": result[:12000]} if role == "bisan" else {}))
+        await reports._create(task_id, SESSION, f"Tim dev: permintaan #{job['id']} ({_short(job['request'], 80)}) butuh pengembang manusia — {why[:200]}. "
+                              "Spesifikasinya sudah siap di area Tim Dev.")
+        return
     if role == "bisan":
         await _set(job["id"], spec=result[:12000], status="coding")
         job = await _job(job["id"])
@@ -245,7 +268,7 @@ async def on_failed(task_id: int, error: str) -> None:
     if not t or not t["dev_job"]:
         return
     job = await _job(t["dev_job"])
-    if not job or job["status"] in ("done", "failed", "cancelled"):
+    if not job or job["status"] in ("done", "failed", "cancelled", "needs_human"):
         return
     if (t["retries"] or 0) < 1:
         await db.pool().execute("UPDATE tasks SET retries = coalesce(retries, 0) + 1 WHERE id = $1", task_id)
@@ -327,7 +350,7 @@ async def resume() -> int:
 async def cancel(job_id: int, actor: str) -> bool:
     from . import workers
     job = await _job(job_id)
-    if not job or job["status"] in ("done", "failed", "cancelled"):
+    if not job or job["status"] in ("done", "failed", "cancelled", "needs_human"):
         return False
     for t in await db.pool().fetch("SELECT id FROM tasks WHERE dev_job = $1 AND status IN ('queued', 'running')", job_id):
         await workers.stop(t["id"], actor)
