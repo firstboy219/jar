@@ -638,9 +638,34 @@ async def _resolve(conn, ref: str) -> dict | None:
     return None
 
 
+FINISHED = frozenset({"completed", "failed", "cancelled", "stopped"})
+
+
+def task_done(status: str | None) -> bool:
+    """A task that has ended (pure; unit-tested). An unknown status counts as still going — its card stays."""
+    return status in FINISHED
+
+
+async def sweep_finished(canvas: dict) -> int:
+    """The desk shows only work in progress (ADR-067, spec by bisan, dev job 6): cards of tasks that have ended leave the board — the task, its
+    result, report and documents stay where they are; a card the owner pinned stays; links go with the card (ON DELETE CASCADE)."""
+    async with _conn(canvas["company_id"]) as conn:
+        gone = await conn.fetch(
+            """DELETE FROM canvas_nodes n USING tasks t
+               WHERE n.canvas_id = $1 AND n.ref = 'task:' || t.id AND NOT n.pinned AND t.status = ANY($2::text[]) RETURNING n.id""",
+            canvas["id"], sorted(FINISHED))
+        if gone:
+            await _bump(conn, canvas, "jarvis-core", f"lepas {len(gone)} kartu tugas yang sudah selesai")
+    if gone:
+        await audit.record("jarvis-core", "canvas.finished_cards_off", f"canvas:{canvas['id']}", cards=len(gone))
+    return len(gone)
+
+
 async def view(canvas_id: int, since: int | None = None) -> dict:
     """The whole galaxy for the viewer, or {"version", "unchanged": True} when nothing moved since `since`."""
     canvas = await _canvas_row(canvas_id)
+    if await sweep_finished(canvas):   # before "unchanged": a viewer polling with ?since= must see the cards go
+        canvas = await _canvas_row(canvas_id)
     if since is not None and since == canvas["version"]:
         return {"id": canvas_id, "version": canvas["version"], "unchanged": True}
     async with _conn(canvas["company_id"]) as conn:

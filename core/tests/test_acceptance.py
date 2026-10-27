@@ -776,7 +776,7 @@ async def test_v4_f3_owner_controls_voice_by_chat_and_consent_is_admin_page_only
 
 # ---------- Blueprint v4 Fase 4: the 3D canvas (ADR-049) ----------
 
-async def _task(pool, title, company=None, status="completed", result="hasil"):
+async def _task(pool, title, company=None, status="running", result="hasil"):   # in progress: ended tasks leave the board (ADR-067)
     return await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, status, result, company_id)
                                   VALUES ('s', $1, $1, $2, $3, $4) RETURNING id""", title, status, result, company)
 
@@ -2191,7 +2191,7 @@ async def test_v4_f11_the_board_endpoints_need_an_owner_and_reject_nonsense(pool
 
 async def test_v4_f11_arrange_puts_pointing_cards_back_in_their_grid_and_leaves_drawings_and_locked_cards(pool, monkeypatch):
     from app import canvas
-    t = [await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, category, status) VALUES ('s-ar', $1, 'x', 'owner', 'web', 'completed') RETURNING id", f"T{i}") for i in range(3)]
+    t = [await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, category, status) VALUES ('s-ar', $1, 'x', 'owner', 'web', 'running') RETURNING id", f"T{i}") for i in range(3)]
     c = await canvas.ensure("utama")
     nodes = [await canvas.add("utama", f"task:{i}", "owner", (123.0 + n, 5.0, 456.0)) for n, i in enumerate(t)]
     note = await canvas.create_object("utama", {"type": "note", "text": "tetap"}, "owner", 7, 8)
