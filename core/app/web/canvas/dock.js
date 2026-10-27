@@ -14,7 +14,11 @@ export function initDock({ api, toast, embedded }) {
   // toggle, we tell it whether the panel is open and whether something unread is waiting. The round bubble is then hidden (host-chat).
   const host = window.JarvisHost?.dockState ? window.JarvisHost : null;
   if (host) document.documentElement.classList.add('host-chat');
-  function tellHost() { try { host?.dockState(wantOpen, penandaDot.classList.contains('visible')); } catch { /* the app is closing */ } }
+  function tellHost() {
+    const unread = penandaDot.classList.contains('visible');
+    chatTool?.classList.toggle('on', wantOpen); chatTool?.classList.toggle('unread', unread && !wantOpen);
+    try { host?.dockState(wantOpen, unread); } catch { /* the app is closing */ }
+  }
   window.__jarvisDockToggle = () => { setOpen(!wantOpen); return wantOpen; };
   let sessionId = LS('jarvis_desk_session') || `meja-${Math.random().toString(36).slice(2, 10)}`;
   LS('jarvis_desk_session', sessionId);
@@ -28,10 +32,18 @@ export function initDock({ api, toast, embedded }) {
   const dot = el('span', 'dot'), title = el('b', null, 'Percakapan');
   const buttons = el('span', 'dockbtns');
   const mk = (glyph, tip, fn) => { const b = el('button', 'dbtn', glyph); b.title = tip; b.dataset.gesture = 'ok'; b.addEventListener('click', fn); buttons.append(b); return b; };
-  const micBtn = embedded ? null : mk('🎤', 'Mikrofon: bicara dengan Jarvis', () => toggleMic());
-  const camBtn = embedded ? null : mk('📷', 'Kamera: tunjukkan sesuatu ke Jarvis', () => toggleCamera());
-  const scrBtn = embedded || !navigator.mediaDevices?.getDisplayMedia ? null : mk('🖥', 'Bagikan layar ke Jarvis', () => toggleScreen());
-  const ttsBtn = mk('🔊', 'Suara balasan Jarvis (di browser ini)', () => setTts(!ttsOn));
+  // On the web the media tools are a strip of round buttons at the bottom left, like the app's native strip (ADR-064): chat, microphone,
+  // camera, screen, voice. In the app the native strip has them (and the phone's own microphone), so the page shows none of these.
+  const strip = embedded ? null : el('nav', 'webstrip');
+  const tool = (glyph, tip, fn, cls) => {
+    const b = el('button', `wsbtn ${cls}`, glyph); b.title = tip; b.setAttribute('aria-label', tip); b.dataset.gesture = 'ok';
+    b.addEventListener('click', fn); strip.append(b); return b;
+  };
+  const chatTool = strip ? tool('💬', 'Panel chat: buka / ciutkan', () => setOpen(!wantOpen), 'chat') : null;
+  const micBtn = embedded ? null : tool('🔇', 'Mikrofon mati — klik untuk bicara dengan Jarvis', () => toggleMic(), 'mic');
+  const camBtn = embedded ? null : tool('📷', 'Kamera: tunjukkan sesuatu ke Jarvis', () => toggleCamera(), 'cam');
+  const scrBtn = embedded || !navigator.mediaDevices?.getDisplayMedia ? null : tool('🖥', 'Bagikan layar ke Jarvis', () => toggleScreen(), 'scr');
+  const ttsBtn = strip ? tool('🔊', 'Suara balasan Jarvis (di browser ini)', () => setTts(!ttsOn), 'tts') : mk('🔊', 'Suara balasan Jarvis (di browser ini)', () => setTts(!ttsOn));
   mk('⟳', 'Percakapan baru', () => newConversation());
   const minBtn = mk('💬', 'Ciutkan / buka', () => setOpen(!wantOpen));
   minBtn.classList.add('minimizer');
@@ -52,6 +64,7 @@ export function initDock({ api, toast, embedded }) {
   dock.append(head, log, statusLine, meter, files, form);
   const previews = el('div', 'previews');
   document.body.append(previews, dock);
+  if (strip) { document.body.append(strip); document.documentElement.classList.add('strip-chat'); }
   setTts(ttsOn);
   setOpen(panelOpen(LS('jarvis_desk_dock')));
   // the conversation survives a reload and a trip to another tab of the app (kept in this browser only)
@@ -214,13 +227,13 @@ export function initDock({ api, toast, embedded }) {
       src.connect(node);
       const m = { stream, ctx, node, vad: new Vad(), muted: false };
       node.port.onmessage = (e) => onAudio(m, e.data);
-      media.mic = m; micBtn.classList.add('on'); meter.hidden = false; setStatus('🎤 Mendengarkan…');
+      media.mic = m; micBtn.classList.add('on'); micBtn.textContent = '🎤'; micBtn.title = 'Mikrofon hidup — klik untuk mute'; meter.hidden = false; setStatus('🎤 Mendengarkan…');
     } catch (err) { toast(`Mikrofon tidak bisa dipakai: ${err.message || err.name}`, true); }
   }
   function stopMic() {
     const m = media.mic; if (!m) return;
     m.node.disconnect(); m.stream.getTracks().forEach((t) => t.stop()); m.ctx.close();
-    media.mic = null; micBtn.classList.remove('on'); meter.hidden = true; meterFill.style.width = '0'; setStatus('');
+    media.mic = null; micBtn.classList.remove('on'); micBtn.textContent = '🔇'; micBtn.title = 'Mikrofon mati — klik untuk bicara dengan Jarvis'; meter.hidden = true; meterFill.style.width = '0'; setStatus('');
   }
   function onAudio(m, chunk) {
     if (speakingNow()) { m.vad = new Vad(); meterFill.style.width = '0'; return; }   // Jarvis is talking: do not hear itself

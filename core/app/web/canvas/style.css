@@ -413,3 +413,18 @@ body.area-full .dock, body.area-full .toolrail, body.area-full .zoombar, body.ar
 
 /* ADR-063: Catatan and Rapat from the desk on the web (the app has its own tabs for them) */
 .in-app .weblink { display: none; }
+
+/* ADR-064: on the web, the app's strip of round tools at the bottom left (chat, microphone, camera, screen, voice) */
+.webstrip { position: fixed; left: 12px; bottom: max(12px, env(safe-area-inset-bottom)); z-index: 20002; display: flex; flex-direction: column; gap: 8px; }
+.wsbtn { position: relative; width: 46px; height: 46px; padding: 0; border-radius: 50%; display: grid; place-items: center; font-size: 20px;
+  background: rgba(11, 18, 38, .8); border: 1.5px solid rgba(143, 160, 196, .5); box-shadow: 0 4px 14px rgba(0, 0, 0, .35); }
+.wsbtn:hover { border-color: var(--accent); }
+.wsbtn.on { background: rgba(103, 232, 249, .28); border-color: var(--cyan); }
+.wsbtn.mic.on { animation: wspulse 1.6s infinite; }
+@keyframes wspulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(103, 232, 249, .45); } 50% { box-shadow: 0 0 0 8px rgba(103, 232, 249, 0); } }
+.wsbtn.unread::after { content: ''; position: absolute; top: 2px; right: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--red); border: 2px solid var(--bg); }
+.strip-chat .dock.minimized { display: none; }            /* the strip's 💬 opens it */
+.strip-chat .minimap { left: 72px; }
+body.area-full .webstrip, body.taking .webstrip { visibility: hidden; }
+@media (max-height: 700px) { .webstrip { flex-direction: row; } .strip-chat .minimap { left: 12px; bottom: 70px; } }
+@media (max-width: 700px) { .webstrip { bottom: 44px; } .strip-chat .dock { left: 66px; } .strip-chat .previews { display: none; } }
