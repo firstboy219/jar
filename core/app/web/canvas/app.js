@@ -356,14 +356,8 @@ function renderPanels(d) {
   const desk = current.context === 'utama';   // the panels around the middle belong to the main board only
   renderFeatureCards(d);
   const show = (name, on) => { if (on && desk) panelFor(name).el.hidden = false; else if (deskPanels[name]) deskPanels[name].el.hidden = true; };
-  show('prompts', !!d.prompts); show('n8n', !!d.n8n); show('storage', !!d.storage);
+  show('n8n', !!d.n8n); show('storage', !!d.storage);
   if (!desk) { for (const n of FEATURE_CARDS) if (deskPanels[n]) deskPanels[n].el.hidden = true; return; }
-  if (d.prompts) {
-    const e = panelFor('prompts').el;
-    e.replaceChildren(el('div', 'kind', 'meja · permintaanmu'), el('div', 'title', 'Permintaan terakhir'));
-    if (!d.prompts.length) e.append(el('div', 'snippet', 'Belum ada.'));
-    for (const p of d.prompts) { const row = el('div', 'deskrow'); row.append(el('b', null, `Kamu: ${p.asked}`)); if (p.answer) row.append(el('span', null, `Jarvis: ${p.answer}`)); e.append(row); }
-  }
   if (d.n8n) {
     const e = panelFor('n8n').el;
     e.replaceChildren(el('div', 'kind', 'meja · otomasi'), el('div', 'title', 'Yang dijalankan n8n'));
