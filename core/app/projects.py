@@ -7,6 +7,7 @@ take over the browser), the desk cards and the reports all apply. Workers with t
 The schedule is checked every minute (`tick`); times are the owner's (WIB).
 """
 
+import difflib
 import logging
 import re
 from datetime import datetime, timedelta
@@ -225,3 +226,54 @@ async def tick() -> int:
             await db.pool().execute("UPDATE projects SET next_run = $2 WHERE id = $1", r["id"], next_run(p, datetime.now(TZ)))
             log.info("project %s skipped: %s", r["id"], e)
     return len(due)
+
+
+def find(projects: list[dict], name: str) -> dict | None:
+    """The project the owner means by `name` ("lamar kerja" → "Bantu lamar kerja"): exact, contained, then the closest (pure; unit-tested)."""
+    q = " ".join(str(name or "").lower().split())
+    if not q:
+        return projects[0] if len(projects) == 1 else None
+    by = {p["name"].lower(): p for p in projects}
+    if q in by:
+        return by[q]
+    hits = [p for n, p in by.items() if q in n or n in q]
+    if len(hits) == 1:
+        return hits[0]
+    close = difflib.get_close_matches(q, list(by), n=1, cutoff=0.5)
+    return by[close[0]] if close else (hits[0] if hits else None)
+
+
+STATUS_WORD = {"queued": "antre", "running": "bekerja", "completed": "selesai", "failed": "gagal", "stopped": "dihentikan", "cancelled": "batal"}
+
+
+def status_text(p: dict) -> str:
+    """One project as the main agent tells it (pure; unit-tested): status, schedule, the latest run's workers."""
+    head = f"Proyek \"{p['name']}\" ({'aktif' if p['status'] == 'active' else 'dijeda'}, {p.get('schedule_text') or p['schedule']})"
+    if p.get("next_run") and p["status"] == "active":
+        nr = p["next_run"].astimezone(TZ)
+        head += f", berikutnya {WEEKDAYS[nr.weekday()]} {nr:%d/%m %H:%M} WIB"
+    last = [w for w in p.get("workers") or [] if w.get("project_run") == p.get("runs")]
+    if not last:
+        return head + " — belum pernah dijalankan." if not p.get("runs") else head + "."
+    count: dict[str, int] = {}
+    for w in last:
+        count[STATUS_WORD.get(w["status"], w["status"])] = count.get(STATUS_WORD.get(w["status"], w["status"]), 0) + 1
+    lines = [head + f" — run #{p['runs']}: " + ", ".join(f"{v} {k}" for k, v in count.items()) + "."]
+    for w in last[:6]:
+        tail = w.get("error") if w["status"] == "failed" else (w.get("result") or "")[:160] if w["status"] == "completed" else ""
+        lines.append(f"  · #{w['id']} {w.get('role') or w['title']}: {STATUS_WORD.get(w['status'], w['status'])}" + (f" — {tail}" if tail else ""))
+    return "\n".join(lines)
+
+
+async def situation_block() -> str:
+    """What the main agent knows about the owner's projects every turn (ADR-074): the active ones and any with workers busy."""
+    ids = [r["id"] for r in await db.pool().fetch(
+        """SELECT p.id FROM projects p WHERE p.status = 'active'
+              OR EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.status IN ('queued', 'running'))
+           ORDER BY p.updated_at DESC LIMIT 6""")]
+    if not ids:
+        return ""
+    rows = [await get(i) for i in ids]
+    return ("PROYEK PEMILIK (kamu yang mengawasinya; alat proyek untuk lihat/jalankan/jeda/lanjutkan/buat):\n"
+            + "\n".join(f"- {status_text(p)}" for p in rows if p))
+

@@ -1759,7 +1759,7 @@ async def test_episodes_goals_and_repeated_tasks(pool, monkeypatch):
     failed = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, status, goal, error)
                                     VALUES ('s', 'x', 'y', 'owner', 'web', 'failed', 'Laporan tren produk TikTok', 'ReadTimeout (timeout)') RETURNING id""")
     await episodes.record(failed)
-    assert await pool.fetchval("SELECT lesson FROM episodes WHERE task_id = $1", failed) == "timeout: ReadTimeout (timeout)"
+    assert (await pool.fetchval("SELECT lesson FROM episodes WHERE task_id = $1", failed)).startswith("timeout: ReadTimeout (timeout) · gagal")
     similar = await episodes.similar("tolong cek lagi harga emas antam")
     assert similar and similar[0]["task_id"] == tid and similar[0]["success"]
     brief = await episodes.brief_for("cek lagi harga emas Antam")
