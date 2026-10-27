@@ -1,6 +1,7 @@
 // Catatan & Tugas (ADR-060): the owner's notes, to-dos and meeting minutes — the app's Catatan tab and /notes/ on the web.
 // Pages are made of blocks (editor.js); every to-do of every page is also in the task lists; a finished meeting becomes a page of its own.
 import { createEditor } from './editor.js';
+import { createMeetings } from './meetings.js';
 import { PRIORITY, dueLabel, groupTasks, isoDay, nextPriority, pageLabel, pageTree } from './lib.js';
 
 const $ = (s) => document.querySelector(s);
@@ -131,17 +132,21 @@ function renderSidebar() {
     nav.append(a);
   }
   if (!others.length) nav.append(el('div', 'nempty', 'Belum ada halaman.'));
-  const ms = el('div', 'nsec'); ms.append(el('span', null, 'Notulen rapat'), button('⤓', 'nadd', () => importMeetings(), 'Impor notulen rapat'));
-  nav.append(ms, ...meetings.map((p) => navItem('🎙', pageLabel(p).replace(/^Rapat:\s*/, ''), `#page/${p.id}`, p.open_tasks)));
-  if (!meetings.length) nav.append(el('div', 'nempty', 'Notulen rapat yang selesai muncul di sini otomatis.'));
+  const ms = el('div', 'nsec'); ms.append(el('span', null, 'Rapat'), button('⤓', 'nadd', () => importMeetings(), 'Impor notulen rapat ke Catatan'));
+  nav.append(ms, navItem('🎙', 'Semua rapat', '#meetings'));
+  const mn = el('div', 'nsec'); mn.append(el('span', null, 'Notulen di Catatan'));
+  if (meetings.length) nav.append(mn, ...meetings.map((p) => navItem('📝', pageLabel(p).replace(/^Rapat:\s*/, ''), `#page/${p.id}`, p.open_tasks)));
   nav.append(el('div', 'nsec', ''), navItem('🗑', 'Sampah', '#trash'));
 }
 
 // ------------------------------------------------------------------ views
 
 function showView(name) {
-  for (const v of ['#pageview', '#tasksview', '#trashview', '#searchview']) $(v).hidden = v !== name;
+  for (const v of ['#pageview', '#tasksview', '#trashview', '#searchview', '#meetingsview', '#meetingview']) $(v).hidden = v !== name;
 }
+const meetingsUi = createMeetings({ api: { req: (...a) => api.req(...a), token: () => store.get() }, toast, showView: (v) => { current = null; showView(v); },
+  onOpenPage: async (id) => { await loadPages(); location.hash = `#page/${id}`; } });
+$('#startmeeting').addEventListener('click', () => meetingsUi.start());
 
 async function openPage(id, given) {
   if (current && dirty) await save();
@@ -323,6 +328,8 @@ $('#scrim').addEventListener('click', () => document.body.classList.remove('side
 function route() {
   const [kind, arg] = location.hash.replace(/^#/, '').split('/');
   if (kind === 'page' && arg) openPage(arg);
+  else if (kind === 'meetings') meetingsUi.openList();
+  else if (kind === 'meeting' && arg) meetingsUi.openOne(arg);
   else if (kind === 'trash') openTrash();
   else openTasks(kind === 'tasks' ? arg : 'today');
   renderSidebar();

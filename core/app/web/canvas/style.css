@@ -410,3 +410,6 @@ video.pmedia { background: #000; aspect-ratio: 16 / 9; }
 .fsbody > .widget .wbody, .fsbody > .widget .sread, .fsbody > .widget .dtjobs { max-height: none; }
 .fsbody > .widget .smap { height: calc(100vh - 220px); }
 body.area-full .dock, body.area-full .toolrail, body.area-full .zoombar, body.area-full .topbar { visibility: hidden; }
+
+/* ADR-063: Catatan and Rapat from the desk on the web (the app has its own tabs for them) */
+.in-app .weblink { display: none; }

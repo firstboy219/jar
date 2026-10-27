@@ -120,3 +120,22 @@ section { max-width: 860px; margin: 0 auto; padding: 18px 48px; }
   .hint { display: none; }
 }
 @media (min-width: 900px) { .kbbar { display: none; } }
+
+/* ADR-063: Rapat on the web */
+.mrowcard { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 8px; background: rgba(255, 255, 255, .015); }
+.mrowcard:hover { border-color: rgba(130, 160, 230, .4); } .mrowcard.recording { border-color: var(--red); }
+.mtop { display: flex; align-items: center; gap: 8px; } .mtop b { flex: 1; min-width: 0; font-size: 16px; }
+.chip.busy { color: var(--cyan); border-color: rgba(103, 232, 249, .4); }
+.mclip { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mh { font-size: 19px; margin: 22px 0 8px; } .mtext { line-height: 1.6; white-space: pre-wrap; } .mli { padding: 3px 0; }
+.mask .quickadd { margin-bottom: 8px; }
+.msrc { display: block; width: 100%; text-align: left; margin: 4px 0; padding: 7px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.msrc:hover { color: var(--text); border-color: var(--accent); }
+.mtranscript .tmeta { margin-bottom: 10px; } .mtranscript .chip.who { cursor: pointer; }
+.mlines { display: flex; flex-direction: column; gap: 2px; max-height: 70vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
+.mline { display: grid; grid-template-columns: 64px 120px 1fr; gap: 8px; padding: 6px 4px; border-radius: 6px; align-items: baseline; } .mline:hover { background: var(--hover); }
+.mtime { background: none; border: 0; color: var(--accent); cursor: pointer; font: 12px ui-monospace, monospace; text-align: left; padding: 0; }
+.mwho { font-size: 13px; color: var(--cyan); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mplayer { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 45; width: min(520px, 92vw); }
+.deskback { font-size: 13px; color: var(--muted); margin-left: auto; } .deskback:hover { color: var(--text); } .in-app .deskback { display: none; }
+@media (max-width: 899px) { .mline { grid-template-columns: 52px 1fr; } .mline span { grid-column: 1 / -1; } }
