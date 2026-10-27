@@ -570,6 +570,8 @@ async def resume_after_restart() -> int:
 # ---------- the desk's workers area (ADR-058): who is working, with which model, start / stop, and a word to the worker ----------
 
 SHOW_DONE_S = 3600   # a worker that finished stays on the desk for an hour
+FETCH_LIMIT = 20     # rows read from the table: room for the dev team rows dropped below
+DESK_LIMIT = 14      # workers really shown on the desk card
 
 
 def _chain(cats: dict, category: str) -> list[str]:
@@ -587,16 +589,23 @@ def overview_row(r: dict, cats: dict) -> dict:
             "can_start": r["status"] in ("stopped", "failed") and r["kind"] != "flowcheck", "error": (r["error"] or "")[:160]}
 
 
+def desk_list(rows: list[dict], cats: dict, limit: int = DESK_LIMIT) -> list[dict]:
+    """The workers card (ADR-058): the owner's own tasks. Dev-team tasks (ADR-059) carry a dev_role and live
+    in their own area, so they are dropped BEFORE the cut — the desk keeps showing `limit` owner workers."""
+    return [overview_row(r, cats) for r in rows if not r.get("dev_role")][:limit]
+
+
 async def overview() -> list[dict]:
     """The owner's workers: the active ones, then what finished in the last hour (newest first)."""
     cats = await gateway.categories()
     rows = await db.pool().fetch(
-        """SELECT id, title, status, kind, category, runtime, model_used, hermes_run, error, cost_usd::float AS cost_usd, budget_usd::float AS budget_usd,
+        """SELECT id, title, status, kind, category, dev_role, runtime, model_used, hermes_run, error,
+                  cost_usd::float AS cost_usd, budget_usd::float AS budget_usd,
                   EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at))) AS seconds
            FROM tasks WHERE company_id IS NULL AND kind NOT IN ('flowcheck')
              AND (status IN ('queued', 'running') OR COALESCE(finished_at, created_at) > now() - make_interval(secs => $1))
-           ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT 14""", float(SHOW_DONE_S))
-    return [overview_row(dict(r), cats) for r in rows]
+           ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT $2""", float(SHOW_DONE_S), FETCH_LIMIT)
+    return desk_list([dict(r) for r in rows], cats)
 
 
 SAY_PREFIX = "PESAN LANGSUNG DARI PEMILIK untuk tugas ini (ikuti, lalu lanjutkan tugasnya; jawab singkat lewat hasil akhirmu bila ditanya): "
