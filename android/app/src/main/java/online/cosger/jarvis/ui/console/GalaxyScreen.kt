@@ -2,6 +2,9 @@ package online.cosger.jarvis.ui.console
 
 import android.Manifest
 import android.annotation.SuppressLint
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowCompat
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -68,6 +71,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -125,7 +129,21 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
         pendingCamera = null
     }
 
+    val areaFull by DeskChrome.fullscreen.collectAsStateWithLifecycle()
+    // an area full screen hides the phone's status and navigation bars too (swipe from the edge shows them for a moment)
+    val view = LocalView.current
+    DisposableEffect(areaFull) {
+        val window = (context as? Activity)?.window
+        val bars = window?.let { WindowCompat.getInsetsController(it, view) }
+        if (areaFull) {
+            bars?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars?.hide(WindowInsetsCompat.Type.systemBars())
+        } else bars?.show(WindowInsetsCompat.Type.systemBars())
+        onDispose { if (areaFull) bars?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+    DisposableEffect(Unit) { onDispose { DeskChrome.setFullscreen(false) } }   // leaving the desk ends full screen
     BackHandler {
+        if (areaFull) { webView?.evaluateJavascript("window.__jarvisAreaExit&&window.__jarvisAreaExit()", null); DeskChrome.setFullscreen(false); return@BackHandler }
         if (talkOpen) { talkOpen = false; return@BackHandler }
         val w = webView
         if (w != null && w.canGoBack()) w.goBack() else onBack()
@@ -193,6 +211,7 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
                     // dock.js reports the chat panel's state here (only numbers/booleans cross; nothing else is exposed to the page)
                     addJavascriptInterface(object {
                         @JavascriptInterface fun dockState(open: Boolean, unread: Boolean) { post { chatOpen = open; chatUnread = unread } }
+                        @JavascriptInterface fun fullscreen(on: Boolean) { post { DeskChrome.setFullscreen(on) } }
                     }, "JarvisHost")
                     loadUrl(url)
                     webView = this
@@ -200,7 +219,7 @@ fun GalaxyScreen(vm: JarvisViewModel, onBack: () -> Unit, asTab: Boolean = false
             },
         )
     }
-    if (asTab) {
+    if (asTab && !areaFull) {
         // the whole former "Bicara" screen lives here now: a sheet over the canvas, opened from the strip
         if (talkOpen) DeskTalkSheet(vm, { talkOpen = false }, onOpenServer, onOpenBackground, Modifier.align(Alignment.BottomCenter))
         else {

@@ -22,6 +22,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.launch
@@ -38,6 +39,7 @@ import online.cosger.jarvis.ui.JarvisViewModel
 import online.cosger.jarvis.ui.console.AppUpdateScreen
 import online.cosger.jarvis.ui.console.AuditScreen
 import online.cosger.jarvis.ui.console.CompositionScreen
+import online.cosger.jarvis.ui.console.DeskChrome
 import online.cosger.jarvis.ui.console.GalaxyScreen
 import online.cosger.jarvis.ui.console.NotesScreen
 import online.cosger.jarvis.ui.console.JarvisVoiceScreen
@@ -138,11 +140,12 @@ class MainActivity : FragmentActivity() {
                     if (settings.isConfigured && vm.locationPermissionMissing()) askLocation.launch(LOCATION_PERMISSIONS)
                 }
 
+                val areaFull by DeskChrome.fullscreen.collectAsState()   // an area open full screen on the desk (ADR-062)
                 Scaffold(
                     containerColor = JarvisColors.Background,
                     snackbarHost = { SnackbarHost(snackbar) },
                     bottomBar = {
-                        NavigationBar(containerColor = JarvisColors.Surface) {
+                        if (!areaFull) NavigationBar(containerColor = JarvisColors.Surface) {
                             Tab.entries.forEach { tab ->
                                 NavigationBarItem(
                                     selected = current?.destination?.route == tab.route ||

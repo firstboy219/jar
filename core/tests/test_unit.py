@@ -1468,3 +1468,13 @@ def test_v4_f12_preflight_runs_js_tests_with_explicit_files_for_newer_node():
     src = inspect.getsource(preflight.main)
     assert '"node", "--test", *tests_js' in src and '"--test", "tests/"' not in src       # a bare directory fails on Node ≥ 24
     assert "tests/*.test.mjs" in devteam.CODER
+
+
+def test_v4_f12_an_area_layout_is_bounded_and_named_safely():
+    from app import canvas
+    assert canvas.clean_area("devteam", {"w": 1800.6, "h": 900, "locked": 1}) == {"w": 1801, "h": 900, "locked": True}
+    assert canvas.clean_area("workers", {"w": 5, "h": None}) == {"w": 220, "h": None, "locked": False}   # no height: grows with content
+    assert canvas.clean_area("player", {"w": 99999, "h": 1}) == {"w": 2600, "h": 140, "locked": False}
+    for bad in ("", "../x", "Devteam", "a" * 40, "x y"):
+        with pytest.raises(canvas.CanvasError):
+            canvas.clean_area(bad, {"w": 300})

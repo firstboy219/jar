@@ -2,7 +2,7 @@
 // (x to the right, y down — the server's x and z) that is panned and zoomed with one CSS transform; connectors are an SVG layer; the
 // selection box, handles, guides and the marquee are drawn in screen space so they stay crisp at any zoom.
 // Nothing here approves, sends or pays: it arranges, draws, links and takes cards off the board (the thing a card points at is never deleted).
-import { MAX_ZOOM, MIN_ZOOM, alignRects, clampZoom, connectorPath, diffCards, distributeRects, ease, fitRect, panBy, rectsBounds, rectsIntersect, resizeRect,
+import { clampArea, MAX_ZOOM, MIN_ZOOM, alignRects, clampZoom, connectorPath, diffCards, distributeRects, ease, fitRect, panBy, rectsBounds, rectsIntersect, resizeRect,
   snapRect, snapValue, toScreen, toWorld, wheelIntent, zoomAt } from './lib.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -27,7 +27,7 @@ export function createBoard(ctx) {
   const { stage, api, toast, canvasId, refresh, embedded = false, decorate = () => {} } = ctx;
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const coarse = matchMedia('(pointer: coarse)').matches;
-  const on = { view: [], selection: [], tool: [], history: [], content: [], edit: [] };
+  const on = { view: [], selection: [], tool: [], history: [], content: [], edit: [], widget: [], fullscreen: [] };
   const emit = (k, ...a) => on[k].forEach((f) => f(...a));
 
   // ------------------------------------------------------------ DOM
@@ -63,7 +63,7 @@ export function createBoard(ctx) {
     const h = d.type === 'text' ? (c.autoH ?? d.h ?? 60) : (d.h ?? c.autoH ?? 150);   // text grows with what is typed
     return { x: d.x, y: d.z, w, h };
   };
-  const widgetRect = (w) => ({ x: w.x, y: w.y, w: w.w, h: w.autoH || 200 });
+  const widgetRect = (w) => ({ x: w.x, y: w.y, w: w.w, h: w.h || w.autoH || 200 });
   const isObj = (c) => !!c.data.type;
   const isLocked = (c) => !!(c.data.pinned || c.data.props?.locked);
 
@@ -72,7 +72,7 @@ export function createBoard(ctx) {
       const h = Math.round(en.borderBoxSize?.[0]?.blockSize ?? en.target.offsetHeight);
       const c = en.target.__card, w = en.target.__widget;
       if (c && c.autoH !== h) { c.autoH = h; scheduleEdges(); if (sel.has(c.data.id)) syncSel(); }
-      if (w && w.autoH !== h) { w.autoH = h; }
+      if (w && w.autoH !== h && !w.full) { w.autoH = h; placeArea(w); }
     }
   });
 
@@ -232,16 +232,123 @@ export function createBoard(ctx) {
     }
   }
 
-  /** The fixed desk panels (requests, n8n, storage, player, meeting): placed on the board, not selectable. */
+  /** The desk's areas (the fixed panels: n8n, storage, player, meeting, Tim Dev…): placed on the board, not selectable. */
   function setWidget(name, node, pos) {
     let w = widgets.get(name);
     if (!w) {
-      w = { el: node, x: pos.x, y: pos.y, w: pos.w, autoH: null };
+      w = { name, el: node, x: pos.x, y: pos.y, w: pos.w, h: null, locked: false, full: false, title: pos.title || name, autoH: null };
       node.__widget = w; node.classList.add('widget'); node.style.width = `${pos.w}px`;
       node.style.transform = `translate(${pos.x}px, ${pos.y}px)`;
       cardsEl.append(node); ro.observe(node); widgets.set(name, w);
+      areaChrome(w);
     }
     return w;
+  }
+
+  // ------------------------------------------------------------ areas (ADR-062): the owner sizes an area by dragging its edges,
+  // locks it so it stays as it is, or opens it full screen (and leaves with Keluar). The tools stay the same size on screen at any zoom.
+  function areaChrome(w) {
+    const bar = el('div', 'areabar'), lock = el('button', 'areabtn'), full = el('button', 'areabtn', '⛶');
+    lock.dataset.gesture = full.dataset.gesture = 'ok';
+    full.title = 'Layar penuh';
+    lock.addEventListener('click', (e) => { e.stopPropagation(); setArea(w.name, { locked: !w.locked }, 'lock'); });
+    full.addEventListener('click', (e) => { e.stopPropagation(); openFull(w.name); });
+    bar.append(lock, full);
+    const grips = ['e', 's', 'se'].map((dir) => {
+      const g = el('div', `areagrip g-${dir}`); g.title = 'Geser untuk mengubah ukuran';
+      g.addEventListener('pointerdown', (e) => resizeStart(w, dir, g, e));
+      return g;
+    });
+    for (const n of [bar, ...grips]) n.addEventListener('pointerdown', (e) => e.stopPropagation());
+    cardsEl.append(bar, ...grips);
+    w.chrome = { bar, lock, grips };
+    new MutationObserver(() => placeArea(w)).observe(w.el, { attributes: true, attributeFilter: ['hidden'] });
+    placeArea(w);
+  }
+
+  function placeArea(w) {
+    const c = w.chrome;
+    if (!c) return;
+    const h = w.h || w.autoH || 200, off = w.el.hidden || w.full;
+    c.bar.hidden = off;
+    c.bar.style.transform = `translate(${w.x + w.w}px, ${w.y}px) scale(var(--inv, 1)) translate(-100%, -48px)`;   // the offset in screen pixels
+    c.lock.textContent = w.locked ? '🔒' : '🔓';
+    c.lock.title = w.locked ? 'Terkunci — klik untuk membuka kunci ukuran' : 'Kunci ukuran area ini';
+    const [ge, gs, gse] = c.grips;
+    for (const g of c.grips) g.hidden = off || w.locked;
+    ge.style.transform = `translate(${w.x + w.w}px, ${w.y}px)`; ge.style.height = `${h}px`;
+    gs.style.transform = `translate(${w.x}px, ${w.y + h}px)`; gs.style.width = `${w.w}px`;
+    gse.style.transform = `translate(${w.x + w.w}px, ${w.y + h}px)`;
+  }
+
+  function applyArea(w) {
+    w.el.style.width = `${w.w}px`;
+    w.el.style.height = w.h ? `${w.h}px` : '';
+    w.el.classList.toggle('sized', !!w.h);
+    w.el.classList.toggle('arealocked', w.locked);
+    placeArea(w);
+    scheduleEdges();
+  }
+
+  /** Size / lock an area: from the owner's saved layout (quiet) or a gesture (announced, so the app saves it). */
+  function setArea(name, layout, announce = false) {
+    const w = widgets.get(name);
+    if (!w) return;
+    const next = clampArea({ w: layout.w ?? w.w, h: layout.h === undefined ? w.h : layout.h });
+    w.w = next.w; w.h = next.h;
+    if (layout.locked !== undefined) w.locked = !!layout.locked;
+    applyArea(w);
+    if (announce) emit('widget', { name, w: w.w, h: w.h, locked: w.locked, reason: announce === 'lock' ? 'lock' : 'size' });
+  }
+
+  function resizeStart(w, dir, grip, e) {
+    if (w.locked || e.button > 0) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const start = { x: e.clientX, y: e.clientY, w: w.w, h: w.h || w.autoH || 200 };
+    grip.classList.add('on');
+    const move = (ev) => {
+      const dx = (ev.clientX - start.x) / view.k, dy = (ev.clientY - start.y) / view.k;
+      const next = clampArea({ w: dir.includes('e') ? start.w + dx : w.w, h: dir.includes('s') ? start.h + dy : w.h });
+      w.w = next.w; w.h = next.h; applyArea(w);
+    };
+    const end = () => {
+      grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', end); grip.removeEventListener('pointercancel', end);
+      grip.classList.remove('on');
+      emit('widget', { name: w.name, w: w.w, h: w.h, locked: w.locked, reason: 'size' });
+    };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', end); grip.addEventListener('pointercancel', end);
+  }
+
+  // full screen: the area itself (with everything it is doing) moves into a layer over the whole page, at the screen's own size
+  let fullName = null;
+  const fsLayer = el('div', 'fsarea'); fsLayer.hidden = true;
+  const fsBar = el('div', 'fsbar'), fsTitle = el('b'), fsExit = el('button', 'fsexit', '✕ Keluar');
+  fsExit.dataset.gesture = 'ok';
+  fsBar.append(fsTitle, fsExit);
+  const fsBody = el('div', 'fsbody');
+  fsLayer.append(fsBar, fsBody);
+  document.body.append(fsLayer);
+  fsExit.addEventListener('click', () => closeFull());
+  addEventListener('keydown', (e) => { if (fullName && e.key === 'Escape' && !e.target.closest?.('input, textarea')) { e.preventDefault(); closeFull(); } }, true);
+
+  function openFull(name) {
+    const w = widgets.get(name);
+    if (!w || w.el.hidden) return;
+    if (fullName) closeFull();
+    fullName = name; w.full = true;
+    fsTitle.textContent = w.title;
+    fsBody.append(w.el);
+    fsLayer.hidden = false; document.body.classList.add('area-full');
+    placeArea(w);
+    emit('fullscreen', name);
+  }
+  function closeFull() {
+    const w = widgets.get(fullName);
+    fullName = null;
+    fsLayer.hidden = true; document.body.classList.remove('area-full');
+    if (w) { w.full = false; cardsEl.append(w.el); applyArea(w); }
+    emit('fullscreen', null);
   }
 
   // ------------------------------------------------------------ connectors
@@ -845,6 +952,7 @@ export function createBoard(ctx) {
   // ------------------------------------------------------------ keyboard
   function typing(t) { return t && (t.closest?.('input, textarea, select') || t.isContentEditable); }
   addEventListener('keydown', (e) => {
+    if (fullName) return;   // an area is full screen: the board behind it hears no shortcuts
     if (e.key === ' ' && !typing(e.target)) { spaceDown = true; stage.classList.add('hand'); e.preventDefault(); }
     if (typing(e.target) || document.body.classList.contains('taking')) return;
     const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
@@ -908,7 +1016,7 @@ export function createBoard(ctx) {
     get view() { return view; }, get vp() { return vp; }, get tool() { return tool; }, get shapeKind() { return shapeKind; },
     get sel() { return sel; }, get edges() { return edges; }, get zones() { return zones; }, get settings() { return { snapOn, guidesOn, gridOn, edgesOn, zonesOn, hiddenKinds }; },
     on(kind, fn) { on[kind].push(fn); return () => { on[kind] = on[kind].filter((f) => f !== fn); }; },
-    setContent, setWidget, setView, fit, fitAll, fitInitial, fitSelection, focusRect, zoomBy, zoomTo, worldAt, rectOf, widgetRect,
+    setContent, setWidget, setArea, openFull, closeFull, get fullArea() { return fullName; }, setView, fit, fitAll, fitInitial, fitSelection, focusRect, zoomBy, zoomTo, worldAt, rectOf, widgetRect,
     flyToCard(id, k = 0.9, ms = 700) { const c = cards.get(id); if (c) focusRect(rectOf(c), k, ms); },
     flyToPoint(x, y, k = 0.8, ms = 800) { setView({ cx: x, cy: y, k }, ms); },
     select, selectEdge, setTool, setShape(s) { shapeKind = s; setTool('shape'); },

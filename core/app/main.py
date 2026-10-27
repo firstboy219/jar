@@ -673,6 +673,26 @@ async def canvas_live_ws(websocket: WebSocket):
             unsubscribe()
 
 
+class AreaIn(BaseModel):
+    w: float | None = None
+    h: float | None = None
+    locked: bool = False
+
+
+@app.get("/api/v1/canvas/areas")
+async def canvas_areas(device: dict = Depends(owner_device_auth)):
+    """The size and lock the owner gave each desk area (ADR-062)."""
+    return {"areas": await canvas.areas()}
+
+
+@app.put("/api/v1/canvas/areas/{name}")
+async def canvas_area_put(name: str, a: AreaIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return await canvas.set_area(name, a.model_dump(), f"device:{device['name']}")
+    except canvas.CanvasError as e:
+        raise HTTPException(422, str(e))
+
+
 @app.get("/api/v1/canvas/live/{task_id}/frame")
 async def canvas_live_frame(task_id: int, context: str = "utama", device: dict = Depends(device_auth)):
     got = live.frame(task_id, context[:80])

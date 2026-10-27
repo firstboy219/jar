@@ -55,6 +55,7 @@ $('#login-form').addEventListener('submit', async (e) => {
     $('#password').value = '';
     $('#login').hidden = true;
     await loadContexts();
+    loadAreas();
   } catch (err) { $('#login-error').textContent = err.message; }
 });
 
@@ -308,8 +309,32 @@ function panelFor(name) {
   const e = el('div', 'card panel');
   e.style.setProperty('--c', '#67e8f9');
   board.setWidget(name, e, PANELS[name]);
+  if (areaLayout[name]) board.setArea(name, areaLayout[name]);
   return (deskPanels[name] = { el: e, ...PANELS[name] });
 }
+
+// The areas' sizes and locks (ADR-062) are the owner's, kept on the server so the phone and the browser show the same desk.
+let areaLayout = {};
+async function loadAreas() {
+  try { areaLayout = (await api.req('GET', '/api/v1/canvas/areas')).areas || {}; } catch { return; }
+  for (const [name, layout] of Object.entries(areaLayout)) if (deskPanels[name]) board.setArea(name, layout);
+}
+const areaSaves = {};
+board.on('widget', (a) => {
+  areaLayout[a.name] = { w: a.w, h: a.h, locked: a.locked };
+  clearTimeout(areaSaves[a.name]);
+  areaSaves[a.name] = setTimeout(() => api.req('PUT', `/api/v1/canvas/areas/${a.name}`, areaLayout[a.name]).catch((err) => toast(err.message, true)), 400);
+  if (a.reason === 'lock') toast(a.locked ? 'Area dikunci — ukurannya tidak bisa diubah.' : 'Kunci dibuka — geser tepi area untuk mengubah ukurannya.');
+});
+// full screen: in the phone app the app hides its own bars and buttons too, so the area really fills the screen
+board.on('fullscreen', (name) => {
+  try { window.JarvisHost?.fullscreen?.(!!name); } catch { /* an older app */ }
+  if (!window.JarvisHost?.fullscreen) {
+    try { if (name && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {}); else if (!name && document.fullscreenElement) document.exitFullscreen?.(); } catch { /* not allowed here */ }
+  }
+});
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && board.fullArea) board.closeFull(); });
+window.__jarvisAreaExit = () => { if (board.fullArea) board.closeFull(); };   // the phone's Back button
 
 // The player and the meeting recorder (ADR-054): feature cards at fixed places; the camera flies to one when it shows up.
 let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null, workersCard = null, devteamCard = null;
@@ -446,4 +471,4 @@ function onGesture(e) {
 dockApi = initDock({ api, toast, embedded: !!fromApp.embedded });
 addEventListener('keydown', (e) => { if (e.key === 'Home' && !e.target.closest('input, textarea, select')) board.fitAll(480); });
 if (fromApp.token) api.token = fromApp.token;
-if (api.token) loadContexts().catch((err) => toast(err.message, true)); else showLogin();
+if (api.token) { loadContexts().catch((err) => toast(err.message, true)); loadAreas(); } else showLogin();

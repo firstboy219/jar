@@ -1844,6 +1844,19 @@ async def test_v4_f12_a_failed_deploy_sends_the_job_back_to_coder_and_a_deployed
     assert await devteam.check_deploys() == 0                                              # nothing is moved twice
 
 
+async def test_v4_f12_the_owner_sizes_and_locks_desk_areas_for_every_device(pool):
+    from app import main
+    dev = {"name": "HP pemilik", "scope": "owner"}
+    assert (await main.canvas_areas(device=dev))["areas"] == {}
+    await main.canvas_area_put("devteam", main.AreaIn(w=1800, h=900, locked=False), device=dev)
+    await main.canvas_area_put("devteam", main.AreaIn(w=1850, h=None, locked=True), device=dev)     # locked, height back to "grows"
+    await main.canvas_area_put("workers", main.AreaIn(w=500), device=dev)
+    assert (await main.canvas_areas(device=dev))["areas"] == {"devteam": {"w": 1850, "h": None, "locked": True},
+                                                            "workers": {"w": 500, "h": None, "locked": False}}
+    with pytest.raises(main.HTTPException):
+        await main.canvas_area_put("../etc", main.AreaIn(w=300), device=dev)
+
+
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
     from app import assistant
     brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200

@@ -690,3 +690,39 @@ async def search_refs(context: str, query: str, limit: int = 20) -> list[dict]:
     for r in await db.pool().fetch("SELECT id, title FROM stage_history WHERE title ILIKE $1 ORDER BY id DESC LIMIT $2", q, limit):
         out.append({"ref": f"shown:{r['id']}", "title": r["title"], "kind": "tampilan"})
     return out[:limit]
+
+
+# ---------- the desk's areas (ADR-062): the size and lock the owner gave each one, shared by every device ----------
+
+AREAS_KEY = "desk:areas"
+_AREA = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def clean_area(name: str, layout: dict) -> dict:
+    """One area's layout as stored (pure; unit-tested): width 220–2600, height 140–2600 or none (grows with its content), locked."""
+    if not _AREA.match(name or ""):
+        raise CanvasError("nama area tidak dikenal")
+    def num(v, lo, hi):
+        try:
+            return int(min(hi, max(lo, round(float(v)))))
+        except (TypeError, ValueError):
+            return None
+    w = num(layout.get("w"), 220, 2600)
+    h = None if layout.get("h") in (None, "") else num(layout.get("h"), 140, 2600)
+    return {"w": w, "h": h, "locked": bool(layout.get("locked"))}
+
+
+async def areas() -> dict:
+    v = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", AREAS_KEY)
+    return v if isinstance(v, dict) else {}
+
+
+async def set_area(name: str, layout: dict, actor: str) -> dict:
+    clean = clean_area(name, layout)
+    have = await areas()
+    if len(have) >= 60 and name not in have:
+        raise CanvasError("terlalu banyak area")
+    have[name] = clean
+    await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                            AREAS_KEY, have)
+    return clean

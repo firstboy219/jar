@@ -434,3 +434,13 @@ export function attachRefusal(file, count) {
   if (file.size > ATTACH_BYTES) return `${file.name} lebih dari ${ATTACH_BYTES / 1_000_000} MB`;
   return '';
 }
+
+// ---------- areas (ADR-062): how big the owner may make a desk area ----------
+
+export const AREA_MIN = { w: 220, h: 140 }, AREA_MAX = { w: 2600, h: 2600 };
+/** A size the owner dragged to, kept within sensible bounds; h null = the area grows with its content. */
+export function clampArea({ w, h }) {
+  const cw = Math.round(Math.min(AREA_MAX.w, Math.max(AREA_MIN.w, Number(w) || AREA_MIN.w)));
+  const ch = h == null || h === '' ? null : Math.round(Math.min(AREA_MAX.h, Math.max(AREA_MIN.h, Number(h) || AREA_MIN.h)));
+  return { w: cw, h: ch };
+}
