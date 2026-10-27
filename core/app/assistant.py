@@ -708,6 +708,22 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await send({"type": "say", "text": reply})
         return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
+    if asked and asked.name == "draft_status":   # "sudah jadi drafnya?" (ADR-070)
+        said = await _draft_status(session_id)
+        if said is None:   # never started (a promise the model made and did not keep): start it now, from what was asked before
+            earlier = [r["content"] for r in await db.pool().fetch(
+                """SELECT content FROM messages WHERE session_id = $1 AND role = 'user' AND created_at > now() - interval '2 hours'
+                   ORDER BY id DESC LIMIT 12""", session_id)]
+            request = next((m for m in earlier if (i := router.parse_action(m)) and i.name == "write_draft"), None)
+            if request:
+                text, asked = request, router.Intent("write_draft", {"text": request})
+            else:
+                said = "Belum ada draf yang sedang kutulis. Bilang mis. \"tolong balas email ini\" sambil membagikan layarnya, atau tempel emailnya di sini."
+        if said is not None:
+            if speak_live:
+                await send({"type": "say", "text": said})
+            return Answer(said, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
+                          route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
     if asked and asked.name == "write_draft":
         if screen and not screen_text:   # a browser shares pictures only: read the email on it first
             from . import screen_reader
@@ -984,6 +1000,26 @@ def _direct_action(text: str, stt: dict | None, screen: str | None, screen_text:
         return None
     action = router.parse_action(text)
     return None if action and action.name == "write_draft" else action
+
+
+async def _draft_status(session_id: str) -> str | None:
+    """The latest draft this conversation asked for: still being written, written (shown again in the chat), failed — or None (none started)."""
+    row = await db.pool().fetchrow(
+        """SELECT id, status, title, left(coalesce(error, ''), 160) AS error FROM tasks WHERE session_id = $1 AND title LIKE $2
+           AND created_at > now() - interval '2 hours' ORDER BY id DESC LIMIT 1""", session_id, workers.DRAFT_TITLE + "%")
+    if not row:
+        return None
+    if row["status"] in ("queued", "running"):
+        return "Drafnya masih kutulis — lihat bilahnya di chat ini; biasanya kurang dari semenit."
+    if row["status"] == "completed":
+        draft = writer.shown.get(row["id"])
+        if draft:
+            from . import hub
+            await hub.broadcast({"type": "progress", "session_id": session_id, "task_id": row["id"], "title": row["title"][:120],
+                                 "pct": 100, "text": "Selesai", "extra": {"draft": draft}})
+            return "Sudah jadi — drafnya kutampilkan lagi di bawah."
+        return "Sudah jadi — teksnya ada di kartu Draf balasan di Meja dan file .docx-nya di menu Dokumen."
+    return f"Drafnya gagal ditulis ({row['error'] or row['status']}). Bilang \"tolong balas email ini\" lagi untuk mencoba ulang."
 
 
 async def start_draft(request: str, session_id: str, actor: str, device_id, location, private: bool,
