@@ -8,7 +8,7 @@ const typing = (i) => i.addEventListener('keydown', (e) => e.stopPropagation());
 
 export const JOB_STATUS = {
   analysing: 'bisan menulis spesifikasi', coding: 'coder membangun', testing: 'diuji penguji otomatis', reviewing: 'qaqa memeriksa',
-  awaiting_owner: 'menunggu persetujuanmu', done: 'selesai', failed: 'berhenti', cancelled: 'dibatalkan',
+  awaiting_owner: 'menunggu persetujuanmu', done: 'selesai', failed: 'berhenti', cancelled: 'dibatalkan', needs_human: 'butuh pengembang manusia',
 };
 /** Which member a job is with right now (pure; unit-tested). */
 export const jobHolder = (status) => ({ analysing: 'bisan', coding: 'coder', reviewing: 'qaqa' }[status] || '');
