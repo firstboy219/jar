@@ -66,9 +66,8 @@ export function takeAppParams(hash) {
   return { token, embedded, rest: rest.length ? `#${rest.join('&')}` : '' };
 }
 
-/** Where the fixed desk panels (requests, n8n, storage, player, meeting) sit on the board: a ring around the middle (the server's x and z). */
+/** Where the fixed desk panels (n8n, storage, player, meeting) sit on the board: a ring around the middle (the server's x and z). */
 export const PANELS = {
-  prompts: { x: -760, y: -430, w: 330, title: 'Permintaanmu' },
   n8n: { x: 440, y: -430, w: 330, title: 'Otomasi (n8n)' },
   storage: { x: -165, y: 700, w: 330, title: 'Simpanan' },
   player: { x: -1130, y: 110, w: 330, title: 'Pemutar' },
