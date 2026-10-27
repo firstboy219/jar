@@ -1,6 +1,6 @@
 // The board's interface (ADR-055): tool rail, zoom bar, minimap, inspector, context menu and the search palette — the parts around the paper
 // that make it feel like a design tool. They only call the board; the board talks to the server.
-import { matchCards, miniMapFit, rectsBounds } from './lib.js';
+import { clearableIds, matchCards, miniMapFit, rectsBounds } from './lib.js';
 import { SHAPE_LABEL, SWATCHES } from './board.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -168,6 +168,23 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
     } else { head.append(el('b', null, 'Papan'), close); insp.append(head, ...boardPanels()); }
   }
 
+  /** A layer's "Bersihkan": every unlocked card of that kind leaves the board in one gesture — one confirmation, one undo. */
+  function clearBtn(k) {
+    const pick = () => clearableIds([...board.cards.values()].map((c) => c.data), k.kind, (d) => board.isLocked(board.cards.get(d.id)));
+    const free = pick().length;
+    const b = lab('Bersihkan', () => {
+      const ids = pick();
+      if (!ids.length) return;
+      if (ids.length > 20) toast(`Membersihkan ${ids.length} kartu…`);
+      board.select(ids);
+      board.removeSelection().catch((e) => toast(e.message, true));
+    }, 'danger');
+    b.title = free ? `Lepas semua ${free} kartu ${k.title} dari papan` : 'Semua kartu terkunci';
+    b.disabled = !free;
+    b.addEventListener('click', (e) => e.preventDefault());   // the row is a label: this click must not toggle the layer as well
+    return b;
+  }
+
   function boardPanels() {
     const s = board.settings;
     const kinds = kindsFor();
@@ -175,7 +192,7 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
       section('Tampilan', toggle('Titik-titik kisi', s.gridOn, (v) => board.setGrid(v)), toggle('Tempel ke kisi saat menggeser', s.snapOn, (v) => board.setSnap(v)),
         toggle('Garis bantu pintar', s.guidesOn, (v) => board.setGuides(v)), toggle('Garis penghubung', s.edgesOn, (v) => board.setEdgesVisible(v)), toggle('Nama area', s.zonesOn, (v) => board.setZones(v))),
       kinds.length ? section('Lapisan', ...kinds.map((k) => { const l = el('label', 'layer'); const c = el('input'); c.type = 'checkbox'; c.checked = !s.hiddenKinds.has(k.kind);
-        c.addEventListener('change', () => board.setKindHidden(k.kind, !c.checked)); const dot = el('i', 'dot'); dot.style.background = k.color; l.append(c, dot, el('span', null, k.title), el('em', null, String(k.count))); return l; })) : '',
+        c.addEventListener('change', () => board.setKindHidden(k.kind, !c.checked)); const dot = el('i', 'dot'); dot.style.background = k.color; l.append(c, dot, el('span', null, k.title), el('em', null, String(k.count)), clearBtn(k)); return l; })) : '',
       section('Tindakan', group(lab('Pas semua', () => board.fitAll(420)), lab('Rapikan kartu', () => board.arrange().catch((e) => toast(e.message, true))), lab('Isi dari Simpanan', () => fillFromLibrary()), lab('Riwayat', () => openHistory()))),
       (() => { const d = el('details', 'tips'); d.append(el('summary', null, 'Pintasan keyboard'), el('div', 'keys',
         'V pilih · H geser · N catatan · T teks · R bentuk · F bingkai · C penghubung\nSpasi+seret geser · roda zoom · Shift+1 pas semua · 0 = 100%\nCtrl+Z urungkan · Ctrl+D gandakan · Ctrl+A semua · Del hapus\nPanah geser 1px (Shift 10) · [ ] belakang/depan · Ctrl+L kunci\nKlik dua kali kertas = catatan baru · Ctrl+K cari')); return d; })(),

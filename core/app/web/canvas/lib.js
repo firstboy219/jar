@@ -31,6 +31,11 @@ export function diffCards(before, after) {
   return { added, removed, moved, changed };
 }
 
+/** The cards of one kind a mass cleanup may take off the board: the same kind, and never one that is locked. Pure. */
+export function clearableIds(cards, kind, isLocked) {
+  return cards.filter((c) => c.kind === kind && !isLocked(c)).map((c) => c.id);
+}
+
 /** Smooth flight: eased interpolation 0..1. */
 export function ease(t) {
   const k = Math.min(Math.max(t, 0), 1);
