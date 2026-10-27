@@ -1123,3 +1123,11 @@ Owner (2026-10-27): the notes and the meetings must be reachable on the web too 
   each source plays from its moment), the transcript as speaker turns with search and a play button per turn (the minute-long audio pieces),
   renaming a speaker (rebuilds the minutes), the .docx, "Buka di Catatan" (the meeting's page with its to-dos), delete, and "Mulai rapat"
   (opens the desk's meeting card, which records in the browser after the consent tick). No new server API; the notes CSP allows `media-src blob:`.
+
+## ADR-064 — The app's tool strip on the web desk (Blueprint v4 Fase 12)
+Owner (2026-10-27): the web gets the app's tool panel — share screen, camera, mute/unmute and the rest.
+- On the web (not inside the app) the dock's media buttons move out of its header into a column of round buttons at the bottom left, like the
+  app's native strip: 💬 chat (open / minimize, red dot for unread), 🎤/🔇 microphone (pulses while listening), 📷 camera, 🖥 share screen,
+  🔊 Jarvis' voice in this browser. Same functions as before (browser microphone with voice detection, camera / screen frames to Jarvis).
+- The round chat bubble on the right is not used on the web any more (the strip's 💬 replaces it); the minimap moves right of the strip; on short
+  screens the strip lies flat; on a phone browser the open chat leaves room for it. Inside the app nothing changes (the native strip has these).
