@@ -388,7 +388,8 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
         if kind == "selfimprove":  # a flow watcher fix finished: its issues are handled
             from . import auditor
             await auditor.on_fix_done(task_id)
-        await reports.from_task(task_id, title, result, session_id)
+        from . import results
+        await reports.from_task(task_id, title, results.spoken(result), session_id)   # the structured block is for the desk, not the voice
 
 
 async def _remember_episode(task_id: int) -> None:
