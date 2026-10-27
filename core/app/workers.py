@@ -77,6 +77,23 @@ def _sem_() -> asyncio.Semaphore:
     return _sem
 
 
+def on_board(kind: str) -> bool:
+    """Dev-team tasks (ADR-059) show up in the desk's Tim Dev area, not on the owner's worker list (desk card, phone)."""
+    return kind != "devteam"
+
+
+def owner_tasks(rows: list[dict]) -> list[dict]:
+    """The phone's worker list (`Board.workers`, main.py): the owner's own tasks, never the dev team's."""
+    return [r for r in rows if on_board(r.get("kind"))]
+
+
+async def _announce(row, status: str) -> None:
+    """The `task` event behind the worker list; a dev-team task says nothing here, so it cannot slip back in
+    through a status change either (its own area announces it)."""
+    if on_board(row["kind"]):
+        await hub.broadcast({"type": "task", "id": row["id"], "title": row["title"], "status": status, "kind": row["kind"]})
+
+
 async def spawn(title: str, instruction: str, session_id: str, actor: str, device_id=None,
                 location: Location | None = None, kind: str = "owner", image: str | None = None,
                 category: str | None = None, private: bool = False, company_id: str | None = None, heavy: bool = False) -> dict:
@@ -102,7 +119,7 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
     if kind == "owner" and not private:  # the task appears on the desk (the canvas) the moment it exists, not when it ends (ADR-051)
         from . import canvas
         await canvas.auto(f"task:{task['id']}", company_id)
-    await hub.broadcast({"type": "task", "id": task["id"], "title": task["title"], "status": "queued", "kind": kind})
+    await _announce(task, "queued")
     if kind not in ("owner", "meeting"):  # everything JARVIS starts by itself is listed for the owner
         from . import ops
         ops.note(f"Mulai {ops.KIND_TEXT.get(kind, kind)} #{task['id']}: {task['title']}.")
@@ -124,7 +141,7 @@ async def _run(task_id: int, context: str) -> None:
         if row is None:  # cancelled while queued
             return
         kind = row["kind"]
-        await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "running", "kind": kind})
+        await _announce(row, "running")
         # internal kinds carry their own instructions; the task number lets tools (ask_owner, documents) refer to it
         brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
         if kind == "owner" and row["category"] == "coding":
@@ -194,7 +211,7 @@ async def _run(task_id: int, context: str) -> None:
                 """UPDATE tasks SET status = 'completed', result = $2, finished_at = now(),
                    prompt_tokens = $3, completion_tokens = $4 WHERE id = $1""",
                 task_id, text, result.prompt_tokens, result.completion_tokens)
-            await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "completed", "kind": kind})
+            await _announce(row, "completed")
             await _deliver(task_id, kind, row["title"], text, row["session_id"])
             await _remember_episode(task_id)
             if kind == "owner" and not row["private"]:  # the result becomes a card in its galaxy (the company's own, or utama) — ADR-049
@@ -207,7 +224,7 @@ async def _run(task_id: int, context: str) -> None:
                 "UPDATE tasks SET status = $2, finished_at = now(), progress = coalesce($3, progress) "
                 "WHERE id = $1 AND status IN ('queued', 'running')",
                 task_id, "stopped" if stopped else "cancelled", progress_text(task_id) if stopped else None)
-            await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "stopped" if stopped else "cancelled"})
+            await _announce(row, "stopped" if stopped else "cancelled")
             raise
         except Exception as e:
             log.exception("worker %s failed", task_id)
@@ -216,7 +233,7 @@ async def _run(task_id: int, context: str) -> None:
             await db.pool().execute(
                 "UPDATE tasks SET status = 'failed', error = $2, finished_at = now() WHERE id = $1",
                 task_id, str(e)[:1000])
-            await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "failed", "kind": kind})
+            await _announce(row, "failed")
             await _remember_episode(task_id)  # the lesson of a failure is worth keeping too
             # Background understanding failing is not worth interrupting for; an empty balance is
             # reported once by billing.notify_exhausted instead of once per task.
@@ -511,33 +528,37 @@ async def retry(task_id: int, actor: str) -> dict | None:
         """UPDATE tasks SET status = 'queued', instruction = $2, started_at = NULL, finished_at = NULL, error = NULL
            WHERE id = $1""", task_id, instruction[:16000])
     await audit.record(actor, "task.retried", f"task:{task_id}")
-    await hub.broadcast({"type": "task", "id": task_id, "title": row["title"], "status": "queued", "kind": row["kind"]})
+    await _announce(row, "queued")
     _start(task_id)
     return {"id": task_id, "status": "queued"}
 
 
 async def close(task_id: int, actor: str) -> bool:
     """The owner does not want a stopped/failed task any more."""
-    r = await db.pool().execute(
-        "UPDATE tasks SET status = 'cancelled' WHERE id = $1 AND status IN ('stopped', 'failed')", task_id)
-    if r.endswith("1"):
-        await audit.record(actor, "task.closed", f"task:{task_id}")
-        await hub.broadcast({"type": "task", "id": task_id, "title": "", "status": "cancelled"})
-        return True
-    return False
+    row = await db.pool().fetchrow(
+        "UPDATE tasks SET status = 'cancelled' WHERE id = $1 AND status IN ('stopped', 'failed') "
+        "RETURNING id, title, kind", task_id)
+    if row is None:
+        return False
+    await audit.record(actor, "task.closed", f"task:{task_id}")
+    await _announce(row, "cancelled")
+    return True
 
 
 async def stopped() -> list[dict]:
+    """The owner's halted tasks — the dev team's own are handled in its area (ADR-059)."""
     rows = await db.pool().fetch(
         "SELECT id, title, kind, finished_at FROM tasks WHERE status = 'stopped' ORDER BY id DESC LIMIT 10")
-    return [dict(r) for r in rows]
+    return owner_tasks([dict(r) for r in rows])
 
 
 async def active() -> list[dict]:
+    """The owner's working tasks (the desk card, the phone's worker list, '_situation'); a dev team task (ADR-059)
+    is announced by its own area instead, so it never shows up as one of the owner's workers."""
     rows = await db.pool().fetch(
         """SELECT id, title, status, kind, category, created_at, started_at, phase, cost_usd::float AS cost_usd,
                   budget_usd::float AS budget_usd, model_used, retries FROM tasks WHERE status IN ('queued', 'running') ORDER BY id""")
-    return [dict(r) for r in rows]
+    return owner_tasks([dict(r) for r in rows])
 
 
 async def recent(limit: int = 50) -> list[dict]:
