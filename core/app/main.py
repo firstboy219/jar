@@ -62,6 +62,7 @@ async def lifespan(app: FastAPI):
         log.info("resumed %d interrupted worker task(s)", resumed)
     if waiting := await devteam.resume():
         log.info("dev team: %d proposal(s) still under test", waiting)
+    devteam_watch = asyncio.create_task(devteam.watch())
     ticker = asyncio.create_task(reports.run_forever())
 
     async def purge_daily():
@@ -144,7 +145,7 @@ async def lifespan(app: FastAPI):
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver, hands):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver, hands, devteam_watch):
         t.cancel()
     await db.close()
 

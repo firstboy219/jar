@@ -23,6 +23,7 @@ Blueprint v4 Fase 0 (ADR-047) — the control point is the admin page:
     switched T2 on there (decision K2); display changes stay locked until screenshots exist (Phase 4).
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -112,6 +113,20 @@ def _write_request(change_id: int, action: str, **extra) -> None:
     tmp = ROOT / "requests" / f".{change_id}-{action}.tmp"
     tmp.write_text(json.dumps({"id": change_id, "action": action, **extra}))
     tmp.rename(ROOT / "requests" / f"{change_id}-{action}.json")  # the runner watches for *.json
+
+
+async def sync_mirror(wait_s: float = 40.0) -> bool:
+    """Make the runner refresh Hermes' read-only copy of main (it does that at the start of every run; the request itself is just
+    moved aside). A worker that branches from a stale copy produces changes that conflict at deploy. True when it happened in time."""
+    _write_request(0, "sync")
+    path = ROOT / "requests" / "0-sync.json"
+    waited = 0.0
+    while waited < wait_s:
+        if not path.exists():
+            return True
+        await asyncio.sleep(2)
+        waited += 2
+    return False
 
 
 async def propose(branch: str, title: str, why: str, task_id: int | None = None, design_id: int | None = None) -> dict:
