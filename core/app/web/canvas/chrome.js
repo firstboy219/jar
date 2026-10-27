@@ -49,10 +49,23 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
   const rail = el('nav', 'toolrail');
   rail.setAttribute('aria-label', 'Alat papan');
   const toolBtns = {};
-  const addTool = (name, ico, title) => { const b = btn(ico, title, () => board.setTool(name), 'tool'); toolBtns[name] = b; rail.append(b); return b; };
+  // ADR-071: only the two tools used all the time show; the rest folds behind ⌄ (remembered per browser / phone)
+  let target = rail;
+  const addTool = (name, ico, title) => { const b = btn(ico, title, () => board.setTool(name), 'tool'); toolBtns[name] = b; target.append(b); return b; };
   addTool('select', 'select', 'Pilih (V)');
   addTool('hand', 'hand', 'Geser kertas (H atau tahan Spasi)');
-  rail.append(el('i', 'sep'));
+  const more = el('div', 'railmore');
+  const fold = el('button', 'ib railfold', '⌄'); fold.dataset.gesture = 'ok';
+  const setFold = (open) => {
+    more.hidden = !open; fold.textContent = open ? '⌃' : '⌄';
+    fold.title = open ? 'Ciutkan alat lainnya' : 'Tampilkan alat lainnya (catatan, teks, bentuk, bingkai, penghubung, urungkan…)';
+    fold.setAttribute('aria-label', fold.title); fold.classList.toggle('on', open);
+    try { localStorage.setItem('jarvis_rail_open', open ? '1' : '0'); } catch { /* private mode */ }
+  };
+  fold.addEventListener('click', (e) => { e.stopPropagation(); setFold(more.hidden); });
+  rail.append(fold, more);
+  target = more;
+  more.append(el('i', 'sep'));
   addTool('note', 'note', 'Catatan (N) — klik, atau seret untuk menentukan ukuran');
   addTool('text', 'text', 'Teks (T)');
   const shapeBtn = addTool('shape', 'rect', 'Bentuk (R) — klik lagi untuk memilih jenis');
@@ -62,10 +75,15 @@ export function createChrome({ board, api, toast, canvasId, refresh, fillFromLib
   for (const k of Object.keys(SHAPE_LABEL)) { const b = btn(k, SHAPE_LABEL[k], () => { board.setShape(k); flyout.hidden = true; shapeBtn.replaceChildren(icon(k)); }); flyout.append(b); }
   shapeBtn.addEventListener('click', () => { if (board.tool === 'shape') flyout.hidden = !flyout.hidden; });
   addEventListener('pointerdown', (e) => { if (!flyout.hidden && !e.target.closest('.flyout, .toolrail')) flyout.hidden = true; });
-  rail.append(flyout, el('i', 'sep'));
-  rail.append(btn('card', 'Tambahkan kartu dari Simpanan (Ctrl+K)', () => openPalette('add')));
+  more.append(flyout, el('i', 'sep'));
+  more.append(btn('card', 'Tambahkan kartu dari Simpanan (Ctrl+K)', () => openPalette('add')));
   const undoB = btn('undo', 'Urungkan (Ctrl+Z)', () => board.undo()), redoB = btn('redo', 'Ulangi (Ctrl+Shift+Z)', () => board.redo());
-  rail.append(el('i', 'sep'), undoB, redoB);
+  more.append(el('i', 'sep'), undoB, redoB);
+  let wasOpen = false;
+  try { wasOpen = localStorage.getItem('jarvis_rail_open') === '1'; } catch { /* private mode */ }
+  setFold(wasOpen);
+  // a shortcut that picks a folded tool shows it, so the owner sees which tool is on
+  board.on('tool', (t) => { if (more.hidden && toolBtns[t] && more.contains(toolBtns[t])) setFold(true); });
   document.body.append(rail);
   board.on('tool', (t) => {
     for (const [name, b] of Object.entries(toolBtns)) b.classList.toggle('on', name === t);

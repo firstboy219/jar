@@ -57,7 +57,7 @@ test('the desk follows the owner\'s new task once, and never grabs the camera fr
   assert.equal(ago(5), '5 dtk');
   assert.equal(ago(150), '3 mnt');
   assert.equal(ago(7200), '2.0 jam');
-  assert.deepEqual(Object.keys(PANELS).sort(), ['devteam', 'doc', 'draft', 'google', 'image', 'map', 'meeting', 'n8n', 'player', 'storage', 'text', 'video', 'web', 'workers']);
+  assert.deepEqual(Object.keys(PANELS).sort(), ['devteam', 'doc', 'draft', 'google', 'image', 'map', 'meeting', 'n8n', 'player', 'projects', 'storage', 'text', 'video', 'web', 'workers']);
   // no two desk panels overlap (each is at most ~520 units tall)
   const r = Object.entries(PANELS).map(([n, p]) => ({ n, x: p.x, y: p.y, w: p.w, h: 520 }));
   for (const a of r) for (const b of r) if (a.n < b.n) {

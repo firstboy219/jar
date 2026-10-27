@@ -1184,3 +1184,26 @@ The owner asked "apakah sudah jadi? draftnya" after Jarvis had promised a draft 
 - "sudah jadi/mana/belum … draf(nya)/balasannya" is a direct intent: a draft being written → "masih kutulis" (the bar is in the chat); a written one
   is shown again in the chat (writer keeps the latest drafts per task); a failed one says why; NONE started → the latest request of this
   conversation that asked for a draft is started now, with the screen being shared — a broken promise is kept instead of repeated.
+
+## ADR-071 — The tool rail shows select and hand; the rest folds (Blueprint v4 Fase 12)
+Owner (2026-10-27): by default only the hand and the cursor; the rest collapsed behind an expand icon. ⌄ unfolds note, text, shape, frame,
+connector, add-from-storage, undo/redo (remembered per browser/phone); a keyboard shortcut that picks a folded tool unfolds it.
+
+## ADR-072 — "🕘 Terakhir": where the latest request landed (Blueprint v4 Fase 12)
+The desk's top bar takes the camera to where the owner's latest request left its mark on the main board — the newest of the latest owner
+task's card (still on the board) and the feature cards (player, video, picture, document, map, web, notes, draft) — and makes it glow; the
+request itself is named. `live.last_activity()` in the desk snapshot.
+
+## ADR-073 — Projects: a team of workers by role, a model each, a schedule, web work (Blueprint v4 Fase 12)
+Owner (2026-10-27): a menu to watch the projects / schedules he makes; per project the workers' roles and how many, an AI model per worker,
+and activity that operates websites (e.g. helping to apply for jobs).
+- `projects`, `project_roles` (migration 032): name, goal, schedule (manual / hourly / daily / weekdays / weekly at a WIB time), roles with a
+  brief, 1–5 workers, an optional OpenRouter model (tool-capable, checked against the catalog), and "operates websites". ≤ 6 workers per run.
+- A run spawns each worker as an ordinary owner task (all worker rules, desk cards, live stations, takeover, reports); same-role workers split the
+  work by number; web roles get the browser brief (work visibly, stop before sending anything personal and ask). One run at a time per project;
+  `projects.tick()` every minute starts the due ones.
+- **A model per worker**: `tasks.model_override`; the gateway knows a Hermes call's task (session `task-<id>`) and puts that model first
+  (`gateway.override_route` / `with_override`), the category's routes stay behind it as fallbacks; never for a private turn.
+- The desk's **Proyek** area (and "🗂 Proyek" in the top bar, opening it full screen): projects with schedule, next run, roles × workers × model,
+  ▶ run now, pause/activate, edit, delete; the latest run's workers with status, model, result or error and "Lihat" (fly to the worker's card);
+  and the schedules Jarvis made in chat (Hermes' cron jobs), read only.

@@ -152,6 +152,39 @@ def _local_route(provider: dict | None) -> Route | None:
     return Route(provider["name"], LOCAL_MODEL, provider["base_url"].rstrip("/"), "", False, provider["vision"])
 
 
+_overrides: dict[int, tuple[float, str | None]] = {}
+
+
+async def override_route(task_id: int | None, caller: str, private: bool) -> "Route | None":
+    """A worker with a model of its own (a project role's pick, ADR-073): that model on OpenRouter, tried first. Cached a minute per task."""
+    if not task_id or private:
+        return None
+    now = time.time()
+    hit = _overrides.get(task_id)
+    if not hit or now - hit[0] > 60:
+        model = await db.pool().fetchval("SELECT model_override FROM tasks WHERE id = $1", task_id)
+        hit = _overrides[task_id] = (now, model)
+        while len(_overrides) > 500:
+            _overrides.pop(next(iter(_overrides)))
+    if not hit[1]:
+        return None
+    await _load()
+    p = _cache["providers"].get("openrouter")
+    if not p or not p["enabled"]:
+        return None
+    key = provider_key(p, caller)
+    if p["key_env"] and not key:
+        return None
+    return Route(p["name"], hit[1], p["base_url"].rstrip("/"), key, p["cloud"], p["vision"])
+
+
+def with_override(queue: list, route: "Route | None") -> list:
+    """The worker's own model first; the category's routes stay behind it as fallbacks (pure; unit-tested)."""
+    if not route or _is_bad(route):
+        return queue
+    return [route] + [r for r in queue if r != route]
+
+
 async def plan(category: str, *, caller: str = "core", private: bool = False, worker: bool = False) -> list[Route]:
     """Routes to try for one call, in order; never empty (the local model closes the list)."""
     from . import budget
@@ -437,7 +470,8 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
     body = {**body, "stream": True}
     errors: list[str] = []
     att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller in ("hermes", "openjarvis") else None)
-    queue = list(await plan(category, caller=caller, private=private, worker=worker))
+    queue = with_override(list(await plan(category, caller=caller, private=private, worker=worker)),
+                          await override_route(att.task_id, caller, private))
     while queue:
         route = queue.pop(0)
         if why := att.skip(route):
@@ -530,7 +564,8 @@ async def _complete(category: str, body: dict, *, caller: str, session_id: str |
     body = {**body, "stream": False}
     errors: list[str] = []
     att = await modelrouter.Attempts.start(_cache["categories"].get(category), session_id, body if caller in ("hermes", "openjarvis") else None)
-    queue = list(await plan(category, caller=caller, private=private, worker=worker))
+    queue = with_override(list(await plan(category, caller=caller, private=private, worker=worker)),
+                          await override_route(att.task_id, caller, private))
     while queue:
         route = queue.pop(0)
         if why := att.skip(route):

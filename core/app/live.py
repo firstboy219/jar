@@ -448,6 +448,36 @@ async def n8n_recent() -> list[dict]:
     return out
 
 
+PANEL_OF_SLOT = {"music": "player"}   # the stage's slot → the desk panel that shows it (the rest share the name)
+SLOT_WORD = {"music": "musik", "video": "video", "image": "gambar", "doc": "dokumen", "map": "peta", "web": "halaman web", "text": "catatan",
+             "draft": "draf balasan"}
+
+
+async def last_activity() -> dict | None:
+    """Where the owner's latest request left its mark on the main board (ADR-072): the newest of the latest task card still on the board
+    and the feature cards (player, video, picture, document, map, web, notes, draft); with the request itself."""
+    from . import stage
+    ask = await db.pool().fetchrow(
+        """SELECT content, created_at FROM messages WHERE role = 'user' AND route NOT IN ('blocked', 'silent')
+           AND session_id NOT IN ('flowwatch', 'system') AND session_id NOT LIKE 'devteam%' ORDER BY id DESC LIMIT 1""")
+    places = []
+    t = await db.pool().fetchrow(
+        """SELECT t.id, t.title, t.created_at, n.id AS node FROM tasks t
+           JOIN canvas_nodes n ON n.ref = 'task:' || t.id JOIN canvases c ON c.id = n.canvas_id AND c.context = 'utama'
+           WHERE t.kind = 'owner' AND t.company_id IS NULL ORDER BY t.id DESC LIMIT 1""")
+    if t:
+        places.append({"at": t["created_at"].timestamp(), "where": "card", "node": t["node"], "title": t["title"], "what": "tugas"})
+    for slot, card in list(stage._desk.items()):
+        first = (card.get("items") or [{}])[0]
+        places.append({"at": card.get("at") or 0, "where": "panel", "panel": PANEL_OF_SLOT.get(slot, slot), "what": SLOT_WORD.get(slot, slot),
+                       "title": str(first.get("title") or card.get("caption") or SLOT_WORD.get(slot, slot))[:120]})
+    if not places and not ask:
+        return None
+    best = max(places, key=lambda p: p["at"]) if places else {"where": "none"}
+    asked = {"asked": mask(ask["content"])[:160], "asked_at": ask["created_at"].timestamp()} if ask and not sensitive.is_private(ask["content"]) else {}
+    return best | asked
+
+
 async def prompts(limit: int = 6) -> list[dict]:
     """The owner's latest requests and what JARVIS answered (not private ones; sensitive words masked)."""
     rows = await db.pool().fetch(
@@ -492,7 +522,7 @@ async def snapshot(context: str = "utama") -> dict:
         from . import devteam, meetings, stage, workers
         out |= {"n8n": await n8n_recent(), "prompts": await prompts(), "storage": await storage(),
                 "player": stage.desk_player(), "cards": stage.desk_cards(), "meeting": await meetings.desk_card(),
-                "workers": await workers.overview(), "devteam": await devteam.overview()}
+                "workers": await workers.overview(), "devteam": await devteam.overview(), "last_activity": await last_activity()}
     return out
 
 

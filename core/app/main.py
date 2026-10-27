@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import devteam, google_auth, notes
+from . import devteam, google_auth, notes, projects
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -63,6 +63,15 @@ async def lifespan(app: FastAPI):
     if waiting := await devteam.resume():
         log.info("dev team: %d proposal(s) still under test", waiting)
     devteam_watch = asyncio.create_task(devteam.watch())
+
+    async def project_clock():   # scheduled projects (ADR-073)
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await projects.tick()
+            except Exception:
+                log.exception("project schedule check failed")
+    project_ticker = asyncio.create_task(project_clock())
     ticker = asyncio.create_task(reports.run_forever())
 
     async def purge_daily():
@@ -145,7 +154,7 @@ async def lifespan(app: FastAPI):
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver, hands, devteam_watch):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, warm, error_writer, improver, hands, devteam_watch, project_ticker):
         t.cancel()
     await db.close()
 
@@ -1716,6 +1725,62 @@ async def worker_models(device: dict = Depends(owner_device_auth)):
     own = [m for m in cat if m["tools"]]
     own.sort(key=lambda m: (not m["free"], m["price_out"], m["id"]))
     return {"models": [{"id": m["id"], "name": m["name"], "free": m["free"], "price_out": m["price_out"], "vision": m["vision"]} for m in own[:300]]}
+
+
+# ---------- projects (ADR-073) ----------
+
+class ProjectIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    goal: str = Field(default="", max_length=4000)
+    schedule: str = "manual"
+    at_time: str | None = Field(default=None, max_length=5)
+    weekday: int | None = Field(default=None, ge=0, le=6)
+    roles: list = Field(default_factory=list, max_length=6)
+
+
+class ProjectStatusIn(BaseModel):
+    status: str
+
+
+def _projects_call(fn):
+    async def go(*a, **k):
+        try:
+            return jsonable(await fn(*a, **k))
+        except projects.ProjectError as e:
+            raise HTTPException(422, str(e))
+    return go
+
+
+@app.get("/api/v1/projects")
+async def projects_list(device: dict = Depends(owner_device_auth)):
+    return jsonable(await projects.list_())
+
+
+@app.post("/api/v1/projects")
+async def projects_create(p: ProjectIn, device: dict = Depends(owner_device_auth)):
+    return await _projects_call(projects.save)(p.model_dump(), f"device:{device['name']}")
+
+
+@app.put("/api/v1/projects/{project_id}")
+async def projects_update(project_id: int, p: ProjectIn, device: dict = Depends(owner_device_auth)):
+    return await _projects_call(projects.save)(p.model_dump(), f"device:{device['name']}", project_id)
+
+
+@app.patch("/api/v1/projects/{project_id}")
+async def projects_status(project_id: int, s: ProjectStatusIn, device: dict = Depends(owner_device_auth)):
+    return await _projects_call(projects.set_status)(project_id, s.status, f"device:{device['name']}")
+
+
+@app.post("/api/v1/projects/{project_id}/run")
+async def projects_run(project_id: int, device: dict = Depends(owner_device_auth)):
+    return await _projects_call(projects.run)(project_id, f"device:{device['name']}")
+
+
+@app.delete("/api/v1/projects/{project_id}")
+async def projects_delete(project_id: int, device: dict = Depends(owner_device_auth)):
+    if not await projects.delete(project_id, f"device:{device['name']}"):
+        raise HTTPException(404, "proyek tidak ditemukan")
+    return {"ok": True}
 
 
 # ---------- the dev team (ADR-059) ----------
