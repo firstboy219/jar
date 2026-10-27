@@ -45,6 +45,9 @@ export function initDock({ api, toast, embedded }) {
   const scrBtn = embedded || !navigator.mediaDevices?.getDisplayMedia ? null : tool('🖥', 'Bagikan layar ke Jarvis', () => toggleScreen(), 'scr');
   const ttsBtn = strip ? tool('🔊', 'Suara balasan Jarvis (di browser ini)', () => setTts(!ttsOn), 'tts') : mk('🔊', 'Suara balasan Jarvis (di browser ini)', () => setTts(!ttsOn));
   mk('⟳', 'Percakapan baru', () => newConversation());
+  const pipBtn = embedded || !('documentPictureInPicture' in window) ? null : mk('📌', 'Chat mengambang: jendela kecil di atas layar lain (saat berbagi layar)', () => toggleFloating());
+  const pipMic = embedded ? null : mk('🔇', 'Mikrofon', () => toggleMic());
+  pipMic?.classList.add('pipmic');
   const minBtn = mk('💬', 'Ciutkan / buka', () => setOpen(!wantOpen));
   minBtn.classList.add('minimizer');
   // penanda pesan baru saat panel ditutup
@@ -155,6 +158,32 @@ export function initDock({ api, toast, embedded }) {
   }
   form.addEventListener('submit', (e) => { e.preventDefault(); if (sendChat(input.value.trim())) input.value = ''; });
 
+  // ---------- the floating chat (ADR-068): while another tab, window or app is shared, the chat floats above it ----------
+  // Document Picture-in-Picture (Chrome / Edge): the dock itself moves into a small always-on-top window — same messages, typing, paste,
+  // attachments, microphone — and comes back when that window closes.
+  let floating = null;
+  async function openFloating() {
+    const pip = await window.documentPictureInPicture.requestWindow({ width: 380, height: 560 });
+    floating = pip;
+    const css = pip.document.createElement('link'); css.rel = 'stylesheet'; css.href = new URL('style.css', location.href).href;
+    pip.document.head.append(css);
+    pip.document.title = 'Jarvis — chat';
+    pip.document.body.classList.add('pipbody');
+    pip.document.documentElement.classList.add('pip');
+    if (!wantOpen) setOpen(true);
+    dock.classList.add('floating');
+    pip.document.body.append(dock);
+    pipBtn.classList.add('on'); pipBtn.classList.remove('urgent');
+    input.focus();
+    pip.addEventListener('pagehide', () => {
+      floating = null; dock.classList.remove('floating'); document.body.append(dock); pipBtn.classList.remove('on');
+    }, { once: true });
+  }
+  function toggleFloating() {
+    if (floating) { floating.close(); return; }
+    openFloating().catch((err) => toast(`Chat mengambang tidak bisa dibuka: ${err.message || err.name}`, true));
+  }
+
   // ---------- attachments: picked, dropped on the panel, or pasted (ADR-060) ----------
   const attached = [];   // {file, name, id?, error?, url?}
   function drawFiles() {
@@ -227,13 +256,13 @@ export function initDock({ api, toast, embedded }) {
       src.connect(node);
       const m = { stream, ctx, node, vad: new Vad(), muted: false };
       node.port.onmessage = (e) => onAudio(m, e.data);
-      media.mic = m; micBtn.classList.add('on'); micBtn.textContent = '🎤'; micBtn.title = 'Mikrofon hidup — klik untuk mute'; meter.hidden = false; setStatus('🎤 Mendengarkan…');
+      media.mic = m; micBtn.classList.add('on'); micBtn.textContent = '🎤'; micBtn.title = 'Mikrofon hidup — klik untuk mute'; if (pipMic) { pipMic.textContent = '🎤'; pipMic.classList.add('on'); } meter.hidden = false; setStatus('🎤 Mendengarkan…');
     } catch (err) { toast(`Mikrofon tidak bisa dipakai: ${err.message || err.name}`, true); }
   }
   function stopMic() {
     const m = media.mic; if (!m) return;
     m.node.disconnect(); m.stream.getTracks().forEach((t) => t.stop()); m.ctx.close();
-    media.mic = null; micBtn.classList.remove('on'); micBtn.textContent = '🔇'; micBtn.title = 'Mikrofon mati — klik untuk bicara dengan Jarvis'; meter.hidden = true; meterFill.style.width = '0'; setStatus('');
+    media.mic = null; micBtn.classList.remove('on'); micBtn.textContent = '🔇'; micBtn.title = 'Mikrofon mati — klik untuk bicara dengan Jarvis'; if (pipMic) { pipMic.textContent = '🔇'; pipMic.classList.remove('on'); } meter.hidden = true; meterFill.style.width = '0'; setStatus('');
   }
   function onAudio(m, chunk) {
     if (speakingNow()) { m.vad = new Vad(); meterFill.style.width = '0'; return; }   // Jarvis is talking: do not hear itself
@@ -265,8 +294,10 @@ export function initDock({ api, toast, embedded }) {
       media.scr = { stream, ...previewTile('screen', stream) }; scrBtn.classList.add('on');
       stream.getVideoTracks()[0].addEventListener('ended', stopScreen); startFrames();
       addMsg('jarvis', '🖥 Aku melihat layarmu. Bicara atau ketik, mis. "buatkan balasan email ini" — kalau perlu aku tanya dulu. '
-        + 'Kalau emailnya tidak muat di layar, tempel teks lengkapnya di sini.', true);
+        + 'Kalau emailnya tidak muat di layar, tempel teks lengkapnya di sini.'
+        + (pipBtn ? ' Tekan 📌 supaya chat ini mengambang di atas layar yang kamu bagikan.' : ''), true);
       if (!wantOpen) setOpen(true);
+      if (pipBtn && !floating) openFloating().catch(() => pipBtn.classList.add('urgent'));   // needs a fresh click: then 📌 pulses
     } catch (err) { if (err.name !== 'NotAllowedError') toast(`Layar tidak bisa dibagikan: ${err.message || err.name}`, true); }
   }
   function stopScreen() { const s = media.scr; if (!s) return; s.stream.getTracks().forEach((t) => t.stop()); s.tile.remove(); media.scr = null; scrBtn?.classList.remove('on'); stopFrames(); }

@@ -1160,3 +1160,10 @@ canvas.py / live.py, the protected zone — ADR-065), so a human built it from b
   are deleted from `canvas_nodes` — links go with them — unless the owner pinned the card; one version bump per sweep, audited. The sweep runs
   before the "unchanged" answer, so a viewer polling with `?since=` sees the cards go. Tasks, results, reports, documents and Simpanan are untouched.
 - A finished task no longer re-adds its card (`workers`: only `canvas.touch`), so nothing churns; results stay reachable in reports, Catatan and Tugas.
+
+## ADR-068 — The chat floats above a shared screen (Blueprint v4 Fase 12)
+Owner (2026-10-27): when sharing the screen on the web, the browser only shows its "stop sharing" bar; the chat must be there too.
+- While another tab, window or app is shared, the desk page is not on screen. With Document Picture-in-Picture (Chrome / Edge) the dock itself
+  moves into a small always-on-top window — messages, typing, paste, attachments, and a microphone button — and moves back when it closes.
+- 📌 in the chat's header opens it; starting a screen share tries to open it at once (the browser may refuse without a fresh click — then 📌
+  pulses). Browsers without the API keep the chat on the desk page as before.
