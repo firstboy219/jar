@@ -1207,3 +1207,17 @@ and activity that operates websites (e.g. helping to apply for jobs).
 - The desk's **Proyek** area (and "🗂 Proyek" in the top bar, opening it full screen): projects with schedule, next run, roles × workers × model,
   ▶ run now, pause/activate, edit, delete; the latest run's workers with status, model, result or error and "Lihat" (fly to the worker's card);
   and the schedules Jarvis made in chat (Hermes' cron jobs), read only.
+
+## ADR-074 — The main agent oversees every task and learns its pattern (Blueprint v4 Fase 12)
+Owner (2026-10-27): every task known to and watched by Hermes (the main chat) — projects included — so it learns from what the workers did and
+recognises the pattern when the same kind of work comes again.
+- **Episodes for all real work**: owner tasks (project workers are owner tasks) and the dev team's (goal = the member + the owner's request),
+  successes too — not only failures. Each keeps its *pattern*: how long, how many steps and which tools (the worker's live step list), the model,
+  and whether the owner had to help (questions + takeovers: "prepare that from the start"). Without a plan the steps are the approach.
+  Background chores (situation, routine, …) stay out. The dev team's briefs now get their own earlier jobs too.
+- **The main chat's situation** (not for the compact local model): `POLA SERUPA` — the two closest past episodes, one line each with their pattern;
+  `PROYEK PEMILIK` — active projects and any with busy workers, with the latest run's workers; `TIM DEV` — open / recent jobs. The prompt says
+  to use the pattern: estimate time and approach, warn when the owner had to help or when the same way failed, pass the lesson to the worker.
+- **Projects from the chat**: tool `proyek` (list / status / run / pause / resume / create with roles) and plain commands handled before the
+  model ("jalankan proyek lamar kerja", "jeda/lanjutkan proyek X", "status proyek", "proyek saya apa saja?"); the name is matched loosely
+  (`projects.find`); an unknown name goes to the chat model, which has the list.

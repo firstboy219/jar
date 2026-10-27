@@ -98,8 +98,35 @@ _TODO = re.compile(r"^(?:(?:jarvis|tolong|tlg|coba)[, ]+)*(?:tambah(?:kan|in)?|m
                    r"(?:\s+(?:saya|ku|aku|baru))?\s*[:,-]?\s*(?P<text>.{3,})$", re.IGNORECASE | re.DOTALL)
 
 
+# "jalankan proyek lamar kerja", "status proyek", "jeda proyek X", "proyek saya apa saja" — the owner's projects from the chat (ADR-074)
+_PROJECT = re.compile(r"^(?:(?:jarvis|tolong|tlg|coba|hai)[, ]+)*(?P<verb>jalankan|jalanin|mulai(?:kan)?|run|start|status|cek|lihat|gimana|bagaimana|"
+                      r"jeda(?:kan)?|pause|hentikan sementara|tunda|lanjut(?:kan)?|aktifkan|resume|daftar|list)\s+(?:semua\s+)?(?:proyek|project)(?:nya)?"
+                      r"(?:\s+(?P<name>.+?))?(?:\s+(?:dong|ya|sekarang|lagi))*[.!?]*$", re.IGNORECASE)
+_PROJECT_LIST = re.compile(r"^(?:(?:jarvis|tolong|hai)[, ]+)*(?:apa saja|apa aja|ada apa saja)?\s*(?:proyek|project)(?:ku| saya| aku)?\s*"
+                           r"(?:apa saja|apa aja|ada apa saja|sudah sampai mana|gimana|bagaimana)?\??$", re.IGNORECASE)
+_PROJECT_OP = {"jalankan": "run", "jalanin": "run", "mulai": "run", "mulaikan": "run", "run": "run", "start": "run",
+               "jeda": "pause", "jedakan": "pause", "pause": "pause", "hentikan sementara": "pause", "tunda": "pause",
+               "lanjut": "resume", "lanjutkan": "resume", "aktifkan": "resume", "resume": "resume", "daftar": "list", "list": "list"}
+
+
+def project_intent(text: str) -> Intent | None:
+    """The project commands said plainly (pure; unit-tested). Anything else about projects is left to the chat model and its proyek tool."""
+    t = " ".join(text.strip().split())
+    if m := _PROJECT.match(t):
+        name = (m["name"] or "").strip(" \"'")
+        op = _PROJECT_OP.get(m["verb"].lower(), "status")
+        if (op not in ("list", "status") and not name) or len(name) > 60 or re.match(r"(baru|ini|itu|yang|untuk|buat)\b", name.lower()):
+            return None   # "mulai proyek baru untuk …", a long sentence: the chat model (and its proyek tool) understands it better
+        return Intent("project", {"op": "list" if op == "status" and not name else op, "name": name})
+    if _PROJECT_LIST.match(t) and re.search(r"(apa saja|apa aja|ada apa|sampai mana|gimana|bagaimana|\?)", t.lower()):
+        return Intent("project", {"op": "list", "name": ""})
+    return None
+
+
 def parse_action(text: str) -> Intent | None:
     lowered = " ".join(text.strip().lower().split())
+    if p := project_intent(text):
+        return p
     if m := _TODO.match(text.strip()):   # "tambah tugas telepon pak budi besok" → Catatan's task list (ADR-060)
         return Intent("todo_add", {"text": m["text"].strip()})
     if m := _NOTE.match(text.strip()):   # "catat: …" → the Inbox page

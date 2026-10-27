@@ -379,3 +379,15 @@ async def overview() -> dict:
         """SELECT id, left(request, 160) AS request, status, round, change_id, left(coalesce(note, ''), 200) AS note,
                   left(coalesce(review, ''), 400) AS review, updated_at FROM dev_jobs ORDER BY id DESC LIMIT 6""")]
     return {"members": members, "jobs": jobs, "max_rounds": MAX_ROUNDS}
+
+
+async def situation_block() -> str:
+    """The dev team's open jobs, for the main agent (ADR-074): it hears about them in the chat, not only on the desk."""
+    rows = await db.pool().fetch(
+        """SELECT id, left(request, 120) AS request, status, round FROM dev_jobs
+           WHERE status NOT IN ('done', 'failed', 'cancelled') OR updated_at > now() - interval '6 hours' ORDER BY id DESC LIMIT 4""")
+    if not rows:
+        return ""
+    return "TIM DEV (bisan/coder/qaqa — pekerjaan terbaru):\n" + "\n".join(
+        f"- job #{r['id']} [{r['status']}, putaran {r['round']}]: {' '.join(r['request'].split())}" for r in rows)
+

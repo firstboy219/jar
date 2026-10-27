@@ -153,6 +153,8 @@ async def _run(task_id: int, context: str) -> None:
                 brief += await companies.context_block(row["company_id"]) + "\n\n"
             brief += await capabilities.brief_for(asked)
             brief += await episodes.brief_for(row["goal"] or asked, row["company_id"])  # a repeated task starts from the last result
+        elif kind == "devteam":   # the dev team learns from its own earlier jobs too (ADR-074)
+            brief += await episodes.brief_for(row["title"].split(": ", 1)[-1])
         if row["image"]:
             brief += ("Gambar terlampir adalah apa yang ditunjukkan pemilik (kamera/layar) saat memberi tugas ini.\n"
                       f"DESKRIPSI GAMBAR (oleh agen utama, karena model worker mungkin tidak bisa melihat): "
@@ -391,7 +393,7 @@ async def _deliver(task_id: int, kind: str, title: str, result: str, session_id:
 
 async def _remember_episode(task_id: int) -> None:
     try:
-        await episodes.record(task_id)
+        await episodes.record(task_id, list(_progress.get(task_id) or []))
     except Exception:
         log.exception("episode for task %s not recorded", task_id)
 

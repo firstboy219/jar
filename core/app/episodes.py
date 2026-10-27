@@ -25,7 +25,7 @@ def format_brief(eps: list[dict], now: datetime | None = None) -> str:
     for e in eps:
         age = (now - e["created_at"]).days
         when = "hari ini" if age <= 0 else f"{age} hari lalu"
-        state = "berhasil" if e["success"] else f"GAGAL ({e['lesson'] or 'penyebab tidak tercatat'})"
+        state = (f"berhasil ({e['lesson']})" if e.get("lesson") else "berhasil") if e["success"] else f"GAGAL ({e['lesson'] or 'penyebab tidak tercatat'})"
         stale = "; mungkin sudah usang, periksa ulang bagian yang bisa berubah" if age > FRESH_DAYS else ""
         body = f" Hasil: {e['result'][:500]}" if e["result"] else ""
         how = f" Cara: {e['approach'][:200]}." if e["approach"] else ""
@@ -33,12 +33,34 @@ def format_brief(eps: list[dict], now: datetime | None = None) -> str:
     return "TUGAS SERUPA PERNAH DIKERJAKAN (mulai dari sini, jangan riset ulang yang masih berlaku):\n" + "\n".join(lines) + "\n\n"
 
 
-async def record(task_id: int) -> dict | None:
-    """Write the finished task into episodic memory (owner tasks that had a goal)."""
+def pattern(minutes: float | None, steps: list[str], model: str | None, helped: int, ok: bool) -> str:
+    """How a task went, in one line the next similar task can learn from (pure; unit-tested):
+    'berhasil dalam 7 menit, 12 langkah (browser_navigate×5, terminal×3), model deepseek-v4.1-flash; pemilik membantu 1x'."""
+    tools: dict[str, int] = {}
+    for st in steps or []:
+        if st.startswith("- alat "):
+            name = st[7:].split(":", 1)[0].strip()
+            tools[name] = tools.get(name, 0) + 1
+    top = ", ".join(f"{k}×{v}" for k, v in sorted(tools.items(), key=lambda kv: -kv[1])[:4])
+    parts = [("berhasil" if ok else "gagal") + (f" dalam {round(minutes)} menit" if minutes is not None else "")]
+    if tools:
+        parts.append(f"{sum(tools.values())} langkah ({top})")
+    if model:
+        parts.append(f"model {model.split('/')[-1]}")
+    line = ", ".join(parts)
+    if helped:
+        line += f"; pemilik membantu {helped}x (pertanyaan/intervensi) — siapkan itu dari awal"
+    return line[:400]
+
+
+async def record(task_id: int, steps: list[str] | None = None) -> dict | None:
+    """Write the finished task into episodic memory — the owner's tasks, project workers and the dev team (ADR-074) — with the pattern
+    of how it went (time, steps, model, whether the owner had to help), so the next similar task starts from it."""
     row = await db.pool().fetchrow(
-        """SELECT goal, plan, result, error, status, cost_usd::float AS cost, model_used, artifacts, company_id FROM tasks
-           WHERE id = $1 AND kind = 'owner' AND status IN ('completed', 'failed')""", task_id)
-    if not row or not row["goal"]:
+        """SELECT goal, title, kind, plan, result, error, status, cost_usd::float AS cost, model_used, artifacts, company_id,
+                  EXTRACT(EPOCH FROM (finished_at - started_at)) / 60.0 AS minutes FROM tasks
+           WHERE id = $1 AND kind IN ('owner', 'devteam') AND status IN ('completed', 'failed')""", task_id)
+    if not row or not (row["goal"] or row["title"]):
         return None
     plan = row["plan"] if isinstance(row["plan"], list) else json.loads(row["plan"] or "[]") if isinstance(row["plan"], str) else []
     arts = row["artifacts"] if isinstance(row["artifacts"], list) else []
@@ -49,11 +71,20 @@ async def record(task_id: int) -> dict | None:
         from . import modelinsight
         lesson = (modelinsight.classify_error(row["error"] or "") + (f": {row['error'][:160]}" if row["error"] else "")
                   if row["status"] == "failed" else str(checks[-1].get("evidence"))[:200])
-    [vec] = await memory.embed([row["goal"]])
+    helped = await db.pool().fetchval(
+        """SELECT (SELECT count(*) FROM owner_questions WHERE task_id = $1)
+                + (SELECT count(*) FROM audit_events WHERE action = 'live.takeover' AND target = $2)""", task_id, f"task:{task_id}")
+    how = pattern(float(row["minutes"]) if row["minutes"] is not None else None, steps or [], row["model_used"], int(helped or 0), ok)
+    lesson = f"{lesson} · {how}" if lesson else how
+    goal = row["goal"] or row["title"]
+    if row["kind"] == "devteam":   # "bisan · spesifikasi: …" says little: the owner's request is what a similar job will look like
+        req = await db.pool().fetchval("SELECT d.request FROM tasks t JOIN dev_jobs d ON d.id = t.dev_job WHERE t.id = $1", task_id)
+        goal = f"{row['title'].split(' · ')[0]} (tim dev): {' '.join((req or row['title']).split())[:400]}"
+    [vec] = await memory.embed([goal])
     await db.pool().execute(
         """INSERT INTO episodes (task_id, goal, approach, result, success, cost_usd, model, lesson, embedding, company_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-        task_id, row["goal"], "; ".join(str(s) for s in plan)[:600], (row["result"] or "")[:1500], ok, row["cost"],
+        task_id, goal, ("; ".join(str(s) for s in plan) or "\n".join((steps or [])[-12:]))[:600], (row["result"] or "")[:1500], ok, row["cost"],
         row["model_used"], lesson, vec, row["company_id"])
     return {"task": task_id, "success": ok}
 
@@ -79,6 +110,19 @@ async def brief_for(goal: str, company_id: str | None = None) -> str:
     except Exception as e:
         log.warning("episode brief failed: %s", e)
         return ""
+
+
+def situation_lines(eps: list[dict], now: datetime | None = None) -> str:
+    """For the main agent (ADR-074): similar work done before, one line each — so it recognises the pattern (pure; unit-tested)."""
+    if not eps:
+        return ""
+    now = now or datetime.now(eps[0]["created_at"].tzinfo)
+    lines = []
+    for e in eps:
+        age = (now - e["created_at"]).days
+        lines.append(f"- {'hari ini' if age <= 0 else f'{age} hari lalu'}: \"{e['goal'][:90]}\" — {e.get('lesson') or ('berhasil' if e['success'] else 'gagal')}")
+    return ("POLA SERUPA (pekerjaan mirip yang pernah dikerjakan pekerja — pakai untuk memperkirakan cara, waktu, model, dan bantuan yang "
+            "mungkin diperlukan; sebut ke pemilik bila berguna):\n" + "\n".join(lines))
 
 
 async def prune(days: int = 180) -> int:

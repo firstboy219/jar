@@ -49,6 +49,7 @@ ringkasan apa yang akan dikirim. Kalau pemilik bilang pekerja kesulitan (captcha
 "Intervensi" di kartu tugasnya (bisa kapan saja, pekerja langsung diam), lalu tekan "Selesai, lanjutkan Jarvis" — jangan minta kata sandi atau kode lewat chat. \
 Permintaan untuk MENGEMBANGKAN JARVIS SENDIRI (ubah tampilan meja/aplikasi, perbaiki fitur, tambah kemampuan kecil) selalu lewat \
 tim_dev — bukan spawn_task — dan jangan mengaku sudah dikerjakan sebelum tim_dev mengembalikan dev_job.
+Kamu MENGAWASI semua pekerjaan: tugas worker, PROYEK pemilik (alat proyek: lihat status, jalankan, jeda, lanjutkan, buat proyek baru dengan peran pekerjanya) dan Tim Dev. "POLA SERUPA" berisi pekerjaan mirip yang pernah dikerjakan pekerja beserta polanya (berhasil/gagal, berapa lama, langkah, model, apakah pemilik harus membantu): kenali polanya — perkirakan waktu dan cara, ingatkan pemilik bila dulu ia harus membantu (login, captcha, persetujuan) atau bila cara yang sama dulu gagal, dan tulis pelajarannya ke instruksi spawn_task.
 
 Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu sampaikan. Jika ucapan \
 pemilik menunjukkan ia sudah mendengar/menanggapinya (mis. "oke", "sip", "makasih", atau membahas isinya), \
@@ -368,6 +369,22 @@ TOOLS = [
                        "Tulis permintaan pemilik SELENGKAPNYA dengan kata-katanya sendiri (jangan diringkas, jangan dipecah).",
         "parameters": {"type": "object", "properties": {"permintaan": {"type": "string"}}, "required": ["permintaan"]}}},
     {"type": "function", "function": {
+        "name": "proyek",
+        "description": "Proyek pemilik (tim pekerja berperan + jadwal, mis. bantu lamar kerja tiap pagi): list = semua proyek; status = keadaan satu "
+                       "proyek dan pekerja run terakhirnya; run = jalankan sekarang; pause/resume = jeda/lanjutkan jadwalnya; create = buat proyek baru "
+                       "(nama, tujuan, jadwal, peran: apa tugasnya, berapa pekerja 1–5, model opsional, web=true bila mengoperasikan situs).",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["list", "status", "run", "pause", "resume", "create"]},
+            "nama": {"type": "string", "description": "nama proyek (boleh sebagian)"},
+            "tujuan": {"type": "string"},
+            "jadwal": {"type": "string", "enum": ["manual", "hourly", "daily", "weekdays", "weekly"]},
+            "jam": {"type": "string", "description": "JJ:MM WIB, untuk daily/weekdays/weekly"},
+            "hari": {"type": "integer", "description": "0=Senin … 6=Minggu, untuk weekly"},
+            "peran": {"type": "array", "items": {"type": "object", "properties": {
+                "role": {"type": "string"}, "brief": {"type": "string"}, "workers": {"type": "integer"},
+                "model": {"type": "string"}, "web": {"type": "boolean"}}, "required": ["role"]}}},
+            "required": ["action"]}}},
+    {"type": "function", "function": {
         "name": "close_stage",
         "description": "Tutup panel yang sedang tampil di layar HP (musik, video, peta, web, dokumen, draf).",
         "parameters": {"type": "object", "properties": {}}}},
@@ -462,6 +479,20 @@ async def _situation(text: str, location: Location | None, compact: bool = False
         hits = []
     if hits:
         parts.append("YANG KAMU INGAT (memori, bisa usang):\n" + "\n".join(f"- {memory.label(m)}" for m in hits))
+    if not compact:   # oversight of everything the workers do (ADR-074): projects, the dev team, and the pattern of similar past work
+        from . import devteam, episodes, projects
+        for block in (projects.situation_block, devteam.situation_block):
+            try:
+                if b := await block():
+                    parts.append(b)
+            except Exception as e:
+                log.warning("situation %s: %s", block.__module__, e)
+        if len(text.strip()) >= 12:
+            try:
+                if seen := episodes.situation_lines(await episodes.similar(text, limit=2)):
+                    parts.append(seen)
+            except Exception as e:
+                log.warning("situation episodes: %s", e)
     if goals_text := await goals.situation_block():
         parts.append(goals_text)
     try:
@@ -538,6 +569,8 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                     return json.dumps({"error": str(e)})
                 return json.dumps({"dev_job": job["id"], "status": "bisan sedang menulis spesifikasi",
                                    "say": "Tim dev sudah mulai; pantau di area Tim Dev di Meja."}, ensure_ascii=False)
+            case "proyek":
+                return json.dumps(await _project_tool(a, actor), ensure_ascii=False, default=str)
             case "memory_correct":
                 if (refused := await chat_settings.guard("memory_correct", device_id, stt, bool(screen_text or attachments))):
                     return json.dumps({"error": refused})
@@ -1040,6 +1073,34 @@ async def start_draft(request: str, session_id: str, actor: str, device_id, loca
     return {"task_id": t["id"], "status": "queued", "say": "Draf sedang ditulis (±2–3 menit), nanti muncul di layar + file .docx."}
 
 
+async def _project_tool(a: dict, actor: str) -> dict:
+    """The owner's projects from the chat (ADR-074): whatever the desk's Projects card does, the main agent can do too."""
+    from . import projects
+    act = str(a.get("action") or "list")
+    try:
+        if act == "create":
+            p = await projects.save({"name": a.get("nama"), "goal": a.get("tujuan"), "schedule": a.get("jadwal") or "manual",
+                                     "at_time": a.get("jam"), "weekday": a.get("hari"), "roles": a.get("peran") or []}, actor)
+            return {"created": p["id"], "say": projects.status_text(p) + " Ada di menu Proyek di Meja."}
+        rows = (await projects.list_())["projects"]
+        if act == "list":
+            return {"projects": [projects.status_text(p) for p in rows] or ["Belum ada proyek."]}
+        p = projects.find(rows, str(a.get("nama") or ""))
+        if not p:
+            return {"error": "proyek tidak ditemukan", "ada": [r["name"] for r in rows]}
+        if act == "status":
+            return {"status": projects.status_text(p)}
+        if act == "run":
+            r = await projects.run(p["id"], actor)
+            return {"run": r["run"], "tasks": r["tasks"], "say": f"Proyek \"{p['name']}\" run #{r['run']} jalan dengan {len(r['tasks'])} pekerja."}
+        if act in ("pause", "resume"):
+            p = await projects.set_status(p["id"], "paused" if act == "pause" else "active", actor)
+            return {"status": projects.status_text(p)}
+    except projects.ProjectError as e:
+        return {"error": str(e)}
+    return {"error": f"aksi tidak dikenal: {act}"}
+
+
 async def _act(action, session_id: str, actor: str, device_id, location, private: bool) -> str | None:
     """None = not something to do directly after all (e.g. no model name recognised): the chat model answers."""
     from . import media_tools, model_answers, perf
@@ -1067,6 +1128,13 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             except devteam.DevTeamError as e:
                 return f"Maaf, {e}."
             return f"Oke, tim dev menerima permintaan #{job['id']}. bisan sedang menulis spesifikasinya — pantau di area Tim Dev di Meja."
+        case "project":
+            r = await _project_tool({"action": a["op"], "nama": a.get("name", "")}, actor)
+            if r.get("error"):
+                if "ada" in r:   # no such project: the chat model (with the list in its situation and the proyek tool) sorts out what was meant
+                    return None if r["ada"] else "Belum ada proyek — buat di menu Proyek di Meja, atau bilang ke aku proyek apa yang mau dibuat."
+                return f"Maaf, {r['error']}."
+            return r.get("say") or r.get("status") or "\n".join(r.get("projects") or [])
         case "meeting_start":
             return (await _meeting("start", {"title": a.get("title", "")}))["say"]
         case "meeting_stop":
