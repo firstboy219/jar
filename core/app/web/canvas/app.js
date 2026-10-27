@@ -12,6 +12,7 @@ import { SHOW_CARDS, createShowCard } from './showcards.js';
 import { createGoogleCard } from './googlecard.js';
 import { createWorkersCard } from './workerscard.js';
 import { createDevTeamCard } from './devteamcard.js';
+import { createProjectsCard } from './projectscard.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -337,7 +338,7 @@ document.addEventListener('fullscreenchange', () => { if (!document.fullscreenEl
 window.__jarvisAreaExit = () => { if (board.fullArea) board.closeFull(); };   // the phone's Back button
 
 // The player and the meeting recorder (ADR-054): feature cards at fixed places; the camera flies to one when it shows up.
-let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null, workersCard = null, devteamCard = null;
+let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null, workersCard = null, devteamCard = null, projectsCard = null;
 const showCards = {};
 const arrived = {};   // card → the key of what it last showed (undefined until the first poll after loading)
 
@@ -372,12 +373,39 @@ function renderFeatureCards(d) {
   workersCard ||= createWorkersCard({ box: panelFor('workers').el, api, toast });
   workersCard.update(d.workers);
   panelFor('workers').el.hidden = false;
+  projectsCard ||= createProjectsCard({ box: panelFor('projects').el, api, toast, onShowTask: (id) => {
+    const c = cardOfRef(`task:${id}`);
+    if (c) { board.flyToCard(c.data.id, 0.9, 900); board.select([c.data.id]); } else toast('Kartunya belum ada di papan — sebentar lagi muncul.');
+  } });
+  panelFor('projects').el.hidden = false;
   devteamCard ||= createDevTeamCard({ box: panelFor('devteam').el, api, toast });
   devteamCard.update(d.devteam, d.stations);
   panelFor('devteam').el.hidden = !d.devteam;   // only the owner's own device sees it
 }
 
+// "🕘 Terakhir" (ADR-072): the camera goes where the owner's latest request left its mark, and that card glows for a moment
+let lastActivity = null;
+function flash(node) { if (!node) return; node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 2600); }
+$('#projectsbtn').addEventListener('click', () => {   // "Proyek": straight to the projects area, full screen
+  if (current?.context !== 'utama') { toast('Proyek ada di papan utama — pilih "Utama" dulu.'); return; }
+  if (deskPanels.projects) board.openFull('projects');
+});
+$('#lastact').addEventListener('click', async () => {
+  if (current?.context !== 'utama') { toast('Aktivitas terakhir ada di papan utama — pilih "Utama" dulu.'); return; }
+  const a = lastActivity;
+  const said = a?.asked ? `Permintaan terakhir: "${a.asked}"` : '';
+  if (!a || a.where === 'none') { toast(said ? `${said} — jawabannya ada di chat.` : 'Belum ada aktivitas.'); return; }
+  if (a.where === 'card' && board.cards.get(a.node)) {
+    board.flyToCard(a.node, 1, 900); board.select([a.node]); flash(board.cards.get(a.node).el);
+  } else if (a.where === 'panel' && PANELS[a.panel]) {
+    const p = PANELS[a.panel], w = board.widgets.get(a.panel);
+    board.focusRect(w ? board.widgetRect(w) : { x: p.x, y: p.y, w: p.w, h: 360 }, 1, 900); flash(deskPanels[a.panel]?.el);
+  } else { toast(said ? `${said} — jawabannya ada di chat.` : 'Kartunya sudah tidak ada di papan.'); return; }
+  toast([said, `→ ${a.what}: ${a.title}`].filter(Boolean).join(' '));
+});
+
 function renderPanels(d) {
+  if ('last_activity' in d) lastActivity = d.last_activity;
   const desk = current.context === 'utama';   // the panels around the middle belong to the main board only
   renderFeatureCards(d);
   const show = (name, on) => { if (on && desk) panelFor(name).el.hidden = false; else if (deskPanels[name]) deskPanels[name].el.hidden = true; };

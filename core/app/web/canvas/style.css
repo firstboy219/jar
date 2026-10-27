@@ -448,3 +448,23 @@ body.area-full .webstrip, body.taking .webstrip { visibility: hidden; }
 .msg.draftmsg { border: 1px solid rgba(74, 222, 128, .45); white-space: normal; }
 .draftmsg .dmeta { font-size: 12px; color: var(--muted); } .draftmsg .dtext { margin-top: 6px; white-space: pre-wrap; user-select: text; }
 .draftmsg .drow { display: flex; gap: 6px; margin-top: 8px; } .draftmsg .drow button { font-size: 12px; padding: 5px 10px; }
+
+/* ADR-071: the tool rail shows select + hand; the rest folds */
+.railmore { display: flex; flex-direction: column; gap: 2px; }
+.railfold { font-size: 18px; font-weight: 700; color: var(--muted); }
+.railfold.on { background: transparent; color: var(--accent); }
+.flyout { z-index: 1; }
+
+/* ADR-072: the card the owner's latest request landed on glows when "Terakhir" takes the camera there */
+.flash { animation: flashring 2.4s ease-out; }
+@keyframes flashring { 0% { box-shadow: 0 0 0 0 rgba(251, 191, 36, .95); } 40% { box-shadow: 0 0 0 14px rgba(251, 191, 36, .35); } 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); } }
+
+/* ADR-073: the projects area */
+.projectscard .pjbody { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.pjrow { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; background: rgba(255, 255, 255, .02); }
+.pjrow.paused { opacity: .75; } .pjtop { display: flex; align-items: center; gap: 8px; } .pjtop b { flex: 1; font-size: 15px; }
+.pjworker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; } .pjworker b { font-size: 13px; }
+.pjres { white-space: pre-wrap; max-height: 6em; overflow: hidden; } .pjcron { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; }
+.pjedit { display: flex; flex-direction: column; gap: 8px; } .pjedit textarea, .pjedit input, .pjedit select { width: 100%; box-sizing: border-box; }
+.pjedit .pctl .mfield { flex: 1; min-width: 120px; }
+.pjroles { display: flex; flex-direction: column; gap: 10px; } .pjrole { border: 1px dashed var(--line); border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
