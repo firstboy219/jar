@@ -46,8 +46,8 @@ def test_owner_tasks_drops_the_dev_teams_tasks():
     assert workers.owner_tasks([row(5, kind="devteam")]) == []
 
 
-def test_announce_stays_silent_for_devteam(monkeypatch):
-    """The phone builds `Board.workers` from these events: a dev-team task must not reach it."""
+def test_devteam_is_announced_to_the_desk_but_not_as_a_phone_worker(monkeypatch):
+    """The phone builds `Board.workers` from `task` events: a dev-team task goes out as `devtask`, which only the desk's live view reads (ADR-076)."""
     sent = []
 
     async def fake(payload):
@@ -56,4 +56,21 @@ def test_announce_stays_silent_for_devteam(monkeypatch):
     monkeypatch.setattr(workers.hub, "broadcast", fake)
     asyncio.run(workers._announce({"id": 7, "title": "bisan · spesifikasi", "kind": "devteam"}, "running"))
     asyncio.run(workers._announce({"id": 8, "title": "laporan", "kind": "owner"}, "running"))
-    assert sent == [{"type": "task", "id": 8, "title": "laporan", "status": "running", "kind": "owner"}]
+    assert sent == [{"type": "devtask", "id": 7, "title": "bisan · spesifikasi", "status": "running", "kind": "devteam"},
+                    {"type": "task", "id": 8, "title": "laporan", "status": "running", "kind": "owner"}]
+
+
+def test_the_live_view_makes_a_station_for_a_devtask(monkeypatch):
+    from app import live
+    live.stations.clear()
+
+    class Row(dict):
+        pass
+
+    class Pool:
+        async def fetchrow(self, *a):
+            return Row(private=False, company_id=None)
+    monkeypatch.setattr(live.db, "pool", lambda: Pool())
+    asyncio.run(live.on_event({"type": "devtask", "id": 41, "title": "coder · perbaiki", "status": "running", "kind": "devteam"}))
+    assert 41 in live.stations and live.stations[41].kind == "devteam"
+    live.stations.clear()

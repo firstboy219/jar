@@ -160,7 +160,7 @@ def mask(text: str) -> str:
 
 async def on_event(ev: dict) -> None:
     kind = ev.get("type")
-    if kind == "task":
+    if kind in ("task", "devtask"):   # devtask = a dev-team task: a station on the desk, but not in the phone's worker list (ADR-076)
         await _on_task(ev)
     elif kind == "task_event":
         st = stations.get(int(ev.get("task_id") or 0))

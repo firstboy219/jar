@@ -1235,3 +1235,10 @@ Owner (2026-10-27): the result of a project could not be clicked for detail and 
   "25 jt" are read), charts as inline SVG (no library), pictures, links, downloadable documents, and the worker's full text (also markdown:
   headings, lists, tables, images) folded behind the structure. A run picker shows earlier runs. Nothing from a worker is inserted as HTML.
 - Not covered: pictures a worker only saved as a file (not a URL); results of ordinary (non-project) tasks keep their current report/card.
+
+## ADR-076 — Dev team tasks: live stations stay, the phone's worker list stays clean (Blueprint v4 Fase 12)
+Dev job #5 (hide the dev team's tasks from the Pekerja card) stopped at QA: holding back the `task` hub event for kind `devteam` also removed
+their live stations on the desk (the Tim Dev area draws its live view from them) — a trade-off for the owner. Owner chose A (2026-10-27).
+`workers._announce` now sends a dev-team task as event `devtask` (same payload); `live.on_event` treats it like `task` (station made), while the
+phone, which builds its worker list from `task` events and ignores unknown types, never sees it — also true for already installed APKs.
+The Pekerja card keeps filtering by `dev_role` (`desk_list`), `active()/stopped()` by kind.
