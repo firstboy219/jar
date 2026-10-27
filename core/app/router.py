@@ -86,6 +86,9 @@ _MODEL_COMPARE = re.compile(r"\b(kelebihan|kekurangan|bandingkan|banding|dibandi
 _MODEL_NAMES = re.compile(r"\b(model|deepseek|qwen\S*|claude|gpt\S*|gemini|gemma|llama|mistral|nemotron|grok|kimi|glm|haiku|sonnet|opus|minimax|cohere|inkling)\b")
 
 
+# "sudah jadi draftnya?", "mana drafnya", "draft balasannya belum?" — about a draft already asked for (ADR-070)
+_DRAFT_STATUS = re.compile(r"\b(draf|draft|drafnya|draftnya|balasannya)\b.{0,30}(\?|\b(sudah|udah|belum|jadi|mana|selesai|progress|gimana|bagaimana)\b)"
+                           r"|\b(sudah|udah|belum|mana|apakah)\b.{0,30}\b(draf|draft|drafnya|draftnya|balasannya)\b", re.IGNORECASE)
 _DEV_TEAM = re.compile(r"^(?:(?:jarvis|tolong|hai|halo)[, ]+)*(?:tim|team)\s?dev(?:elop(?:er|ment)?)?\b[\s,:.!-]*(?P<rest>.*)$", re.IGNORECASE | re.DOTALL)
 
 
@@ -101,6 +104,8 @@ def parse_action(text: str) -> Intent | None:
         return Intent("todo_add", {"text": m["text"].strip()})
     if m := _NOTE.match(text.strip()):   # "catat: …" → the Inbox page
         return Intent("note_add", {"text": m["text"].strip()})
+    if _DRAFT_STATUS.search(lowered) and not _DRAFT.search(lowered):
+        return Intent("draft_status", {})
     if (m := _DEV_TEAM.match(text.strip())) and len(m["rest"].strip()) >= 8:   # "tim dev, …" goes to the dev team as said (ADR-059)
         return Intent("dev_team", {"text": text.strip()})
     if _OR_CHECK.search(lowered):

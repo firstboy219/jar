@@ -15,6 +15,7 @@ from . import documents, llm, memory, stage
 
 log = logging.getLogger("jarvis-core.writer")
 MARK = "[DRAF]"  # an instruction starting with this is written here, not by Hermes
+shown: dict[int, dict] = {}   # the latest drafts (task id → what the chat shows), so "mana drafnya?" can show one again
 
 PROMPT = """Kamu penulis draf untuk pemilik JARVIS. Tulis draf yang diminta, siap dipakai: email/balasan/surat/pesan.
 - Bahasa: ikuti permintaan; kalau membalas email/pesan, pakai bahasa email aslinya.
@@ -91,6 +92,10 @@ async def produce(task_id: int, instruction: str, private: bool = False, progres
              "variants": [{"label": "Draf", "text": d["isi"][:6000]}]}
     await stage.show("board", {"title": title, "blocks": [  # copy / open email + the downloadable file
         draft, {"kind": "doc", "title": title, "url": doc["url"], "format": "docx"}]}, title, "jarvis", drafts=True)
+    shown[task_id] = {"title": title, "to": d["kepada"][:80], "subject": d["subjek"][:150], "email": d["email"][:120],
+                      "text": d["isi"][:6000], "doc_url": doc["url"]}
+    while len(shown) > 40:
+        shown.pop(next(iter(shown)))
     await say(100, "Selesai", {"draft": {"title": title, "to": d["kepada"][:80], "subject": d["subjek"][:150], "email": d["email"][:120],
                                          "text": d["isi"][:6000], "doc_url": doc["url"]}})
     return f"{title} sudah jadi — teksnya di layar dan file .docx-nya bisa diunduh (menu Dokumen)."

@@ -1178,3 +1178,9 @@ for a percentage loader in the chat and the result shown there.
   Hermes workers by their steps (`step_pct`: fast at first, never past 92 before done); `pct: null` when it fails.
 - The desk chat (also in the floating window) shows a bar per task it asked for, and at 100% the draft — to, subject, text, 📋 Salin, ⬇ .docx.
 - Guard test widened: a module function may not take a module variable's name (the new helper first shadowed the `_progress` dict).
+
+## ADR-070 — "Is the draft done?" (Blueprint v4 Fase 12)
+The owner asked "apakah sudah jadi? draftnya" after Jarvis had promised a draft it never started; the vision model repeated its promise word for word.
+- "sudah jadi/mana/belum … draf(nya)/balasannya" is a direct intent: a draft being written → "masih kutulis" (the bar is in the chat); a written one
+  is shown again in the chat (writer keeps the latest drafts per task); a failed one says why; NONE started → the latest request of this
+  conversation that asked for a draft is started now, with the screen being shared — a broken promise is kept instead of repeated.
