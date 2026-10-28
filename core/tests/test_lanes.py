@@ -155,3 +155,10 @@ async def test_the_two_brains_have_their_own_openrouter_models(pool, monkeypatch
     src = inspect.getsource(quick)                    # the test fixture replaces quick.answer, so read what the real one asks for
     assert 'category="ringan"' in src and 'category="cepat"' not in src
     assert 'openjarvis.run(text, "berat"' in inspect.getsource(workers)                                     # the heavy brain's own model
+
+
+def test_the_light_lane_reads_more_pages_and_skips_empty_ones():
+    import inspect
+    from app import quick
+    src = inspect.getsource(quick)   # the fixture replaces quick.answer; the real one is checked by what it reads
+    assert "limit=6" in src and "results[:6]" in src and "if p][:4]" in src and "sources[:6500]" in src
