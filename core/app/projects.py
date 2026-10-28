@@ -311,5 +311,25 @@ async def run_results(project_id: int, run: int | None = None) -> dict | None:
         workers.append({"id": t["id"], "role": t["role"] or t["title"], "title": t["title"], "status": t["status"],
                         "model": t["model_used"] or t["model_override"] or "", "error": t["error"] or "", "doc": doc, "text": text,
                         "documents": docs, "started_at": t["started_at"], "finished_at": t["finished_at"]})
-    return {"project": {"id": p["id"], "name": p["name"], "goal": p["goal"]}, "run": run, "runs": runs, "workers": workers}
+    history = [dict(h) for h in await db.pool().fetch(
+        """SELECT project_run AS run, min(created_at) AS started, max(finished_at) AS finished, count(*) AS total,
+                  count(*) FILTER (WHERE status = 'completed') AS completed, count(*) FILTER (WHERE status = 'failed') AS failed,
+                  count(*) FILTER (WHERE status IN ('queued', 'running')) AS busy, coalesce(sum(cost_usd), 0)::float AS cost,
+                  EXTRACT(EPOCH FROM (max(finished_at) - min(coalesce(started_at, created_at)))) / 60.0 AS minutes
+           FROM tasks WHERE project_id = $1 AND project_run IS NOT NULL GROUP BY project_run ORDER BY project_run DESC LIMIT 30""", project_id)]
+    return {"project": {"id": p["id"], "name": p["name"], "goal": p["goal"]}, "run": run, "runs": runs, "workers": workers,
+            "history": history, "report": report(history)}
+
+
+def report(history: list[dict]) -> dict:
+    """The project's report over its runs (ADR-078; pure, unit-tested): how many runs and workers, how many finished or failed, the success
+    rate of the workers that ended, the cost, and the typical run length."""
+    ended = sum(h["completed"] + h["failed"] for h in history)
+    mins = sorted(float(h["minutes"]) for h in history if h.get("minutes") is not None and not h["busy"])
+    return {"runs": len(history), "workers": sum(h["total"] for h in history), "completed": sum(h["completed"] for h in history),
+            "failed": sum(h["failed"] for h in history), "busy": sum(h["busy"] for h in history),
+            "success_pct": round(100 * sum(h["completed"] for h in history) / ended) if ended else None,
+            "cost_usd": round(sum(h["cost"] or 0 for h in history), 4),
+            "median_minutes": round(mins[len(mins) // 2], 1) if mins else None,
+            "last_run": history[0]["started"] if history else None}
 

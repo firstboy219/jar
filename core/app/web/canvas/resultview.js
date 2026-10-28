@@ -1,6 +1,6 @@
 // The result of a project run, opened full screen (ADR-075): each worker's summary, points, tables (a numeric column can be drawn as a chart),
 // charts, pictures, links and documents — and the plain text behind them. Nothing from a worker is ever put in as HTML.
-import { PALETTE, barLayout, blocksOf, chartOf, fmtNum, inline, lineLayout, numericColumns, pieSlices, safeUrl } from './resultmd.js';
+import { PALETTE, barLayout, blocksOf, chartOf, fmtNum, inline, lineLayout, numericColumns, pieSlices, reportChart, runVerdict, safeUrl } from './resultmd.js';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -140,6 +140,44 @@ function chartBox(c, onClose) {
   return box;
 }
 
+const when = (t) => (t ? new Date(t).toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
+
+/** ADR-078: the project's report over all its runs — numbers, a chart, and the run history (tap a run to open its results). */
+function reportBox(d, onRun) {
+  const r = d.report || {}, box = el('details', 'rvreport');
+  box.open = true;
+  box.append(el('summary', null, `📊 Laporan proyek · ${r.runs || 0} run`));
+  const stats = el('div', 'rvstats');
+  const stat = (v, label, cls = '') => { const s = el('div', `rvstat ${cls}`); s.append(el('b', null, v), el('span', null, label)); stats.append(s); };
+  stat(String(r.runs || 0), 'run');
+  stat(r.success_pct == null ? '—' : `${r.success_pct}%`, 'tingkat berhasil', r.success_pct >= 80 ? 'good' : r.success_pct != null && r.success_pct < 50 ? 'bad' : '');
+  stat(`${r.completed || 0}/${r.workers || 0}`, 'pekerja selesai');
+  stat(String(r.failed || 0), 'gagal', r.failed ? 'bad' : '');
+  stat(r.median_minutes == null ? '—' : `${fmtNum(r.median_minutes)} mnt`, 'lama run (median)');
+  stat(`$${fmtNum(r.cost_usd || 0)}`, 'biaya AI');
+  box.append(stats);
+  if ((d.history || []).length >= 2) box.append(chartBox(reportChart(d.history)));
+  if ((d.history || []).length) {
+    const wrap = el('div', 'rvscroll'), tb = el('table', 'rvruns');
+    const hr = el('tr'); for (const h of ['Run', 'Mulai', 'Hasil', 'Selesai', 'Gagal', 'Lama', 'Biaya']) hr.append(el('th', null, h));
+    const thead = el('thead'); thead.append(hr);
+    const tbody = el('tbody');
+    for (const h of d.history) {
+      const v = runVerdict(h), tr = el('tr', h.run === d.run ? 'on' : '');
+      tr.append(el('td', null, `#${h.run}`), el('td', null, when(h.started)));
+      const verdict = el('td'); verdict.append(el('span', `chip rv-${v.cls}`, v.text)); tr.append(verdict);
+      tr.append(el('td', null, `${h.completed}/${h.total}`), el('td', null, String(h.failed)),
+        el('td', null, h.minutes == null || h.busy ? '—' : `${fmtNum(Math.round(h.minutes))} mnt`), el('td', null, `$${fmtNum(h.cost || 0)}`));
+      tr.title = `Buka hasil run #${h.run}`;
+      tr.addEventListener('click', () => onRun(h.run));
+      tbody.append(tr);
+    }
+    tb.append(thead, tbody); wrap.append(tb); box.append(wrap);
+    box.append(el('div', 'muted rvhint', 'Ketuk satu run untuk melihat hasil lengkapnya di bawah.'));
+  }
+  return box;
+}
+
 /** Open the results of a project run full screen. `api.req` loads them; `fetchBlob(path)` downloads a document with the owner's token. */
 export function openResults({ api, toast, projectId, run, onShowTask }) {
   const ov = el('div', 'rvoverlay');
@@ -161,10 +199,11 @@ export function openResults({ api, toast, projectId, run, onShowTask }) {
     body.replaceChildren(el('div', 'muted', 'Memuat hasil…'));
     let d;
     try { d = await api.req('GET', `/api/v1/projects/${projectId}/results${n ? `?run=${n}` : ''}`); } catch (err) { body.replaceChildren(el('div', 'wbad', err.message)); return; }
-    title.textContent = `Hasil · ${d.project.name}`;
+    title.textContent = `Hasil & laporan · ${d.project.name}`;
     pick.replaceChildren(...d.runs.map((r) => { const o = el('option', null, `Run #${r}`); o.value = String(r); return o; }));
     pick.hidden = !d.runs.length; if (d.run) pick.value = String(d.run);
-    body.replaceChildren();
+    body.replaceChildren(reportBox(d, (r) => { pick.value = String(r); load(r); }));
+    if (d.run) body.append(el('h3', 'rvh rvrunhead', `Hasil run #${d.run}`));
     if (!d.workers.length) { body.append(el('div', 'snippet', 'Belum ada hasil. Tekan ▶ Jalankan di kartu proyek.')); return; }
     for (const w of d.workers) {
       const sec = el('section', 'rvworker');

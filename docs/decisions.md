@@ -1260,3 +1260,10 @@ password — except runs he scheduled.
   half done). A banner "🤖 JARVIS mengoperasikan Gojek · Hentikan" shows while it works; Hentikan stops the task.
 - **Asked from**: the chat ("pesankan goride ke kantor" → plain intent; tool `operasi_hp`), a project role "📱 Operasikan aplikasi di HP"
   (one worker), never from Hermes workers directly. Apps: `phone_agent.APPS` (Gojek; package com.gojek.app).
+
+## ADR-078 — A project's report, next to its results (Blueprint v4 Fase 12)
+Owner (2026-10-28): no way to check a project's results / report on the project page. (ADR-075's "📑 Hasil" was not deployed yet.)
+The project card's button is now "📊 Hasil & laporan"; the full-screen view opens with **Laporan proyek**: runs, workers' success rate
+(of the ones that ended), finished / total, failed, median run length, AI cost (`projects.report`), a chart of finished workers per run, and
+the run history (start, verdict berjalan / berhasil / sebagian / gagal, finished, failed, length, cost) — tap a run to open its results below.
+`GET /api/v1/projects/{id}/results` carries `history` and `report`.

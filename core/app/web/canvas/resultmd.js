@@ -159,3 +159,17 @@ export function pieSlices(values) {
 }
 
 export const PALETTE = ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24', '#f87171', '#fb923c', '#2dd4bf', '#e879f9', '#a3e635', '#94a3b8'];
+
+/** ADR-078: the project report's chart — workers finished per run, oldest run first (pure; unit-tested). */
+export function reportChart(history) {
+  const h = [...(history || [])].sort((a, b) => a.run - b.run).slice(-20);
+  return { type: 'chart', title: 'Pekerja selesai per run', kind: h.length > 8 ? 'line' : 'bar', labels: h.map((x) => `#${x.run}`), values: h.map((x) => x.completed), unit: '' };
+}
+
+/** How a run went, in a word: berjalan / berhasil / sebagian / gagal (pure; unit-tested). */
+export function runVerdict(r) {
+  if (r.busy) return { text: 'berjalan', cls: 'running' };
+  if (r.failed && !r.completed) return { text: 'gagal', cls: 'failed' };
+  if (r.failed) return { text: 'sebagian', cls: 'partial' };
+  return { text: 'berhasil', cls: 'completed' };
+}
