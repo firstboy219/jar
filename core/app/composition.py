@@ -18,8 +18,8 @@ STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whispe
                "deepgram": "Deepgram (cloud, berbayar per jam)", "openrouter": "Model OpenRouter pilihanmu (ElevenLabs Scribe, GPT, …)"}
 LOCKED: set[str] = set()   # no category is locked any more: "privat" used to be local-only (ADR-080)
 BUILTIN = {"ngobrol", "cepat", "penglihatan", "balas-pesan", "web", "coding", "produktivitas", "analisis", "rapat",
-           "latar-belakang", "privat"}
-NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "review", "dev-bisan", "dev-coder", "dev-qaqa"}  # tool calling: chat agent, Hermes
+           "latar-belakang", "privat", "ringan", "berat"}
+NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "berat", "review", "dev-bisan", "dev-coder", "dev-qaqa"}  # tool calling: chat agent, Hermes
 NEEDS_VISION = {"penglihatan"}
 EXPENSIVE_OUT_USD = 15.0  # per 1M output tokens: above this the owner confirms first
 

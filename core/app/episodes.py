@@ -7,6 +7,7 @@ a few hundred episodes need no vector index). Always best-effort: a failure here
 
 import json
 import logging
+import re
 from datetime import datetime
 
 from . import db, memory
@@ -33,7 +34,8 @@ def format_brief(eps: list[dict], now: datetime | None = None) -> str:
     return "TUGAS SERUPA PERNAH DIKERJAKAN (mulai dari sini, jangan riset ulang yang masih berlaku):\n" + "\n".join(lines) + "\n\n"
 
 
-def pattern(minutes: float | None, steps: list[str], model: str | None, helped: int, ok: bool) -> str:
+def pattern(minutes: float | None, steps: list[str], model: str | None, helped: int, ok: bool, lane: str | None = None,
+            lane_note: str | None = None) -> str:
     """How a task went, in one line the next similar task can learn from (pure; unit-tested):
     'berhasil dalam 7 menit, 12 langkah (browser_navigate×5, terminal×3), model deepseek-v4.1-flash; pemilik membantu 1x'."""
     tools: dict[str, int] = {}
@@ -47,6 +49,8 @@ def pattern(minutes: float | None, steps: list[str], model: str | None, helped: 
         parts.append(f"{sum(tools.values())} langkah ({top})")
     if model:
         parts.append(f"model {model.split('/')[-1]}")
+    if lane:   # which of the two brains (or Hermes' own tools) did it — Hermes learns where such work belongs (ADR-081)
+        parts.append(f"jalur {lane}" + (" — jalur ringan tidak menemukan jawaban" if lane_note and "ringan tidak menemukan" in lane_note else ""))
     line = ", ".join(parts)
     if helped:
         line += f"; pemilik membantu {helped}x (pertanyaan/intervensi) — siapkan itu dari awal"
@@ -58,7 +62,7 @@ async def record(task_id: int, steps: list[str] | None = None) -> dict | None:
     of how it went (time, steps, model, whether the owner had to help), so the next similar task starts from it."""
     row = await db.pool().fetchrow(
         """SELECT goal, title, kind, plan, result, error, status, cost_usd::float AS cost, model_used, artifacts, company_id,
-                  EXTRACT(EPOCH FROM (finished_at - started_at)) / 60.0 AS minutes FROM tasks
+                  runtime, runtime_note, EXTRACT(EPOCH FROM (finished_at - started_at)) / 60.0 AS minutes FROM tasks
            WHERE id = $1 AND kind IN ('owner', 'devteam') AND status IN ('completed', 'failed')""", task_id)
     if not row or not (row["goal"] or row["title"]):
         return None
@@ -74,7 +78,7 @@ async def record(task_id: int, steps: list[str] | None = None) -> dict | None:
     helped = await db.pool().fetchval(
         """SELECT (SELECT count(*) FROM owner_questions WHERE task_id = $1)
                 + (SELECT count(*) FROM audit_events WHERE action = 'live.takeover' AND target = $2)""", task_id, f"task:{task_id}")
-    how = pattern(float(row["minutes"]) if row["minutes"] is not None else None, steps or [], row["model_used"], int(helped or 0), ok)
+    how = pattern(float(row["minutes"]) if row["minutes"] is not None else None, steps or [], row["model_used"], int(helped or 0), ok, row["runtime"], row["runtime_note"])
     lesson = f"{lesson} · {how}" if lesson else how
     goal = row["goal"] or row["title"]
     if row["kind"] == "devteam":   # "bisan · spesifikasi: …" says little: the owner's request is what a similar job will look like
@@ -110,6 +114,26 @@ async def brief_for(goal: str, company_id: str | None = None) -> str:
     except Exception as e:
         log.warning("episode brief failed: %s", e)
         return ""
+
+
+_LANE = re.compile(r"jalur (ringan|openjarvis|hermes)")
+
+
+def lane_hint(eps: list[dict]) -> dict:
+    """What earlier, similar tasks teach about the lane (pure; unit-tested): `prefer` = a lane a similar task SUCCEEDED in (ringan / openjarvis),
+    `avoid` = lanes where a similar task failed or found nothing. Newest first in `eps`."""
+    prefer, avoid = None, set()
+    for e in eps:
+        lesson = e.get("lesson") or ""
+        m = _LANE.search(lesson)
+        lane = m[1] if m else None
+        if "ringan tidak menemukan" in lesson:
+            avoid.add("ringan")
+        elif lane in ("ringan", "openjarvis") and not e["success"]:
+            avoid.add(lane)
+        elif lane in ("ringan", "openjarvis") and e["success"] and prefer is None:
+            prefer = lane
+    return {"prefer": None if prefer in avoid else prefer, "avoid": avoid}
 
 
 def situation_lines(eps: list[dict], now: datetime | None = None) -> str:

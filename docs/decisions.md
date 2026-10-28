@@ -1304,3 +1304,24 @@ the worker model succeeded 9 of 77 times at ~12 minutes each, the chat one ~4 mi
 - Quick look-ups instead of a Hermes session, the "background work waits for the owner's turn on the CPU" gate, and the short prompt for the
   local model were only for the slow CPU model: they never ran with a cloud model first, and are now simply gone.
 - Disk: `data/models/*.gguf` (~10.7 GB) can be deleted; `data/models/whisper` and `hf` belong to jarvis-ears.
+
+## ADR-081 — Hermes governs two brains: jar (ringan) and OpenJarvis (berat), both on OpenRouter (Blueprint v4 Fase 12)
+Owner (2026-10-28), after the local models were removed: the flow is headed / governed by Hermes, with two brains — ringan = jar, berat =
+OpenJarvis — both using OpenRouter models; chosen by how heavy the load is.
+- **Each brain has its own model category** in Komposisi AI (migration 037): `ringan` (default qwen3.7-flash → deepseek-v4.1-flash; used by the
+  light lane's answer) and `berat` (default deepseek-v4.1-flash → qwen3.7-flash, tools needed; every OpenJarvis run uses it, whatever the task's
+  own category). Both OpenRouter, paid-only by default (free endpoints rate-limit, 429).
+- **Hermes governs and learns**: the lane is picked from the task, the load and what Hermes remembers of similar tasks (`episodes.lane_hint`:
+  where a similar task succeeded — "jalur ringan/openjarvis" is part of every episode's pattern — or failed / found nothing, which it avoids).
+- **What stays in Hermes' own runtime**: tasks that need tools (browser, memory, documents, n8n, the phone, projects, the dev team) — jar only
+  searches and OpenJarvis has only files and Python. The owner's picture of exactly two executors differs here; Hermes is both the governor and
+  the executor of the tool-using work.
+- **`lanes.choose`** (pure, now also fed by the learned hint) runs when a task is created and writes `tasks.runtime` (+ `runtime_note`, the reason):
+  - **ringan** — the owner's ordinary web look-up (news, a price, a fact, a schedule: `quick.suitable`) while the lane is on: search + a small cheap
+    cloud model (category `cepat`), seconds, **no Hermes session and no worker slot** (`workers._light_answer` runs before the semaphore). Nothing found
+    or any trouble → it becomes a Hermes task with the reason noted. Switch: desk's worker card "🪶 Jalur ringan" (`PUT /api/v1/workers/lanes`, setting `worker:ringan`).
+  - **openjarvis** — a task the main agent marked `berat` while the owner has OpenJarvis on; but Hermes takes it when OpenJarvis does not answer, or
+    when it already has 2 heavy tasks and Hermes has a free slot (the overflow); both full → it queues in OpenJarvis and says so.
+  - **hermes** — everything else (private, with a picture, for a company, JARVIS' own kinds never leave it); a task that has to queue says "antre: semua n slot terpakai".
+- The desk's worker card shows each task's lane as a chip (hover: why) and one line of load: Hermes running/slots (+queued), OpenJarvis, ringan.
+- The earlier "fast worker" ran only while the main model was the local CPU one, so with the cloud models it was dormant; this lane replaces it for all tasks.

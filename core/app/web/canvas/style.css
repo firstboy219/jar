@@ -510,3 +510,6 @@ body.area-full .webstrip, body.taking .webstrip { visibility: hidden; }
 .pjchain.choice { border-color: var(--amber); background: rgba(251, 191, 36, .08); } .pjchain.timer { border-color: var(--cyan); }
 .chopt { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; width: 100%; padding: 12px 14px; border-radius: 12px; font-size: 14px; }
 .chopt b { font-size: 15px; } .chopt:active { background: rgba(56, 189, 248, .2); }
+
+/* ADR-081: lanes */
+.wlanes { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 8px; }

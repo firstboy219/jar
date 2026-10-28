@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import devteam, google_auth, notes, phone_agent, project_flow, projects
+from . import devteam, google_auth, lanes, notes, phone_agent, project_flow, projects
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -1745,6 +1745,18 @@ async def phone_run_reject(run_id: int, device: dict = Depends(owner_device_auth
 
 class SayIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
+
+
+class LanesIn(BaseModel):
+    light: bool
+
+
+@app.put("/api/v1/workers/lanes")
+async def worker_lanes(body: LanesIn, device: dict = Depends(owner_device_auth)):
+    """Switch the light lane (simple look-ups without a Hermes session) on or off — ADR-081."""
+    await lanes.set_light(body.light)
+    await audit.record(f"device:{device['name']}", "lanes.light", None, on=body.light)
+    return await lanes.view()
 
 
 @app.post("/api/v1/workers/{task_id}/stop")

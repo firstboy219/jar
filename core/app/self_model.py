@@ -49,6 +49,11 @@ async def describe(full: bool = False) -> str:
         f"- Pendengaran: {hearing}. Kosakata khusus: {', '.join(stt['keywords'][:12]) or '-'}. Mode mute/unmute. "
         "Kamu BELUM bisa memastikan identitas suara pemilik kecuali voiceprint sudah direkam.",
         "- Suara: dibacakan TTS di HP, kalimat demi kalimat; mic dijeda saat kamu bicara.",
+        "- Alur kerja: Hermes yang mengatur dan belajar dari tiap tugas. Ia punya dua otak, keduanya memakai AI dari OpenRouter dengan kategori "
+        "model sendiri di Komposisi AI: JAR (kategori ringan) untuk pencarian sederhana — berita, harga, fakta — dijawab detik-an tanpa sesi "
+        "Hermes dan tanpa antre; OPENJARVIS (kategori berat) untuk tugas berat yang kamu tandai berat=true, bila pemilik menyalakannya. "
+        "Tugas yang butuh alat (browser, memori, dokumen, n8n) dikerjakan Hermes sendiri. Jalurnya dipilih otomatis menurut jenis tugas, "
+        "beban, dan pola tugas serupa yang pernah terjadi; bebannya terlihat di kartu Pekerja di Meja.",
         f"- Otak: kamu agen utama (ngobrol: {who('ngobrol')}). Pekerjaan dikerjakan worker Hermes "
         f"(maks {settings.worker_concurrency} bersamaan, antrean tak terbatas) dengan AI per kategori: web {who('web')}, "
         f"coding {who('coding')}, produktivitas {who('produktivitas')}, analisis {who('analisis')}. Semua lewat gerbang AI "

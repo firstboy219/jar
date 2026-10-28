@@ -1,6 +1,5 @@
-"""Fast worker ("pekerja cepat"): answers simple look-ups — news, prices, facts — in seconds with a small
-prompt, instead of a full Hermes session. On the local CPU model a Hermes session (≈26k-token prompt) takes
-5–40 minutes for what is a 20-second job (seen 2026-10-21: news requests never came back). Anything it
+"""The light brain ("jar", lane `ringan`, ADR-081): answers simple look-ups — news, prices, facts — in seconds with a small
+prompt, instead of a full Hermes session, on the OpenRouter model of the category `ringan`. Anything it
 cannot answer goes on to Hermes as before.
 
 Sources need no key: Google News RSS (Indonesian edition) and DuckDuckGo's HTML results; pages are read
@@ -152,7 +151,7 @@ async def answer(instruction: str) -> str | None:
         today = datetime.now(WIB).strftime("%A %d %B %Y")
         text = await llm.complete([{"role": "system", "content": ANSWER.format(today=today)},
                                    {"role": "user", "content": f"PERMINTAAN: {ask}\n\nSUMBER:\n{sources[:4500]}"}],
-                                  category="cepat", max_tokens=260, caller="worker", temperature=0.2)
+                                  category="ringan", max_tokens=260, caller="worker", temperature=0.2)
     except (httpx.HTTPError, llm.LLMError) as e:
         log.info("quick worker gave up (%s): %s", type(e).__name__, e)
         return None
