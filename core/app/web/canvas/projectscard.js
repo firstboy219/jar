@@ -66,7 +66,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
     for (const r of p.roles) roles.append(el('span', 'chip wmodel', `${r.app ? `📱 ${APPS[r.app] || r.app} · ` : r.web ? '🌐 ' : ''}${r.role} ×${r.workers} · ${r.model ? shortModel(r.model) : 'model kategori'}`));
     c.append(roles);
     const ctl = el('div', 'pctl');
-    ctl.append(button('📑 Hasil', 'pbtn', () => openResults({ api, toast, projectId: p.id, onShowTask }), 'Buka hasil run: tabel, grafik, gambar, dokumen'),
+    ctl.append(button('📊 Hasil & laporan', 'pbtn wgo', () => openResults({ api, toast, projectId: p.id, onShowTask }), 'Laporan semua run + hasil tiap pekerja: tabel, grafik, gambar, dokumen'),
       button('▶ Jalankan', 'pbtn wgo', () => act(() => api.req('POST', `/api/v1/projects/${p.id}/run`), `Run baru "${p.name}" dimulai — pekerjanya muncul di Meja.`)),
       button(p.status === 'active' ? '⏸ Jeda' : '▶ Aktifkan jadwal', 'pbtn', () => act(() => api.req('PATCH', `/api/v1/projects/${p.id}`, { status: p.status === 'active' ? 'paused' : 'active' }))),
       button('✎ Kelola', 'pbtn', () => { editing = { ...p, roles: p.roles.map((r) => ({ ...r, model: r.model || '' })) }; render(); }),
