@@ -80,9 +80,16 @@ sealed interface ServerEvent {
     /** ADR-077: JARVIS asks to operate an app (status "awaiting") — or the ask was settled (approved / rejected / expired). */
     data class PhoneApproval(val id: Long, val status: String, val label: String, val goal: String, val requestedBy: String,
                              val expiresInS: Long) : ServerEvent { override val sessionId: String? = null }
+    /** ADR-079: a notification for the phone's notification shade (a project's pick is waiting, a run ended …) — never spoken. */
+    data class Notify(val title: String, val text: String, val kind: String) : ServerEvent { override val sessionId: String? = null }
+    /** ADR-079: a project asks the owner to pick one option (status "open"), or the pick was settled (answered / expired / cancelled). */
+    data class OwnerChoice(val id: Long, val status: String, val title: String, val prompt: String, val options: List<ChoiceOption>,
+                           val expiresInS: Long) : ServerEvent { override val sessionId: String? = null }
     data object Pong : ServerEvent { override val sessionId: String? = null }
     data object AuthOk : ServerEvent { override val sessionId: String? = null }
 }
+
+data class ChoiceOption(val index: Int, val label: String, val detail: String, val time: String)
 
 data class ContextItem(val text: String, val category: String, val score: Double)
 
@@ -184,6 +191,15 @@ object Protocol {
             "phone_op" -> ServerEvent.PhoneOp(o.str("req"), o.str("op"), o)
             "phone_approval" -> ServerEvent.PhoneApproval(o.long("id") ?: return null, o.str("status").ifEmpty { "awaiting" }, o.str("label"),
                 o.str("goal"), o.str("requested_by"), o.long("expires_in_s") ?: 900)
+            "notify" -> ServerEvent.Notify(o.str("title"), o.str("text"), o.str("kind"))
+            "owner_choice" -> ServerEvent.OwnerChoice(
+                o.long("id") ?: return null, o.str("status").ifEmpty { "open" }, o.str("title"), o.str("prompt"),
+                o["options"]?.jsonArray?.mapNotNull {
+                    val c = it.jsonObject
+                    c.long("i")?.let { i -> ChoiceOption(i.toInt(), c.str("label"), c.str("detail"), c.str("waktu")) }
+                } ?: emptyList(),
+                o.long("expires_in_s") ?: 0,
+            )
             "pong" -> ServerEvent.Pong
             "auth_ok" -> ServerEvent.AuthOk
             else -> null

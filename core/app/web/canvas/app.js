@@ -13,6 +13,7 @@ import { createGoogleCard } from './googlecard.js';
 import { createWorkersCard } from './workerscard.js';
 import { createDevTeamCard } from './devteamcard.js';
 import { createProjectsCard } from './projectscard.js';
+import { openChoice } from './choicepopup.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -372,6 +373,8 @@ function renderFeatureCards(d) {
   panelFor('google').el.hidden = !googleCard.allowed;
   workersCard ||= createWorkersCard({ box: panelFor('workers').el, api, toast });
   workersCard.update(d.workers);
+  // ADR-079: a project asks the owner to pick — the popup (in the phone app its native dialog does this instead)
+  if (!fromApp.embedded) for (const c of d.choices || []) if (!seenChoices.has(c.id)) { seenChoices.add(c.id); openChoice({ api, toast }, c, () => projectsCard?.reload()); }
   panelFor('workers').el.hidden = false;
   projectsCard ||= createProjectsCard({ box: panelFor('projects').el, api, toast, onShowTask: (id) => {
     const c = cardOfRef(`task:${id}`);
@@ -384,6 +387,7 @@ function renderFeatureCards(d) {
 }
 
 // "🕘 Terakhir" (ADR-072): the camera goes where the owner's latest request left its mark, and that card glows for a moment
+const seenChoices = new Set();
 let lastActivity = null;
 function flash(node) { if (!node) return; node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 2600); }
 $('#projectsbtn').addEventListener('click', () => {   // "Proyek": straight to the projects area, full screen

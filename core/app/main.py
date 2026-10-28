@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import devteam, google_auth, notes, phone_agent, projects
+from . import devteam, google_auth, notes, phone_agent, project_flow, projects
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -1188,6 +1188,9 @@ async def ws(websocket: WebSocket):
         if "phone_agent" in caps and device.get("scope") == "owner":   # approvals asked while this phone was away (ADR-077)
             for r in await phone_agent.pending():
                 await send(phone_agent.approval_card(r))
+        if device.get("scope") == "owner":   # picks the owner has not answered yet (ADR-079)
+            for c in await project_flow.open_choices():
+                await send(c)
 
         async def run(cmd: Command) -> None:
             # a private or sensitive turn, or one about attachments/screen text, is never read out by a cloud voice
@@ -1834,6 +1837,30 @@ async def projects_results(project_id: int, run: int | None = None, device: dict
     if not found:
         raise HTTPException(404, "proyek tidak ditemukan")
     return jsonable(found)
+
+
+@app.post("/api/v1/projects/{project_id}/stop")
+async def projects_stop(project_id: int, device: dict = Depends(owner_device_auth)):
+    """⏹ Cancel the rest of a run: stop its workers, drop the waiting pick / timer (ADR-079)."""
+    return await project_flow.stop(project_id, f"device:{device['name']}")
+
+
+class ChoiceIn(BaseModel):
+    option: int = Field(ge=0, le=20)
+
+
+@app.get("/api/v1/choices")
+async def choices_open(device: dict = Depends(owner_device_auth)):
+    """Picks waiting for the owner (the popup in the app / on the desk)."""
+    return jsonable(await project_flow.open_choices())
+
+
+@app.post("/api/v1/choices/{choice_id}/answer")
+async def choice_answer(choice_id: int, body: ChoiceIn, device: dict = Depends(owner_device_auth)):
+    try:
+        return jsonable(await project_flow.answer(choice_id, body.option, f"device:{device['name']}"))
+    except project_flow.FlowError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.post("/api/v1/projects/{project_id}/run")

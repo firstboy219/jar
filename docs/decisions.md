@@ -1267,3 +1267,22 @@ The project card's button is now "📊 Hasil & laporan"; the full-screen view op
 (of the ones that ended), finished / total, failed, median run length, AI cost (`projects.report`), a chart of finished workers per run, and
 the run history (start, verdict berjalan / berhasil / sebagian / gagal, finished, failed, length, cost) — tap a run to open its results below.
 `GET /api/v1/projects/{id}/results` carries `history` and `report`.
+
+## ADR-079 — Project order, the owner's pick between stages, notifications; projects need no admin password (Blueprint v4 Fase 12)
+Owner (2026-10-28), about the project "Cek jadwal dan pesan gojek": the second worker must wait for the first, ask him (notification → popup)
+which departure option to take, then order the ride 5 minutes before the time he picked; project runs need no admin password.
+- **Order**: a role starts with the previous one (parallel, the default) or after it finished (`project_roles.after_prev`; `stage` is computed:
+  roles of one stage run together). `project_flow.advance` moves a run along — when a worker finishes (`workers._run`'s last word) and every
+  minute (`projects.tick`). A failed / stopped worker ends the run's chain and the owner is told; ⏹ Batalkan run stops everything.
+- **The pick**: a role with `ask_owner` first gets the options of the previous stage — its `pilihan` (new in the result block: label, waktu HH:MM,
+  detail; the earlier role is told to write it) or the rows of its first table — as an `owner_choices` row; `owner_choice` goes to the phone
+  (native dialog + a notification that opens it) and to the desk (popup; in the app the native one is used). Unanswered for 3 h → expires.
+  The pick starts the next stage now, or at the option's time minus `start_offset_min` (a time already past by > 15 min is refused).
+  The next stage's workers get the previous results and the pick in their brief (`PILIHAN PEMILIK`).
+- **Notifications**: event `notify` (title, text, kind) → an Android notification, never spoken: a pick is waiting (urgent), a stage was
+  scheduled / started, a run ended (once, with n/m), a chain stopped and why, a phone run began by itself.
+- **No admin password for a project's phone run** — scheduled or ▶ Jalankan or a later stage (`phone_runs.approved_by` = jadwal / proyek).
+  Still password-gated: phone runs asked from the chat (ADR-077). The phone guards (no PIN/OTP, only the app, no top-ups, Hentikan banner) hold.
+- **Phone agent, from the owner's first real runs**: the screenshot overlay of the phone was "the front window" → the service now finds the
+  approved app's own window; a search box that is not an input until tapped is tapped first; opening waits for the app (≤ 12 s); the server waits
+  ≤ 30 s for the phone's link and tells the model when the phone refuses a step instead of ending the run (4 refusals in a row end it).

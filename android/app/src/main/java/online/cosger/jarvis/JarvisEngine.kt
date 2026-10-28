@@ -114,6 +114,9 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
     /** ADR-077: JARVIS asks to operate an app on this phone — approved here with the admin password. */
+    /** ADR-079: a project asks the owner to pick one option (a train to catch) — answered in a dialog. */
+    private val _choices = MutableStateFlow<List<ServerEvent.OwnerChoice>>(emptyList())
+    val choices: StateFlow<List<ServerEvent.OwnerChoice>> = _choices.asStateFlow()
     private val _phoneApprovals = MutableStateFlow<List<ServerEvent.PhoneApproval>>(emptyList())
     val phoneApprovals: StateFlow<List<ServerEvent.PhoneApproval>> = _phoneApprovals.asStateFlow()
 
@@ -528,6 +531,9 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 })
             }
             is ServerEvent.PhoneApproval -> onPhoneApproval(event)
+            is ServerEvent.Notify -> online.cosger.jarvis.phone.ApprovalNotice.notice(
+                context, (event.title + event.text).hashCode(), event.title, event.text, urgent = event.kind == "choice" || event.kind == "phone")
+            is ServerEvent.OwnerChoice -> onOwnerChoice(event)
             is ServerEvent.Transcript -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
                 listener.setInterim("")
@@ -561,6 +567,37 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             }
         }
     }
+
+    // ---------- ADR-079: the owner's pick between a project's stages ----------
+
+    private fun onOwnerChoice(c: ServerEvent.OwnerChoice) {
+        if (c.status == "open") {
+            if (_choices.value.none { it.id == c.id }) _choices.update { it + c }
+        } else {
+            _choices.update { list -> list.filterNot { it.id == c.id } }
+        }
+    }
+
+    fun refreshChoices() {
+        if (!settings.value.isConfigured) return
+        scope.launch {
+            val arr = runCatching { console.get("/api/v1/choices") }.getOrNull() as? kotlinx.serialization.json.JsonArray ?: return@launch
+            _choices.value = arr.mapNotNull { Protocol.parse(it.toString()) as? ServerEvent.OwnerChoice }.filter { it.status == "open" }
+        }
+    }
+
+    /** null = answered (the next stage starts now or at its time); otherwise what went wrong (expired, time already past …). */
+    suspend fun answerChoice(id: Long, option: Int): String? = runCatching {
+        console.post("/api/v1/choices/$id/answer", buildJsonObject { put("option", option) })
+    }.fold(onSuccess = { r ->
+        _choices.update { list -> list.filterNot { it.id == id } }
+        val o = r as? kotlinx.serialization.json.JsonObject
+        _notice.value = if (o?.get("state")?.jsonPrimitive?.contentOrNull == "timer") "Oke — dijadwalkan; JARVIS mulai sesuai jam pilihanmu." else "Oke — langkah berikutnya dimulai."
+        null
+    }, onFailure = { e ->
+        if ((e.message ?: "").contains("kedaluwarsa") || (e.message ?: "").contains("sudah")) _choices.update { list -> list.filterNot { it.id == id } }
+        e.message ?: "Gagal memilih"
+    })
 
     // ---------- ADR-077: approving an app run ----------
 

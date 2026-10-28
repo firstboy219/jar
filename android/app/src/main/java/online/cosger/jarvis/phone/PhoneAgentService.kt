@@ -86,7 +86,22 @@ class PhoneAgentService : AccessibilityService() {
         hideBanner()
     }
 
-    private fun foreground(): String = rootInActiveWindow?.packageName?.toString().orEmpty()
+    /**
+     * The approved app's window. Another window may be in front of it (the phone's screenshot overlay, a system dialog, a floating
+     * widget) and then `rootInActiveWindow` is THAT window: look through all windows for the approved app's own.
+     */
+    private fun appRoot(): AccessibilityNodeInfo? {
+        val active = rootInActiveWindow
+        if ((active?.packageName?.toString() ?: "") in allowed) return active
+        val all = runCatching { windows }.getOrNull().orEmpty().sortedByDescending { it.layer }
+        for (w in all) {
+            val r = w.root ?: continue
+            if ((r.packageName?.toString() ?: "") in allowed) return r
+        }
+        return active
+    }
+
+    private fun foreground(): String = appRoot()?.packageName?.toString().orEmpty()
 
     private fun requireRun() {
         if (runId == 0L) throw PhoneOpException("tidak ada operasi yang disetujui")
@@ -111,7 +126,7 @@ class PhoneAgentService : AccessibilityService() {
     suspend fun observe(): JsonObject {
         requireRun()
         settle()
-        val root = rootInActiveWindow
+        val root = appRoot()
         val pkg = root?.packageName?.toString().orEmpty()
         nodes.clear()
         val dm = resources.displayMetrics
@@ -158,22 +173,32 @@ class PhoneAgentService : AccessibilityService() {
 
     // ---------- actions ----------
 
-    suspend fun tap(index: Int?): JsonObject {
-        requireInApp()
-        val n = nodeAt(index)
+    private suspend fun clickNode(n: AccessibilityNodeInfo) {
         var target: AccessibilityNodeInfo? = n
         while (target != null && !target.isClickable) target = target.parent
         if (target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) != true) {
             val r = Rect().also { n.getBoundsInScreen(it) }
             if (!gesture(r.exactCenterX(), r.exactCenterY(), r.exactCenterX(), r.exactCenterY(), 60)) throw PhoneOpException("ketukan gagal")
         }
+    }
+
+    suspend fun tap(index: Int?): JsonObject {
+        requireInApp()
+        clickNode(nodeAt(index))
         return observe()
     }
 
     suspend fun type(index: Int?, text: String, submit: Boolean): JsonObject {
         requireInApp()
         var n = nodeAt(index)
-        if (!n.isEditable) n = findEditable(n) ?: throw PhoneOpException("elemen itu bukan kolom isian")
+        if (!n.isEditable) {
+            n = findEditable(n) ?: run {
+                // a search box often looks like text or a button until it is tapped: tap it, then use the field that took focus
+                clickNode(n)
+                delay(900)
+                findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable } ?: appRoot()?.let { findEditable(it) }
+            } ?: throw PhoneOpException("elemen itu bukan kolom isian, dan setelah diketuk tidak ada kolom isian — lihat layarnya lagi")
+        }
         if (n.isPassword) throw PhoneOpException("kolom kata sandi/PIN: JARVIS tidak mengetiknya — pemilik yang mengisi")
         n.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         n.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -226,7 +251,9 @@ class PhoneAgentService : AccessibilityService() {
         if (pkg !in allowed) throw PhoneOpException("aplikasi $pkg tidak termasuk operasi ini")
         val launch = packageManager.getLaunchIntentForPackage(pkg) ?: throw PhoneOpException("$appLabel belum terpasang di HP ini")
         startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
+        val end = SystemClock.uptimeMillis() + 12_000   // a cold start of a big app takes a while
         delay(1_500)
+        while (SystemClock.uptimeMillis() < end && foreground() !in allowed) delay(500)
         return observe()
     }
 

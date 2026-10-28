@@ -34,6 +34,9 @@ class JarvisViewModel(app: Application) : AndroidViewModel(app) {
     val console = engine.console
     val meetings = engine.meetings
     val updater = engine.updater
+    val choices = engine.choices
+    suspend fun answerChoice(id: Long, option: Int) = engine.answerChoice(id, option)
+    fun refreshChoices() = engine.refreshChoices()
     val phoneApprovals = engine.phoneApprovals
     suspend fun approvePhoneRun(id: Long, password: String) = engine.approvePhoneRun(id, password)
     fun rejectPhoneRun(id: Long) = engine.rejectPhoneRun(id)

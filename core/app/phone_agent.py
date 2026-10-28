@@ -32,6 +32,7 @@ APPROVAL_MINUTES = 15
 MAX_STEPS = 45
 MAX_MINUTES = 15
 OP_TIMEOUT = 25
+ONLINE_WAIT_S = 30                   # how long an instruction waits for the phone to be connected
 PIN_WAIT_S = 240                     # how long a run waits for the owner to type a PIN / OTP themself
 SECRET_WORDS = re.compile(r"\b(pin|otp|kata sandi|password|kode verifikasi|kode otp|verification code|masukkan kode)\b", re.IGNORECASE)
 FORBIDDEN = re.compile(r"\b(top ?up|isi saldo|transfer|kirim saldo|tarik tunai|hapus akun|keluar akun|logout|ubah pin|ganti pin|"
@@ -43,6 +44,10 @@ _lock = asyncio.Lock()
 
 class PhoneError(RuntimeError):
     pass
+
+
+class PhoneOpError(PhoneError):
+    """The phone answered an instruction with an error (wrong screen, no such element …): the model is told and tries something else."""
 
 
 # ---------- pure parts (unit-tested) ----------
@@ -131,8 +136,9 @@ async def _set(run_id: int, **cols) -> None:
 
 
 async def request(goal: str, app: str, actor: str, session_id: str | None = None, scheduled: bool = False,
-                  project: dict | None = None) -> dict:
-    """A run of `app` for `goal`: asked for approval in the JARVIS app — or started at once when the owner scheduled it."""
+                  project: dict | None = None, by: str = "jadwal") -> dict:
+    """A run of `app` for `goal`: asked for approval in the JARVIS app (admin password) — or started at once when it comes from one of the
+    owner's projects (`scheduled`: its schedule or his ▶ Jalankan; `by` says which, ADR-079)."""
     goal = " ".join((goal or "").split())[:1500]
     if app not in APPS:
         raise PhoneError(f"aplikasi belum didukung: {app} (yang bisa: {', '.join(a['label'] for a in APPS.values())})")
@@ -145,7 +151,7 @@ async def request(goal: str, app: str, actor: str, session_id: str | None = None
         app, goal, scheduled, actor, session_id, p.get("project_id"), p.get("role_id"), p.get("run"), p.get("model")))
     await audit.record(actor, "phone.requested", f"phone_run:{row['id']}", app=app, scheduled=scheduled)
     if scheduled:
-        return await _start(row, "jadwal")
+        return await _start(row, by)
     await hub.broadcast(approval_card(row))
     return row
 
@@ -195,6 +201,9 @@ async def _start(row: dict, actor: str) -> dict:
                                 t["id"], row["project_id"], row["project_role"], row["project_run"], row["model_override"])
     await _set(row["id"], task_id=t["id"])
     await hub.broadcast({"type": "phone_approval", "id": row["id"], "status": "approved", "task_id": t["id"]})
+    if actor in ("jadwal", "proyek"):   # nobody approved it just now: say it begins (the banner on the screen has "Hentikan")
+        await hub.broadcast({"type": "notify", "title": f"JARVIS mengoperasikan {a['label']}", "kind": "phone",
+                             "text": f"{row['goal'][:160]} — ada tombol Hentikan di spanduk layar."})
     return {**row, "status": "approved", "task_id": t["id"]}
 
 
@@ -204,10 +213,18 @@ def phone_online() -> bool:
     return any(CAP in (c.get("caps") or []) for c in hub.clients())
 
 
+async def wait_online(seconds: int = ONLINE_WAIT_S) -> bool:
+    """The phone's link drops and comes back (app reopened, mobile data): give it a moment before giving up."""
+    end = time.monotonic() + seconds
+    while not phone_online() and time.monotonic() < end:
+        await asyncio.sleep(1)
+    return phone_online()
+
+
 async def op(name: str, **args) -> dict:
     """One instruction to the phone's accessibility service; its answer (a fresh screen for most)."""
-    if not phone_online():
-        raise PhoneError("HP dengan aplikasi JARVIS terbaru tidak tersambung")
+    if not await wait_online():
+        raise PhoneError("HP dengan aplikasi JARVIS terbaru tidak tersambung (buka aplikasi JARVIS di HP)")
     req = uuid.uuid4().hex[:12]
     fut = asyncio.get_running_loop().create_future()
     _waiting[req] = fut
@@ -220,7 +237,7 @@ async def op(name: str, **args) -> dict:
     finally:
         _waiting.pop(req, None)
     if reply.get("error"):
-        raise PhoneError(str(reply["error"])[:300])
+        raise PhoneOpError(str(reply["error"])[:300])
     return reply
 
 
@@ -277,6 +294,7 @@ Aturan:
 - PIN, kata sandi, OTP: JANGAN pernah diketik. Bila layar memintanya, JARVIS otomatis menunggu pemilik mengetiknya sendiri.
 - Sebelum menekan tombol pesan/bayar terakhir, pastikan detailnya sesuai tugas (layanan, tujuan/menu, jumlah, metode bayar). Bila harga jauh
   di atas yang pemilik sebut, alamat ambigu, atau pilihan tidak jelas → tanya_pemilik, jangan menebak.
+- Kolom pencarian sering tampak sebagai teks/tombol: ketuk dulu, tunggu kolom isian muncul, baru ketik.
 - Bila sebuah langkah tidak mengubah layar, coba cara lain (gulir, tunggu, kembali); jangan mengulang hal yang sama lebih dari dua kali.
 - Selesai → panggil selesai dengan hasil yang jelas. Tidak mungkin → gagal dengan alasannya.
 {hint}"""
@@ -344,7 +362,13 @@ async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
     await progress(8, f"Membuka {a['label']} di HP…")
     obs = await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"])
     obs = await op("open", package=a["packages"][0])
+    for _ in range(3):   # the app is slow to come to the front, or a system overlay (screenshot, permission) is in the way
+        if in_app(obs, app):
+            break
+        await asyncio.sleep(3)
+        obs = await op("observe")
     history: list[str] = []
+    slips = 0
     system = SYSTEM.format(label=a["label"], hint=a["hint"])
     for step in range(1, MAX_STEPS + 1):
         if time.monotonic() - started > MAX_MINUTES * 60:
@@ -396,9 +420,20 @@ async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
             history.append(f"{step}. tunggu")
         else:
             before = screen_text(obs)
-            obs = await op({"ketuk": "tap", "ketik": "type", "gulir": "scroll", "kembali": "back", "buka_aplikasi": "open"}[name],
-                           index=args.get("nomor"), text=str(args.get("teks") or ""), submit=bool(args.get("kirim")),
-                           direction=args.get("arah") or "bawah", package=a["packages"][0])
+            try:
+                obs = await op({"ketuk": "tap", "ketik": "type", "gulir": "scroll", "kembali": "back", "buka_aplikasi": "open"}[name],
+                               index=args.get("nomor"), text=str(args.get("teks") or ""), submit=bool(args.get("kirim")),
+                               direction=args.get("arah") or "bawah", package=a["packages"][0])
+                slips = 0
+            except PhoneOpError as e:   # the phone refused (wrong screen, no such field): the model is told and tries another way
+                slips += 1
+                if slips >= 4:
+                    raise PhoneError(f"HP menolak 4 kali berturut-turut: {e}") from None
+                history.append(f"{step}. {label} → HP MENOLAK: {e}")
+                await emit({"type": "thought", "text": f"HP menolak: {e}"[:200]})
+                await asyncio.sleep(2)
+                obs = await op("observe")
+                continue
             history.append(f"{step}. {label}" + (" (layar tidak berubah)" if screen_text(obs) == before else ""))
         await emit({"type": "tool", "id": f"hp{step}", "name": f"hp_{name}", "label": label, "status": "completed"})
     raise PhoneError(f"belum selesai setelah {MAX_STEPS} langkah")

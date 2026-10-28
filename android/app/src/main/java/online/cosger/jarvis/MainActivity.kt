@@ -88,6 +88,7 @@ class MainActivity : FragmentActivity() {
         // Every time JARVIS is opened: is there a newer version? (dialog: Update sekarang / Tunda)
         (application as JarvisApp).engine.checkUpdateSoon()
         (application as JarvisApp).engine.refreshPhoneApprovals()   // ADR-077: an approval asked while the app was closed
+        (application as JarvisApp).engine.refreshChoices()           // ADR-079: a pick asked while the app was closed
     }
 
     @OptIn(ExperimentalLayoutApi::class)   // consumeWindowInsets (stable in newer Compose; harmless when it already is)
@@ -143,6 +144,14 @@ class MainActivity : FragmentActivity() {
                 var later by remember { androidx.compose.runtime.mutableStateOf(setOf<Long>()) }
                 phoneAsks.firstOrNull { it.id !in later }?.let { a ->
                     online.cosger.jarvis.ui.console.PhoneApprovalDialog(vm, a) { later = later + a.id }
+                }
+                // ADR-079: a project asks the owner to pick (which train): the popup the notification opens
+                val picks by vm.choices.collectAsStateWithLifecycle()
+                var laterPick by remember { androidx.compose.runtime.mutableStateOf(setOf<Long>()) }
+                if (phoneAsks.none { it.id !in later }) {   // the admin-password dialog goes first when both are waiting
+                    picks.firstOrNull { it.id !in laterPick }?.let { c ->
+                        online.cosger.jarvis.ui.console.OwnerChoiceDialog(vm, c) { laterPick = laterPick + c.id }
+                    }
                 }
                 // Location sharing is on by default: ask once at start; denying turns the setting off.
                 val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { g ->
