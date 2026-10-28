@@ -75,6 +75,11 @@ sealed interface ServerEvent {
     /** Pictures/videos JARVIS wants the owner to see. */
     data class Media(val caption: String, val items: List<MediaItem>) : ServerEvent { override val sessionId: String? = null }
     data class ReportUnheard(val id: Long) : ServerEvent { override val sessionId: String? = null }
+    /** ADR-077: one instruction for the accessibility service (observe, tap, type, scroll, back, open, screenshot, begin, end). */
+    data class PhoneOp(val req: String, val op: String, val args: JsonObject) : ServerEvent { override val sessionId: String? = null }
+    /** ADR-077: JARVIS asks to operate an app (status "awaiting") — or the ask was settled (approved / rejected / expired). */
+    data class PhoneApproval(val id: Long, val status: String, val label: String, val goal: String, val requestedBy: String,
+                             val expiresInS: Long) : ServerEvent { override val sessionId: String? = null }
     data object Pong : ServerEvent { override val sessionId: String? = null }
     data object AuthOk : ServerEvent { override val sessionId: String? = null }
 }
@@ -176,6 +181,9 @@ object Protocol {
                 } ?: emptyList(),
             )
             "report_unheard" -> ServerEvent.ReportUnheard(o.long("id") ?: return null)
+            "phone_op" -> ServerEvent.PhoneOp(o.str("req"), o.str("op"), o)
+            "phone_approval" -> ServerEvent.PhoneApproval(o.long("id") ?: return null, o.str("status").ifEmpty { "awaiting" }, o.str("label"),
+                o.str("goal"), o.str("requested_by"), o.long("expires_in_s") ?: 900)
             "pong" -> ServerEvent.Pong
             "auth_ok" -> ServerEvent.AuthOk
             else -> null

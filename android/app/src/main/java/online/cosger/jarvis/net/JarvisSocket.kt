@@ -131,7 +131,7 @@ class JarvisSocket(
     companion object {
         const val UNAUTHORIZED = 4401
         /** What this app understands, so the server knows it may stream sentences and stage panels. */
-        const val CAPS = "say,stage,utterance,brain"
+        const val CAPS = "say,stage,utterance,brain,phone_agent"
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

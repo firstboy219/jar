@@ -8,6 +8,8 @@ const button = (text, cls, fn, title) => { const b = el('button', cls, text); b.
 const typing = (i) => { i.addEventListener('keydown', (e) => e.stopPropagation()); return i; };
 const STATUS = { queued: 'antre', running: 'bekerja', completed: 'selesai', failed: 'gagal', stopped: 'dihentikan', cancelled: 'dibatalkan' };
 export const SCHEDULES = [['manual', 'Manual'], ['hourly', 'Tiap jam'], ['daily', 'Tiap hari'], ['weekdays', 'Senin–Jumat'], ['weekly', 'Mingguan']];
+/** Apps JARVIS can operate on the phone (ADR-077, phone_agent.APPS). */
+export const APPS = { gojek: 'Gojek' };
 const DAYS = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
 
 /** Workers a project would start in one run (pure; unit-tested). */
@@ -33,7 +35,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
     body.replaceChildren();
     if (editing) { body.append(editor(editing)); return; }
     const top = el('div', 'pctl');
-    top.append(button('＋ Proyek baru', 'mgo', () => { editing = { name: '', goal: '', schedule: 'manual', at_time: '08:00', weekday: 0, roles: [{ role: '', brief: '', workers: 1, model: '', web: false }] }; render(); }));
+    top.append(button('＋ Proyek baru', 'mgo', () => { editing = { name: '', goal: '', schedule: 'manual', at_time: '08:00', weekday: 0, roles: [{ role: '', brief: '', workers: 1, model: '', web: false, app: null }] }; render(); }));
     body.append(top);
     if (!data?.projects.length) body.append(el('div', 'snippet', 'Belum ada proyek. Contoh: "Cari & lamar kerja" — peran Pencari (2 pekerja, operasi web) dan Penulis surat lamaran (1 pekerja), tiap hari 08:00.'));
     for (const p of data?.projects || []) body.append(project(p));
@@ -61,7 +63,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
     meta.append(el('span', 'chip', `${p.runs}× jalan`));
     c.append(meta);
     const roles = el('div', 'wmeta');
-    for (const r of p.roles) roles.append(el('span', 'chip wmodel', `${r.web ? '🌐 ' : ''}${r.role} ×${r.workers} · ${r.model ? shortModel(r.model) : 'model kategori'}`));
+    for (const r of p.roles) roles.append(el('span', 'chip wmodel', `${r.app ? `📱 ${APPS[r.app] || r.app} · ` : r.web ? '🌐 ' : ''}${r.role} ×${r.workers} · ${r.model ? shortModel(r.model) : 'model kategori'}`));
     c.append(roles);
     const ctl = el('div', 'pctl');
     ctl.append(button('📑 Hasil', 'pbtn', () => openResults({ api, toast, projectId: p.id, onShowTask }), 'Buka hasil run: tabel, grafik, gambar, dokumen'),
@@ -120,8 +122,14 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
         model.addEventListener('input', () => { r.model = model.value.trim(); });
         const web = el('label', 'mcheck'), cb = el('input'); cb.type = 'checkbox'; cb.checked = !!r.web; cb.addEventListener('change', () => { r.web = cb.checked; });
         web.append(cb, el('span', null, '🌐 Operasikan situs (browser) — mis. bantu apply kerja; berhenti sebelum mengirim'));
+        const app = el('select'); for (const [v, t] of [['', '— tidak —'], ...Object.entries(APPS)]) { const o = el('option', null, t); o.value = v; app.append(o); }
+        app.value = r.app || '';
+        const appNote = el('div', 'snippet', 'Setiap ▶ Jalankan minta persetujuanmu di aplikasi JARVIS (password admin); hanya run TERJADWAL yang langsung jalan. PIN/OTP tetap kamu yang ketik. 1 pekerja (HP punya satu layar).');
+        const syncApp = () => { appNote.hidden = !app.value; n.disabled = !!app.value; if (app.value) { n.value = '1'; r.workers = 1; } total.textContent = totalText(); };
+        app.addEventListener('change', () => { r.app = app.value || null; syncApp(); });
         const row = el('div', 'pctl'); row.append(field('Jumlah pekerja', n), field('Model AI', model));
-        b.append(field(`Peran ${i + 1}`, role), brief, row, web, button('Hapus peran', 'pbtn', () => { roles.splice(i, 1); drawRoles(); }));
+        b.append(field(`Peran ${i + 1}`, role), brief, row, web, field('📱 Operasikan aplikasi di HP', app), appNote, button('Hapus peran', 'pbtn', () => { roles.splice(i, 1); drawRoles(); }));
+        syncApp();
         return b;
       }));
       total.textContent = totalText();

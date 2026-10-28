@@ -1242,3 +1242,21 @@ their live stations on the desk (the Tim Dev area draws its live view from them)
 `workers._announce` now sends a dev-team task as event `devtask` (same payload); `live.on_event` treats it like `task` (station made), while the
 phone, which builds its worker list from `task` events and ignores unknown types, never sees it — also true for already installed APKs.
 The Pekerja card keeps filtering by `dev_role` (`desk_list`), `active()/stopped()` by kind.
+
+## ADR-077 — JARVIS operates Gojek on the owner's phone, with approval by admin password (Blueprint v4 Fase 12)
+Owner (2026-10-28): JARVIS can operate the Gojek app, but every run needs his permission — shown in the app and secured by the admin
+password — except runs he scheduled.
+- **How**: the JARVIS app's accessibility service (`phone/PhoneAgentService`, off until the owner enables it in Android's settings; Setelan HP
+  → 5) reads the app's screen as an element list and taps / types / scrolls / goes back on instruction. Core runs the loop
+  (`phone_agent.produce`, category `hp`): show the model the current screen, take ONE tool call (ketuk, ketik, gulir, kembali, buka_aplikasi,
+  tunggu, lihat_gambar → screenshot read by the vision model, tanya_pemilik, selesai, gagal), look again; ≤ 45 steps, ≤ 15 minutes, one phone
+  run at a time. It is an ordinary worker task (desk card, steps, progress, stop, report, episode); a project role's model applies.
+- **Approval**: a run starts as `awaiting` (`phone_runs`, migration 033): the phone shows a dialog (and a notification) with the goal; Setujui
+  needs the **admin password**, checked by the web admin (`/internal/check-admin-password`), 5 wrong per device per 15 min; it expires
+  after 15 min. Only a project's **schedule** (`projects.tick`) starts one unasked; ▶ Jalankan on the desk asks too.
+- **Never**, scheduled or not, enforced on the server (`check_action`) AND on the phone: acting outside the approved app's package (the phone
+  does not even read another app's screen), typing into a password / PIN / OTP field (a secret screen pauses the run until the owner typed it,
+  ≤ 4 min), tapping top-up / transfer / account / card / pay-later buttons. No automatic second attempt after a failure (an order may be
+  half done). A banner "🤖 JARVIS mengoperasikan Gojek · Hentikan" shows while it works; Hentikan stops the task.
+- **Asked from**: the chat ("pesankan goride ke kantor" → plain intent; tool `operasi_hp`), a project role "📱 Operasikan aplikasi di HP"
+  (one worker), never from Hermes workers directly. Apps: `phone_agent.APPS` (Gojek; package com.gojek.app).

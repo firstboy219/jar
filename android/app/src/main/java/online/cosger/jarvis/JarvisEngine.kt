@@ -113,6 +113,9 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     val board: StateFlow<Board> = _board.asStateFlow()
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
+    /** ADR-077: JARVIS asks to operate an app on this phone — approved here with the admin password. */
+    private val _phoneApprovals = MutableStateFlow<List<ServerEvent.PhoneApproval>>(emptyList())
+    val phoneApprovals: StateFlow<List<ServerEvent.PhoneApproval>> = _phoneApprovals.asStateFlow()
 
     /** The front screen: a panel JARVIS opened, or (none) the 3D brain. */
     private val _stage = MutableStateFlow(StageState())
@@ -519,6 +522,12 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             is ServerEvent.MeetingCmd -> onMeetingCmd(event)
             is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind, event.labels) }
             is ServerEvent.Approval -> _notice.value = "Butuh persetujuanmu: ${event.title} (menu Tugas & Persetujuan)"
+            is ServerEvent.PhoneOp -> scope.launch {
+                socket.sendControl(online.cosger.jarvis.phone.PhoneOps.handle(event.req, event.op, event.args) { run ->
+                    socket.sendControl(Protocol.control("phone_stop", "run", run))
+                })
+            }
+            is ServerEvent.PhoneApproval -> onPhoneApproval(event)
             is ServerEvent.Transcript -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
                 listener.setInterim("")
@@ -551,6 +560,46 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 }
             }
         }
+    }
+
+    // ---------- ADR-077: approving an app run ----------
+
+    private fun onPhoneApproval(a: ServerEvent.PhoneApproval) {
+        if (a.status == "awaiting") {
+            if (_phoneApprovals.value.none { it.id == a.id }) {
+                _phoneApprovals.update { it + a }
+                online.cosger.jarvis.phone.ApprovalNotice.show(context, a)
+            }
+        } else {
+            _phoneApprovals.update { list -> list.filterNot { it.id == a.id } }
+            online.cosger.jarvis.phone.ApprovalNotice.cancel(context, a.id)
+        }
+    }
+
+    /** The app came to the front: what is still waiting (an event may have been missed while it was closed). */
+    fun refreshPhoneApprovals() {
+        if (!settings.value.isConfigured) return
+        scope.launch {
+            runCatching { console.get("/api/v1/phone/runs").jsonObject["pending"] }.getOrNull()?.let { el ->
+                val list = (el as? kotlinx.serialization.json.JsonArray)?.mapNotNull { Protocol.parse(it.toString()) as? ServerEvent.PhoneApproval }.orEmpty()
+                _phoneApprovals.value = list
+            }
+        }
+    }
+
+    /** null = approved and started; otherwise what went wrong (wrong password, expired …). */
+    suspend fun approvePhoneRun(id: Long, password: String): String? = runCatching {
+        console.post("/api/v1/phone/runs/$id/approve", buildJsonObject { put("password", password) })
+    }.fold(onSuccess = {
+        _phoneApprovals.update { list -> list.filterNot { it.id == id } }
+        online.cosger.jarvis.phone.ApprovalNotice.cancel(context, id)
+        null
+    }, onFailure = { it.message ?: "Gagal menyetujui" })
+
+    fun rejectPhoneRun(id: Long) {
+        _phoneApprovals.update { list -> list.filterNot { it.id == id } }
+        online.cosger.jarvis.phone.ApprovalNotice.cancel(context, id)
+        scope.launch { runCatching { console.post("/api/v1/phone/runs/$id/reject") } }
     }
 
     /**

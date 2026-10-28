@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">JARVIS</string>
+    <string name="phone_agent_label">JARVIS · operasi aplikasi</string>
+    <string name="phone_agent_desc">Mengizinkan JARVIS mengoperasikan aplikasi yang kamu setujui (saat ini Gojek): membaca layarnya, mengetuk, mengetik, dan menggulir. JARVIS hanya bergerak selama operasi yang kamu setujui di aplikasi JARVIS dengan password admin (atau yang kamu jadwalkan), hanya di aplikasi itu, dan tidak pernah mengetik PIN, kata sandi, atau OTP. Spanduk di atas layar menandai saat JARVIS bekerja; ketuk Hentikan untuk berhenti kapan saja.</string>
 </resources>

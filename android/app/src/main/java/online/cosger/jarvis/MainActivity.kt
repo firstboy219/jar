@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
@@ -86,6 +87,7 @@ class MainActivity : FragmentActivity() {
         super.onResume()
         // Every time JARVIS is opened: is there a newer version? (dialog: Update sekarang / Tunda)
         (application as JarvisApp).engine.checkUpdateSoon()
+        (application as JarvisApp).engine.refreshPhoneApprovals()   // ADR-077: an approval asked while the app was closed
     }
 
     @OptIn(ExperimentalLayoutApi::class)   // consumeWindowInsets (stable in newer Compose; harmless when it already is)
@@ -135,6 +137,12 @@ class MainActivity : FragmentActivity() {
                             }
                         },
                     )
+                }
+                // ADR-077: JARVIS asks to operate an app on this phone — the admin password approves it
+                val phoneAsks by vm.phoneApprovals.collectAsStateWithLifecycle()
+                var later by remember { androidx.compose.runtime.mutableStateOf(setOf<Long>()) }
+                phoneAsks.firstOrNull { it.id !in later }?.let { a ->
+                    online.cosger.jarvis.ui.console.PhoneApprovalDialog(vm, a) { later = later + a.id }
                 }
                 // Location sharing is on by default: ask once at start; denying turns the setting off.
                 val askLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { g ->

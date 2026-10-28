@@ -228,6 +228,22 @@ fun PhoneSetupScreen(onBack: () -> Unit) {
             Small("Untuk membaca notifikasi dan membantu membalas WhatsApp.", JarvisColors.Text)
             Action("Buka") { open(Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")) }
         }
+        val agentOn = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+        androidx.lifecycle.compose.LifecycleResumeEffect(Unit) {   // re-read whenever the owner comes back from Android's settings
+            agentOn.value = (Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: "")
+                .contains("${context.packageName}/", ignoreCase = true) && online.cosger.jarvis.phone.PhoneAgentService.instance != null
+            onPauseOrDispose { }
+        }
+        Card(border = if (agentOn.value) JarvisColors.Green else JarvisColors.Border) {
+            Label("5. Operasi aplikasi (Gojek)")
+            Small("Supaya JARVIS bisa membuka & mengoperasikan Gojek untukmu. Setiap operasi tetap minta persetujuanmu dengan password admin " +
+                "(kecuali yang kamu jadwalkan); PIN/OTP selalu kamu yang ketik. Aksesibilitas → Aplikasi terinstal → \"JARVIS · operasi aplikasi\" → aktifkan. " +
+                "Bila tombolnya abu-abu (Android 13+): Info aplikasi JARVIS → ⋮ → Izinkan setelan terbatas, lalu ulangi.", JarvisColors.Text)
+            Action(if (agentOn.value) "Sudah aktif" else "Buka Aksesibilitas") { open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            if (!agentOn.value) Action("Info aplikasi (setelan terbatas)") {
+                open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName)))
+            }
+        }
         Text("Tanpa langkah ini, XOS bisa mematikan JARVIS diam-diam setelah layar mati.", color = JarvisColors.Muted,
             fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
     }
