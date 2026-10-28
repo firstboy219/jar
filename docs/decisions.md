@@ -1286,3 +1286,21 @@ which departure option to take, then order the ride 5 minutes before the time he
 - **Phone agent, from the owner's first real runs**: the screenshot overlay of the phone was "the front window" → the service now finds the
   approved app's own window; a search box that is not an input until tapped is tapped first; opening waits for the app (≤ 12 s); the server waits
   ≤ 30 s for the phone's link and tells the model when the phone refuses a step instead of ending the run (4 refusals in a row end it).
+
+## ADR-080 — The local Qwen models are removed; every model is a cloud model (Blueprint v4 Fase 12)
+Owner (2026-10-28): OpenRouter is in use, so delete the local Qwen. Measured first (3 days): the local servers answered ~2 % of the calls;
+the worker model succeeded 9 of 77 times at ~12 minutes each, the chat one ~4 minutes; "privat" was never used; both held ~7.6 GB
+(2 × the same 4B model, 3.5 GB of it in swap, which was full).
+- **Gone**: `llama-chat` and `llama-worker` (compose, `scripts/get-models.sh`, the CPU policy in `usage-collector.sh`, the orphan watchdog in
+  `ops.py`/`ops.sh`, the slot save/restore, `gateway.LOCAL*`, the local fallback at the end of every route list, the "lokal" preset). Migration
+  035 removes the providers `lokal` / `lokal-kerja` and every local route. Whisper (`jarvis-ears`) is not a text model and stays.
+- **Nothing answers when OpenRouter does not**: no key, no credit, the budget cap with no free model → `GatewayError` with the reason, not a
+  slow local answer. The free-first chains still end with the safety model (`deepseek/deepseek-v4-flash`).
+- **`/privat` is refused** (it meant "only the local model"): the text is not even logged. **Sensitive content** found in a message (OTP,
+  password, card…), sensitive mail triage (`inbox`) and the `privat` category now mean *paid cloud models only* — never a free endpoint, which
+  may log prompts (`gateway.plan(private=True)`; `privat` is an ordinary, editable category with paid routes).
+- **Confidential meetings** ("Rahasia") are transcribed by the local Whisper only and get no AI minutes and no Q&A: nothing of them reaches a
+  cloud model. Ordinary meetings are unchanged.
+- Quick look-ups instead of a Hermes session, the "background work waits for the owner's turn on the CPU" gate, and the short prompt for the
+  local model were only for the slow CPU model: they never ran with a cloud model first, and are now simply gone.
+- Disk: `data/models/*.gguf` (~10.7 GB) can be deleted; `data/models/whisper` and `hf` belong to jarvis-ears.

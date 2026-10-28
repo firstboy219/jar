@@ -195,5 +195,4 @@ HELP = """Perintah cepat (dijawab langsung tanpa model AI):
 • di mana saya — lokasi HP saat ini (jika berbagi lokasi aktif)
 • pakai model apa — AI yang sedang dipakai
 • netralkan server — hentikan (dan simpan) semua tugas untuk meringankan CPU & memori
-Awali pesan dengan /privat agar tidak dikirim ke model cloud.
 Pesan lain dijawab JARVIS (agen utama), yang menugaskan worker bila perlu."""

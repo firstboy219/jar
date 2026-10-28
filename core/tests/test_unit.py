@@ -467,12 +467,12 @@ def test_bugs_found_in_the_live_session():
 
 def test_who_uses_the_server():
     from app import ops
-    raw = {"containers": [{"Name": "jarvis-llm-worker", "CPUPerc": "363.04%", "MemUsage": "2.719GiB / 6GiB"},
+    raw = {"containers": [{"Name": "jarvis-ears", "CPUPerc": "363.04%", "MemUsage": "2.719GiB / 6GiB"},
                           {"Name": "jarvis-core", "CPUPerc": "0.15%", "MemUsage": "650.3MiB / 15.41GiB"},
                           {"Name": "jarvis-brain", "CPUPerc": "12.0%", "MemUsage": "339.9MiB / 4GiB"}]}
     rows = ops.parse_stats(raw, cores=4)
-    assert [r["name"] for r in rows] == ["jarvis-llm-worker", "jarvis-brain", "jarvis-core"]
-    assert rows[0] == {"name": "jarvis-llm-worker", "label": "AI kerja lokal", "cpu_pct": 90.8, "mem_gb": 2.72}
+    assert [r["name"] for r in rows] == ["jarvis-ears", "jarvis-brain", "jarvis-core"]
+    assert rows[0] == {"name": "jarvis-ears", "label": "Whisper (telinga)", "cpu_pct": 90.8, "mem_gb": 2.72}
     assert rows[2]["mem_gb"] == 0.64
     assert parse("netralkan server") == Intent("relieve") and parse("tolong reset cpu dan memori") == Intent("relieve")
 
@@ -480,16 +480,6 @@ def test_who_uses_the_server():
 def test_ai_calls_in_words():
     from app import ops
     assert ops.ai_calls([{"caller": "flowwatch"}, {"caller": "chat"}, {"caller": "chat"}]) == ["pengawas alur", "ngobrol denganmu ×2"]
-
-
-def test_background_rules_and_orphan_watchdog():
-    from app import ops
-    assert ops.worker_policy("1 tugasmu berjalan")[0] == 4.0
-    assert ops.worker_policy("") == (4.0, "semua inti, prioritas paling rendah")  # no 50% limit (owner, 2026-10-21)
-    assert ops.orphaned(71.0, [])  # computing while nobody waits: the 286% bug
-    assert ops.orphaned(71.0, [{"caller": "flowwatch", "provider": "lokal"}])  # the chat model is another server
-    assert not ops.orphaned(71.0, [{"caller": "hermes", "provider": "lokal-kerja"}])
-    assert not ops.orphaned(10.0, [])
 
 
 def test_hermes_profile_follows_where_it_runs():
@@ -782,7 +772,7 @@ def test_the_blueprint_registry_template_is_valid():
     p = composition.registry_preset()
     assert p is not None and p["routes"]["analisis"][0] == {"provider": "openrouter", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"}
     assert p["routes"]["ngobrol"][0]["model"] == "qwen/qwen3.7-flash"      # owner's decision: chat stays on the proven fast model
-    assert p["routes"]["ngobrol"][-1]["provider"] == "lokal" and p["routes"]["coding"][-1]["provider"] == "lokal-kerja"
+    assert all(x["provider"] == "openrouter" for chain in p["routes"].values() for x in chain)   # no local model at the end of any chain (ADR-080)
     assert p["limits"]["cepat"]["paid_attempt_limit"] == 0 and p["limits"]["coding"]["paid_attempt_limit"] == 1
     assert set(p["new_categories"]) == {"review"} and "privat" not in p["routes"]
     assert "laguna" not in str(p["routes"]) and p["free_fallback"] == "openrouter/free"   # an expiring experiment is never a dependency

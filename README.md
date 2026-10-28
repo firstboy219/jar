@@ -9,7 +9,7 @@ APK: mic → Silero VAD (on the phone) → utterance ──wss──▶ jarvis-c
                                                             ├─ speech → text: Whisper local / Groq / Deepgram (+ voiceprint)
                                                             ├─ quick command (status, persetujuan, ingat: …) → no AI
                                                             └─ main agent ──▶ LLM gateway ──▶ owner's composition
-                                                                 │             (cloud routes or local Qwen; /privat → local only)
+                                                                 │             (cloud models on OpenRouter; no local model since ADR-080)
                                                                  ├─ "say" sentence by sentence → phone speaks while it thinks
                                                                  ├─ stage panels (music, map, web, doc, draft) → phone screen
                                                                  └─ spawn_task ×N ─▶ Hermes runs (own flow, all features)
@@ -38,7 +38,6 @@ infra/                  Docker Compose stack for the Lightsail server
   android-builder/      Docker image with JDK 17 + Android SDK 35 (no Android Studio needed)
   hermes/               Hermes persona (SOUL.md), config sync on start, jarvis-memory plugin
   ears/                 jarvis-ears: faster-whisper + sherpa-onnx (voiceprint, diarization)
-  scripts/get-models.sh downloads the local Qwen models
   scripts/install-skills.sh  teaches Hermes 89 extra skills (JARVIS, anthropics/skills, superpowers, Hermes optional)
   hermes/skills/        JARVIS' own skills (Indonesian context)
   admin/                web admin (jar1)
@@ -52,8 +51,6 @@ infra/                  Docker Compose stack for the Lightsail server
 | jarvis-admin | Web admin: dashboard/usage, approvals, memory, devices, audit, settings, chat | `https://jar1.cosger.online` (password login) |
 | jarvis-core | Device API + WSS, tiered routing, approvals, memory, audit, usage | `https://vis1.cosger.online` (device tokens) |
 | jarvis-tools | MCP tool server for Hermes (memory, owner, stage, documents, approvals, n8n, read-only DB/metrics) | internal :8100, bearer `MCP_TOKEN` |
-| jarvis-llm-chat | llama.cpp, Qwen3.5-2B, prompt cache (answers the owner when local) | internal |
-| jarvis-llm-worker | llama.cpp, Qwen3.5-4B 64k ctx, idle CPU priority (Hermes when local) | internal |
 | jarvis-ears | local speech recognition, voiceprint, meeting diarization | internal |
 | jarvis-brain | Hermes Agent (+ Playwright) — OpenAI-compatible API :8642 | internal only (called by jarvis-core) |
 | jarvis-executor | n8n | `https://flow1.cosger.online` (n8n owner login) |
@@ -67,7 +64,6 @@ Domains: `vis1.cosger.online` = backend (jarvis-core), `jar1.cosger.online` = we
 # Docker Engine + compose plugin from download.docker.com, then:
 cd infra
 ./scripts/init-env.sh          # generates .env, prints the web admin password once
-./scripts/get-models.sh        # local Qwen models (~4 GB)
 ./scripts/install-skills.sh    # Hermes skills (after the stack is up)
 docker compose up -d --build
 ./scripts/npm-proxy-hosts.sh   # proxy hosts + Let's Encrypt

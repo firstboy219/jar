@@ -47,7 +47,7 @@ Pakai skill jarvis-flow-audit. Untuk tiap pola masalah: cari akar penyebabnya di
 core/app/assistant.py, aksi langsung di core/app/router.py, pekerja cepat core/app/quick.py, delegasi di
 core/app/workers.py, skill Hermes), lalu perbaiki dengan cara paling ringan — skill/setelan, atau perubahan kode
 lewat propose_code_change dengan tes yang mereproduksi masalahnya. Bila penyebabnya bukan kode (mis. model
-lokal terlalu kecil, saldo habis), katakan terus terang dan sarankan langkah pemilik.
+gratis kena batas, saldo habis), katakan terus terang dan sarankan langkah pemilik.
 Akhiri dengan ringkasan lisan 2–3 kalimat: masalahnya, penyebabnya, apa yang diperbaiki/diusulkan."""
 
 KIND_TEXT = {"off_context": "jawaban tidak sesuai konteks", "promise_unkept": "janji mengerjakan tapi tidak ada tugas",

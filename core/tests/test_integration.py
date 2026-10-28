@@ -19,10 +19,10 @@ async def pool(monkeypatch):
     await p.execute("TRUNCATE devices, messages, approvals, memories, audit_events, tasks, reports, llm_usage, "
                     "settings_kv, owner_questions, documents, vault_entries, error_log, dev_changes, repair_attempts, flow_issues, stage_history, library_kept, dev_jobs, note_pages "
                     "RESTART IDENTITY CASCADE")
-    # factory composition: everything local, no category budgets
-    await p.execute("""UPDATE llm_categories SET budget_usd = NULL, routes = CASE
-        WHEN name IN ('ngobrol', 'cepat', 'penglihatan', 'balas-pesan') THEN '[{"provider": "lokal", "model": "qwen-lokal"}]'::jsonb
-        ELSE '[{"provider": "lokal-kerja", "model": "qwen-lokal"}]'::jsonb END""")
+    # factory composition: one cloud model everywhere (there is no local model, ADR-080), no category budgets
+    await p.execute("""UPDATE llm_categories SET budget_usd = NULL, allow_free = true,
+        routes = '[{"provider": "openrouter", "model": "deepseek/deepseek-v4-pro"}]'::jsonb""")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     from app import budget, gateway, quick
 
     async def no_quick(instruction):  # the fast worker searches the real web; tests opt in explicitly
@@ -119,8 +119,8 @@ async def test_expired_approval_cannot_be_approved(pool):
 
 
 async def test_chat_core_route_and_privacy_gate(pool, monkeypatch):
-    """Quick commands never reach a model; private/sensitive turns only ever reach the LOCAL model and
-    are never replayed into a later (possibly cloud) prompt."""
+    """Quick commands never reach a model; sensitive turns go to paid models only and are never replayed into a later prompt;
+    /privat is refused (no local model any more, ADR-080)."""
     from app import chat, hermes, llm, memory
     monkeypatch.setattr(memory, "search", _no_memory)
 
@@ -139,15 +139,16 @@ async def test_chat_core_route_and_privacy_gate(pool, monkeypatch):
     assert t.route == "core" and "Perintah cepat" in t.reply and not calls
     t = await chat.handle("simpan ini ya, password: hunter2", "s1", actor="test")
     assert t.route == "assistant" and calls[-1][0] is True
+    before = len(calls)
     t = await chat.handle("/privat gaji saya 20jt", "s1", actor="test")
-    assert calls[-1][0] is True
+    assert t.route == "blocked" and len(calls) == before          # refused: no model, not even a paid one, sees it
     t = await chat.handle("cuaca hari ini gimana?", "s1", actor="test")
     assert calls[-1][0] is False
     replayed = " ".join(str(m.get("content")) for m in calls[-1][1])
     assert "20jt" not in replayed and "hunter2" not in replayed  # private turns stay out of cloud prompts
     logged = [r["content"] for r in await pool.fetch("SELECT content FROM messages WHERE role='user' ORDER BY id")]
     assert "hunter2" not in " ".join(logged)
-    assert await pool.fetchval("SELECT count(*) FROM messages WHERE route = 'private'") == 4
+    assert await pool.fetchval("SELECT count(*) FROM messages WHERE route = 'private'") == 2
 
 
 def _fake_llm(monkeypatch, script):
@@ -584,32 +585,32 @@ async def test_gateway_fails_over_before_first_byte_and_records_cost(pool, monke
     assert await pool.fetchval("SELECT count(*) FROM reports WHERE text = $1", billing.MESSAGE) == 1
 
 
-async def test_gateway_without_keys_or_for_private_content_uses_the_local_model(pool, monkeypatch):
+async def test_gateway_without_a_key_has_no_model_and_private_content_uses_paid_cloud_only(pool, monkeypatch):
     import httpx
-    from app import composition
+    from app import composition, gateway
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     await composition.apply_preset("seimbang", "test")
-    hosts = []
+    seen = []
 
     def handler(req: httpx.Request) -> httpx.Response:
         import json as _j
-        hosts.append(req.url.host)
-        assert _j.loads(req.content)["cache_prompt"] is True  # local: reuse the prompt cache
-        return httpx.Response(200, content=_sse("Dari lokal."), headers={"content-type": "text/event-stream"})
+        seen.append(_j.loads(req.content)["model"])
+        assert "cache_prompt" not in _j.loads(req.content)   # that was for the local llama.cpp server (ADR-080)
+        return httpx.Response(200, content=_sse("Dari cloud."), headers={"content-type": "text/event-stream"})
 
     _fake_providers(monkeypatch, handler)
-    assert await _collect("ngobrol", caller="chat") == "Dari lokal."
-    assert hosts == ["llama-chat"]  # no key: cloud routes skipped
+    with pytest.raises(gateway.GatewayError, match="tidak ada model"):
+        await _collect("ngobrol", caller="chat")           # no key and no local model: nothing can answer, and it says so
+    assert seen == []
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-    hosts.clear()
-    assert await _collect("ngobrol", caller="chat", private=True) == "Dari lokal."
-    assert hosts == ["llama-chat"]  # private content never goes to the cloud, key or not
-    hosts.clear()
-    await _collect("web", caller="hermes", private=True, worker=True)
-    assert hosts == ["llama-worker"]
+    await pool.execute("""UPDATE llm_categories SET allow_free = true, routes = '[{"provider":"openrouter","model":"x/free:free"},
+                          {"provider":"openrouter","model":"x/paid"}]' WHERE name = 'ngobrol'""")
+    gateway.invalidate()
+    assert await _collect("ngobrol", caller="chat", private=True) == "Dari cloud."
+    assert seen == ["x/paid"]                              # private content: never the free endpoint that may log it
 
 
-async def test_budget_cap_stops_paid_models_but_keeps_free_and_local(pool, monkeypatch):
+async def test_budget_cap_stops_paid_models_but_keeps_free_ones(pool, monkeypatch):
     import httpx
     from app import budget, gateway
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
@@ -618,7 +619,11 @@ async def test_budget_cap_stops_paid_models_but_keeps_free_and_local(pool, monke
     await pool.execute("INSERT INTO llm_usage (category, caller, provider, model, ok, cost_usd) VALUES ('web', 'hermes', 'openrouter', 'z', true, 25)")
     budget.forget()
     routes = await gateway.plan("ngobrol", caller="chat")
-    assert [r.model for r in routes] == ["y/gratis:free", "qwen-lokal"]
+    assert [r.model for r in routes] == ["y/gratis:free"]
+    await pool.execute("""UPDATE llm_categories SET routes = '[{"provider":"openrouter","model":"x/paid"}]' WHERE name = 'ngobrol'""")
+    gateway.invalidate()
+    with pytest.raises(gateway.GatewayError, match="anggaran"):   # no free model left and no local one: it says why nothing answers
+        await gateway.plan("ngobrol", caller="chat")
     st = await budget.state(force=True)
     assert st["level"] == 100
     assert await pool.fetchval("SELECT count(*) FROM reports WHERE text LIKE 'Anggaran AI bulan ini%'") == 1
@@ -628,8 +633,6 @@ async def test_composition_only_changes_models_never_the_core(pool):
     from app import composition
     with pytest.raises(composition.CompositionError, match="inti JARVIS"):
         await composition.update({"hermes": "off"}, "test")
-    with pytest.raises(composition.CompositionError, match="privat"):
-        await composition.update({"categories": {"privat": {"routes": [{"provider": "openrouter", "model": "a/b"}]}}}, "test")
     with pytest.raises(composition.CompositionError, match="penyedia"):
         await composition.update({"categories": {"coding": {"routes": [{"provider": "nope", "model": "a/b"}]}}}, "test")
     c = await composition.update({"categories": {"coding": {"routes": [{"provider": "openrouter", "model": "anthropic/claude-sonnet-5.5"}],
@@ -656,7 +659,7 @@ async def test_unreadable_selfcheck_is_not_reported_as_success(pool):
 
 async def test_meeting_pipeline_with_local_engine(pool, monkeypatch, tmp_path):
     """Chunks → (fake) jarvis-ears transcription + diarization → minutes (fake model) → docx + report.
-    A confidential meeting never touches a cloud engine or model."""
+    A confidential meeting never touches a cloud engine or model — and gets no AI minutes (there is no local model, ADR-080)."""
     import httpx
     from app import config, documents, llm, meetings, memory
     monkeypatch.setattr(meetings, "ROOT", tmp_path / "meetings")
@@ -704,8 +707,8 @@ async def test_meeting_pipeline_with_local_engine(pool, monkeypatch, tmp_path):
     done = await meetings.get(mid)
     assert done["status"] == "done" and done["engine"] == "whisper"  # confidential: local even though Groq is chosen
     assert [s["speaker"] for s in done["transcript"]] == ["Pembicara 1", "Pembicara 2"]  # "Terima kasih." dropped
-    assert done["summary"]["action_items"][0]["siapa"] == "Opik"
-    assert set(private_flags) == {True}
+    assert done["summary"]["action_items"] == [] and "tidak ada model lokal" in done["summary"]["ringkasan"]
+    assert private_flags == []                                      # no model call at all
     assert await pool.fetchval("SELECT format FROM documents WHERE id = $1", done["document_id"]) == "docx"
     assert await pool.fetchval("SELECT count(*) FROM reports WHERE text LIKE 'Notulen rapat UAT Autotoko%'") == 1
     assert "/meeting/concat" not in calls
@@ -870,27 +873,6 @@ async def test_a_promise_without_action_still_starts_the_work(pool, monkeypatch)
     assert await pool.fetchval("SELECT count(*) FROM tasks") == 1  # an acknowledgement is not a new request
 
 
-async def test_fast_worker_answers_lookups_without_a_hermes_session(pool, monkeypatch):
-    import asyncio
-    from app import hermes, quick, reports, workers
-    monkeypatch.setattr(hermes, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no Hermes")))
-    _fake_llm(monkeypatch, [])
-
-    async def fast(instruction):
-        assert quick.CONTEXT_MARK in instruction
-        return "HASIL: Berita terbaru: 1. Sidang kabinet (detikNews)"
-    monkeypatch.setattr(quick, "answer", fast)
-    t = await workers.spawn("Berita terbaru", "Cari berita terbaru hari ini" + quick.CONTEXT_MARK + "Pemilik: berita?",
-                            "s32", "test", category="web")
-    for _ in range(50):
-        if (await pool.fetchval("SELECT status FROM tasks WHERE id = $1", t["id"])) == "completed":
-            break
-        await asyncio.sleep(0.05)
-    assert "Sidang kabinet" in await pool.fetchval("SELECT result FROM tasks WHERE id = $1", t["id"])
-    assert await reports.unconfirmed()
-
-
-
 async def test_flow_watcher_tells_the_owner_and_starts_one_fix(pool, monkeypatch):
     from app import auditor, llm, workers
     monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
@@ -921,24 +903,6 @@ async def test_flow_watcher_tells_the_owner_and_starts_one_fix(pool, monkeypatch
     assert again["new"] == [] and again["fix_task_id"] is None
     await workers._deliver(r["fix_task_id"], "selfimprove", "x", "selesai", "selfimprove")
     assert await pool.fetchval("SELECT count(*) FROM flow_issues WHERE status = 'fixed'") == 4
-
-
-async def test_background_work_waits_for_the_owner_on_the_local_cpu(pool, monkeypatch):
-    from app import workers
-    monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
-    owner = await workers.spawn("Cek harga emas", "Cari harga emas hari ini", "s50", "test")
-    me = await workers.spawn("Perbaiki alur", "x" * 20, "selfimprove", "jarvis-core", kind="selfimprove", category="coding")
-    row = await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", me["id"])
-    waited = []
-
-    async def fake_sleep(s):
-        waited.append(s)
-        await pool.execute("UPDATE tasks SET status = 'completed' WHERE id = $1", owner["id"])
-    monkeypatch.setattr(workers.asyncio, "sleep", fake_sleep)
-    await workers._yield_to_owner(me["id"], "selfimprove", row)
-    assert waited == [60]  # waited once, until the owner's task was done
-    await workers._yield_to_owner(owner["id"], "owner", row)  # the owner's own work never waits
-    assert waited == [60]
 
 
 async def test_server_usage_for_the_home_screen(pool):
@@ -1041,58 +1005,26 @@ async def test_netralkan_stops_and_keeps_work_for_retry_or_close(pool, monkeypat
 
 
 async def test_background_work_waits_for_the_owner_and_everything_is_listed(pool, monkeypatch, tmp_path):
-    import json, time
-    from app import hostinfo, ops, workers
+    from app import ops, workers
     monkeypatch.setattr(ops, "ROOT", tmp_path)
     monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
-    ops._state.update(calm_until=0, cpu=95.0, worker_cpus=None, orphan_ticks=0, reset_at=0)
+    ops._state.update(calm_until=0, cpu=95.0)
     assert await ops.background_ok() == (True, "")  # a busy CPU alone no longer holds background work back
-    t = await workers.spawn("Cek harga", "Cari harga emas hari ini", "s90", "test")
+    await workers.spawn("Cek harga", "Cari harga emas hari ini", "s90", "test")
     ok, why = await ops.background_ok()
     assert not ok and "mendahulukan pekerjaanmu" in why
-    # the tick: worker model gets all 4 threads for the owner; orphan computing is reset after 3 checks
-    async def snap():
-        return {"cpu_pct": 30.0, "cpu_cores": 4}
-    monkeypatch.setattr(hostinfo, "snapshot", snap)
-    (tmp_path / "containers.json").write_text(json.dumps({"at": time.time(), "containers": [
-        {"Name": "jarvis-llm-worker", "CPUPerc": "286%", "MemUsage": "3GiB / 6GiB"}]}))
-    restored = []
-
-    async def restore():
-        restored.append(1)
-        return True
-    monkeypatch.setattr(ops.gateway, "restore_worker_slot", restore)
-    for _ in range(3):
-        await ops.tick()
-    assert json.loads((tmp_path / "policy.json").read_text())["worker_cpus"] == 4.0
-    assert (tmp_path / "worker-reset.request").exists()
     b = await ops.background()
-    assert b["now"]["tasks"][0]["mine"] and "tidak ada batas cpu" in b["rule"].lower()
-    assert any("tidak ditunggu" in a["text"] for a in b["activity"]) and b["schedule"]
-    assert json.loads((tmp_path / "policy.json").read_text())["worker_cpus"] == 4.0
+    assert b["now"]["tasks"][0]["mine"] and "tidak memakai cpu server" in b["rule"].lower() and b["schedule"]
+    assert not hasattr(ops, "worker_policy") and not hasattr(ops, "orphaned")   # the local model's CPU guard is gone (ADR-080)
 
 
-
-async def test_background_tasks_take_turns_and_the_daily_check_runs_once(pool, monkeypatch):
+async def test_the_daily_check_runs_once(pool, monkeypatch):
     from datetime import datetime, timezone
     from app import ops, selfimprove, workers
     monkeypatch.setattr(workers, "_start", lambda *a, **k: None)
     ops._state.update(calm_until=0, cpu=10.0)
     a = await workers.spawn("Cek diri", "x" * 20, "selfcheck", "jarvis-core", kind="selfcheck")
-    b = await workers.spawn("Kebiasaan", "y" * 20, "routine", "jarvis-core", kind="routine")
-    row_a = await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", a["id"])
-    row_b = await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", b["id"])
-    turn = await workers._yield_to_owner(a["id"], "selfcheck", row_a)
-    assert turn is not None and turn.locked()
-    slept = []
-
-    async def fake_sleep(s):
-        slept.append(s)
-        turn.release()  # the first one finishes
-    monkeypatch.setattr(workers.asyncio, "sleep", fake_sleep)
-    turn_b = await workers._yield_to_owner(b["id"], "routine", row_b)
-    assert slept == [60] and turn_b is not None  # waited for its turn, then ran
-    turn_b.release()
+    assert await workers._yield_to_owner(a["id"], "selfcheck", await pool.fetchrow("SELECT * FROM tasks WHERE id = $1", a["id"])) is None   # cloud models: no turns to take
     # a self-check already today: a restart at 03.xx WIB does not start another one
     monkeypatch.setattr(selfimprove, "datetime", type("D", (), {"now": staticmethod(
         lambda tz=None: datetime(2026, 10, 21, 20, 30, tzinfo=timezone.utc))}))
@@ -1140,16 +1072,16 @@ async def test_attached_files_reach_the_main_agent_and_its_workers(pool, monkeyp
     page = attachments.read(doc["id"], 0, 1000)
     assert page["total_chars"] == doc["chars"] and page["next_offset"] == 1000 and "Pasal 0" in page["text"]
     assert attachments.read(doc["id"], page["total_chars"] - 5, 1000)["next_offset"] is None
-    # the local chat model can see (vision projector): it answers about the picture …
+    # a vision model sees: it answers about the picture …
     seen_pic = await attachments.see(img["id"], "apa ini?")
     assert seen_pic["vision"] is True and seen_pic["answer"] == "Kontrak 12 bulan." and seen_pic["ocr_text"] == "Total Rp 25.000"
     # … and where no model can see, the answer is honest and carries the OCR text instead of a guess
     from app import gateway
-    await pool.execute("UPDATE llm_providers SET vision = false WHERE name = 'lokal'")
+    await pool.execute("UPDATE llm_providers SET vision = false WHERE name = 'openrouter'")
     gateway.invalidate()
     seen_pic = await attachments.see(img["id"], "apa ini?")
     assert seen_pic["vision"] is False and seen_pic["ocr_text"] == "Total Rp 25.000" and "OCR" in seen_pic["note"]
-    await pool.execute("UPDATE llm_providers SET vision = true WHERE name = 'lokal'")
+    await pool.execute("UPDATE llm_providers SET vision = true WHERE name = 'openrouter'")
     gateway.invalidate()
 
 
@@ -1350,8 +1282,7 @@ async def test_models_are_picked_from_the_catalog_and_changed_by_chat(pool, monk
     cats = await gateway.categories()
     assert [r["model"] for r in cats["ngobrol"]["routes"]][:2] == ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"]
     assert (await gateway.plan("ngobrol"))[0].model == "deepseek/deepseek-v4-flash" or True  # needs a key to be planned
-    with pytest.raises(composition.CompositionError, match="selalu memakai model lokal"):
-        await composition.set_model("privat", "deepseek/deepseek-v4-flash", "test")
+    await composition.set_model("privat", "deepseek/deepseek-v4-flash", "test")   # "privat" is an ordinary (paid-only) category now
     # an expensive model asks first
     expensive = dict(CATALOG[1], id="x/costly", name="Costly", price_out=75.0)
     monkeypatch.setattr(openrouter, "catalog", lambda force=False: _async(CATALOG + [expensive]))
@@ -1389,7 +1320,7 @@ async def _async(value):
     return value
 
 
-async def test_dead_pick_is_refused_and_a_dead_route_falls_to_a_cloud_net_before_local(pool, monkeypatch):
+async def test_dead_pick_is_refused_and_a_dead_route_falls_to_the_cloud_net(pool, monkeypatch):
     from app import composition, gateway, openrouter
     from tests.test_unit import CATALOG
 
@@ -1402,17 +1333,18 @@ async def test_dead_pick_is_refused_and_a_dead_route_falls_to_a_cloud_net_before
     monkeypatch.setattr(composition, "_probe", refuse)
     with pytest.raises(composition.CompositionError, match="menolak model ini"):
         await composition.set_model("ngobrol", "deepseek/deepseek-v4-flash", "test")
-    # a route that is refused is skipped for a while; the safety net (cloud) comes before the local model
+    # a route that is refused is skipped for a while; the cloud safety net closes the list (there is no local model, ADR-080)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     await pool.execute("UPDATE llm_categories SET routes = '[{\"provider\":\"openrouter\",\"model\":\"dead/model\"}]'::jsonb WHERE name = 'ngobrol'")
     gateway.invalidate()
     gateway._bad.clear()
     before = [r.model for r in await gateway.plan("ngobrol")]
-    assert before[:2] == ["dead/model", gateway.SAFETY_MODEL] and before[-1] == "qwen-lokal"
+    assert before == ["dead/model", gateway.SAFETY_MODEL]
     gateway._mark_failed((await gateway.plan("ngobrol"))[0], "openrouter/dead/model: HTTP 403: nope")
     after = [r.model for r in await gateway.plan("ngobrol")]
-    assert after[0] == gateway.SAFETY_MODEL and "dead/model" not in after and after[-1] == "qwen-lokal"
-    assert [r.model for r in await gateway.plan("ngobrol", private=True)] == ["qwen-lokal"]  # private never uses the cloud
+    assert after == [gateway.SAFETY_MODEL]
+    gateway._bad.clear()
+    assert [r.model for r in await gateway.plan("ngobrol", private=True)] == ["dead/model"]  # private: only the category's own paid models, no safety net
     assert all(r.model != gateway.SAFETY_MODEL for r in await gateway.plan("penglihatan"))
     gateway._bad.clear()
 
@@ -1574,10 +1506,10 @@ async def test_paid_attempts_after_a_free_failure_are_limited_and_task_budget_as
         return httpx.Response(200, content=_sse("ok"), headers={"content-type": "text/event-stream"})
     _fake_providers(monkeypatch, handler)
     assert [r.model for r in await gateway.plan("coding", caller="chat")][:4] == ["f/dead:free", "openrouter/free", "p/one", "p/two"]
-    out = await _collect("coding", caller="chat")  # free 403 → one paid attempt (p/one 500, retried once) → the second paid model is held back
+    with pytest.raises(gateway.GatewayError, match="semua model gagal"):   # free 403 → one paid attempt (p/one 500, retried once) → the second paid
+        await _collect("coding", caller="chat")                            # model is held back; there is no local model to answer instead (ADR-080)
     assert seen[:3] == ["f/dead:free", "openrouter/free", "p/one"]  # the free options first, in order, then ONE paid model
     assert "p/two" not in seen and seen.count("p/one") == 2
-    assert seen[-1] == "qwen-lokal" and out == "ok"  # held back from p/two: the local model answered
     # task budget: a task over its budget gets no paid calls and an approval request; approving adds budget
     tid = await pool.fetchval("""INSERT INTO tasks (session_id, title, instruction, kind, category, budget_usd, status)
                                  VALUES ('s', 'Riset', 'x', 'owner', 'coding', 0.10, 'running') RETURNING id""")
@@ -1585,8 +1517,9 @@ async def test_paid_attempts_after_a_free_failure_are_limited_and_task_budget_as
     await pool.execute("""UPDATE llm_categories SET routes = '[{"provider":"openrouter","model":"p/one"},{"provider":"openrouter","model":"p/two"}]' WHERE name = 'coding'""")
     gateway.invalidate()
     seen.clear()
-    await _collect("coding", caller="hermes", session_id=f"task-{tid}")
-    assert "p/one" not in seen and "p/two" not in seen  # held back: only the local model could answer
+    with pytest.raises(gateway.GatewayError, match="anggaran tugas habis"):   # no paid call, and no local model to answer instead (ADR-080)
+        await _collect("coding", caller="hermes", session_id=f"task-{tid}")
+    assert "p/one" not in seen and "p/two" not in seen  # held back
     assert await pool.fetchval("SELECT phase FROM tasks WHERE id = $1", tid) == "waiting_approval"
     ap = await pool.fetchrow("SELECT id, kind, status FROM approvals WHERE kind = 'task_budget'")
     assert ap and ap["status"] == "awaiting_approval"
@@ -1610,8 +1543,8 @@ async def test_blueprint_preset_creates_review_sets_limits_and_drops_unknown_mod
     assert cats["cepat"]["paid_attempt_limit"] == 0 and cats["coding"]["paid_attempt_limit"] == 1
     assert "review" in cats and cats["review"]["routes"][0]["model"] == "z-ai/glm-5.3-flash" and not cats["review"]["worker"]
     vision = [r["model"] for r in cats["penglihatan"]["routes"]]
-    assert vision == ["nvidia/nemotron-3.5-super-vl:free", "qwen-lokal"]  # the paid id OpenRouter does not list was never written
-    assert cats["privat"]["routes"] == [{"provider": "lokal-kerja", "model": "qwen-lokal"}]
+    assert vision == ["nvidia/nemotron-3.5-super-vl:free"]  # the paid id OpenRouter does not list was never written
+    assert all(r["provider"] == "openrouter" for c in cats.values() for r in c["routes"])   # no local route anywhere (ADR-080)
     c = await composition.update({"categories": {"coding": {"paid_attempt_limit": 2, "max_retries": 0}}}, "test")
     assert next(x for x in c["categories"] if x["name"] == "coding")["paid_attempt_limit"] == 2
     import pytest

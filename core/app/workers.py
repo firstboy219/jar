@@ -299,30 +299,9 @@ async def _try_openjarvis(task_id: int, row, text: str):
 
 
 async def _yield_to_owner(task_id: int, kind: str, row) -> asyncio.Lock | None:
-    """On the local CPU one Hermes session at a time is already slow: JARVIS' own background work
-    (self-improvement, self-check, habits) waits while the owner has work running or is talking."""
-    global _background_turn
-    if kind not in BACKGROUND_KINDS:
-        return None
-    from . import ops
-    if _background_turn is None:
-        _background_turn = asyncio.Lock()
-    while not (await gateway.plan(row["category"], caller="worker", worker=True))[0].cloud:
-        talking = await db.pool().fetchval(
-            "SELECT EXISTS (SELECT 1 FROM messages WHERE role = 'user' AND created_at > now() - interval '5 minutes')")
-        ok, why = await ops.background_ok()
-        if ok and not talking and not _background_turn.locked():
-            await _background_turn.acquire()  # several background sessions on one CPU slot only evict each other's cache
-            if task_id in waiting:
-                ops.note(f"Giliran {ops.KIND_TEXT.get(kind, kind)} #{task_id} dimulai: {row['title']}.")
-            waiting.discard(task_id)
-            return _background_turn
-        why = why or ("kamu sedang mengobrol denganku" if talking else "kerja latar lain sedang berjalan (satu per satu)")
-        if task_id not in waiting:
-            ops.note(f"{ops.KIND_TEXT.get(kind, kind).capitalize()} #{task_id} menunggu giliran — {why}.")
-        waiting.add(task_id)
-        await hub.broadcast({"type": "task_event", "task_id": task_id, "event": {"type": "thought", "text": f"menunggu: {why}"}})
-        await asyncio.sleep(60)
+    """Background work used to wait here while the owner was busy, because on the local CPU model one Hermes session at a time was already
+    slow. Every model is in the cloud now (ADR-080): nothing to wait for; the owner's work still comes first through `ops.background_ok`
+    where the background loops start a task."""
     return None
 
 
@@ -334,7 +313,7 @@ async def _nothing():
 async def _quick_first(kind: str, row) -> bool:
     if kind != "owner" or row["image"] or row["category"] != "web" or not quick.suitable(row["instruction"]):
         return False
-    return not (await gateway.plan("web", caller="worker", private=row["private"], worker=True))[0].cloud
+    return False   # a quick look-up in place of a Hermes session only made sense on the slow local CPU model (ADR-080)
 
 
 async def _bridge_approval(task_id: int, title: str, ev: dict) -> None:

@@ -2,12 +2,12 @@
 
 The owner composes JARVIS per category (ngobrol, coding, web, …) from the APK; each category has an
 ordered list of routes (provider + model). For one call the gateway
-  1. drops routes it may not use: provider disabled or without a key, cloud for private content,
+  1. drops routes it may not use: provider disabled or without a key,
      ':free' models where the category forbids them (free providers may log prompts);
-  2. lets the budget reorder them (budget.py): near the cap, free/local routes come first;
+  2. lets the budget reorder them (budget.py): near the cap, free routes come first;
   3. tries them in order and fails over until the FIRST BYTE (any HTTP error, timeout) — once a
      stream has started it is passed through unchanged, tool calls and images included;
-  4. always ends with the local model, so JARVIS keeps answering with no key or no credit;
+  4. ends with the safety model (OpenRouter) — there is no local model any more (ADR-080), so with no key or no credit it errors;
   5. records tokens, cache hits, cost and latency in llm_usage.
 Hermes reaches the same logic over HTTP: /llm/v1/chat/completions with model "jarvis-<category>".
 """
@@ -27,15 +27,12 @@ from . import db, modelrouter
 
 log = logging.getLogger("jarvis-core.gateway")
 
-LOCAL = "lokal"              # llama-chat: small context, answers the owner
-LOCAL_WORKER = "lokal-kerja"  # llama-worker: 64k context for Hermes, lowest CPU priority
-LOCAL_MODEL = "qwen-lokal"
 ALIAS_PREFIX = "jarvis-"
 # What every alias advertises to Hermes: it refuses models under 64k, and a fixed window also bounds
 # how much history a cloud call can carry (compression starts at half of it).
 CONTEXT_LENGTH = 65_536
-# Time to the first byte. A local CPU model reading Hermes' ~15k-token prompt needs many minutes.
-FIRST_BYTE_S = {"cloud": 90.0, "local-chat": 300.0, "local-worker": 3600.0}
+# Time to the first byte of a cloud model.
+FIRST_BYTE_S = {"cloud": 90.0}
 # Callers with their own OpenRouter key (owner sets per-key limits on openrouter.ai); others share LATAR.
 CALLER_KEYS = {"chat": "OPENROUTER_KEY_CHAT", "hermes": "OPENROUTER_KEY_HERMES", "openjarvis": "OPENROUTER_KEY_HERMES"}
 
@@ -124,7 +121,7 @@ def provider_key(provider: dict, caller: str = "") -> str:
     return os.getenv(env, "").strip()
 
 
-async def _arrange(category: str, routes: list, cat: dict, provs: dict, caller: str) -> list:
+async def _arrange(category: str, routes: list, cat: dict, provs: dict, caller: str, private: bool = False) -> list:
     """modelrouter: no free model for sensitive content, sick models last, proven free alternatives (ADR-040)."""
     p = provs.get("openrouter")
 
@@ -132,24 +129,18 @@ async def _arrange(category: str, routes: list, cat: dict, provs: dict, caller: 
         key = provider_key(p, caller) if p and p["enabled"] else ""
         return Route(p["name"], model, p["base_url"].rstrip("/"), key, True, p["vision"]) if key else None
     return await modelrouter.arrange(routes, make=make, needs_tools=category in modelrouter.NEEDS_TOOLS,
-                                     allow_free=bool(cat.get("allow_free")), no_free=modelrouter.NO_FREE.get())
+                                     allow_free=bool(cat.get("allow_free")), no_free=modelrouter.NO_FREE.get() or private)
 
 
 def _safety_route(provs: dict, caller: str, category: str, private: bool) -> "Route | None":
     p = provs.get("openrouter")
-    if private or category in ("privat", "penglihatan") or not p or not p["enabled"] or not provider_key(p, caller):
+    if private or category == "penglihatan" or not p or not p["enabled"] or not provider_key(p, caller):
         return None
     return Route(p["name"], _cache.get("safety") or SAFETY_MODEL, p["base_url"].rstrip("/"), provider_key(p, caller), True, False)
 
 
 def has_key(provider: dict) -> bool:
     return not provider.get("key_env") or bool(provider_key(provider, "chat") or provider_key(provider, "latar"))
-
-
-def _local_route(provider: dict | None) -> Route | None:
-    if not provider:
-        return None
-    return Route(provider["name"], LOCAL_MODEL, provider["base_url"].rstrip("/"), "", False, provider["vision"])
 
 
 _overrides: dict[int, tuple[float, str | None]] = {}
@@ -186,21 +177,22 @@ def with_override(queue: list, route: "Route | None") -> list:
 
 
 async def plan(category: str, *, caller: str = "core", private: bool = False, worker: bool = False) -> list[Route]:
-    """Routes to try for one call, in order; never empty (the local model closes the list)."""
+    """Routes to try for one call, in order. A private (sensitive) call uses paid cloud models only: free endpoints may log prompts and there is
+    no local model any more (ADR-080)."""
     from . import budget
     await _load()
     provs, cats = _cache["providers"], _cache["categories"]
     cat = cats.get(category) or cats.get("web") or {"routes": [], "allow_free": False}
     routes: list[Route] = []
-    for r in [] if private else (cat.get("routes") or []):
+    for r in cat.get("routes") or []:
         p = provs.get(str(r.get("provider") or ""))
         if not p or not p["enabled"]:
             continue
         key = provider_key(p, caller)
         if p["key_env"] and not key:
-            continue  # no key yet: skip silently, the next route (eventually local) answers
-        route = Route(p["name"], str(r.get("model") or LOCAL_MODEL), p["base_url"].rstrip("/"), key, p["cloud"], p["vision"])
-        if route.free and not cat.get("allow_free"):
+            continue  # no key yet: skip silently, the next route answers
+        route = Route(p["name"], str(r.get("model") or ""), p["base_url"].rstrip("/"), key, p["cloud"], p["vision"])
+        if route.free and (not cat.get("allow_free") or private):
             continue
         if route not in routes and not _is_bad(route):
             routes.append(route)
@@ -210,20 +202,14 @@ async def plan(category: str, *, caller: str = "core", private: bool = False, wo
         if not routes:
             raise GatewayError(f"model kategori {category} tidak bisa dipakai")
         return routes
-    if not private:
-        routes = await _arrange(category, routes, cat, provs, caller)
+    routes = await _arrange(category, routes, cat, provs, caller, private)
     net = _safety_route(provs, caller, category, private)
     if net and net not in routes and not _is_bad(net):
-        first_local = next((i for i, r in enumerate(routes) if not r.cloud), len(routes))
-        routes.insert(first_local, net)
+        routes.append(net)   # the safety model closes the list
     routes = await budget.adjust(category, routes)
-    # A local route the owner chose keeps its place; otherwise the matching local model is the last resort.
-    if not any(not r.cloud for r in routes):
-        fallback = _local_route(provs.get(LOCAL_WORKER if worker else LOCAL))
-        if fallback:
-            routes.append(fallback)
     if not routes:
-        raise GatewayError("tidak ada model yang bisa dipakai")
+        raise GatewayError("tidak ada model yang bisa dipakai: kunci/saldo OpenRouter bermasalah, atau anggaran bulan ini habis "
+                           "dan kategori ini tak punya model gratis (naikkan anggaran di Komposisi AI)")
     return routes
 
 
@@ -276,9 +262,6 @@ def _prepare(body: dict, route: Route, session_id: str | None) -> tuple[dict, di
     else:
         for k in ("reasoning", "usage", "provider", "models", "transforms"):
             b.pop(k, None)
-    if not route.cloud:
-        b["cache_prompt"] = True  # reuse the KV cache of the shared prompt prefix
-        b["chat_template_kwargs"] = {**(b.get("chat_template_kwargs") or {}), "enable_thinking": False}
     if not route.vision:
         b["messages"] = _strip_images(b["messages"])
     return b, headers
@@ -351,8 +334,7 @@ def _client(timeout: httpx.Timeout) -> httpx.AsyncClient:
 
 
 def _timeout(route: Route, worker: bool) -> httpx.Timeout:
-    read = FIRST_BYTE_S["cloud"] if route.cloud else FIRST_BYTE_S["local-worker" if worker else "local-chat"]
-    return httpx.Timeout(connect=10, read=read, write=60, pool=10)
+    return httpx.Timeout(connect=10, read=FIRST_BYTE_S["cloud"], write=60, pool=10)
 
 
 async def _next_data(lines) -> dict | None:
@@ -369,36 +351,6 @@ async def _next_data(lines) -> dict | None:
             except ValueError:
                 continue
     return None
-
-
-# ---------- local prompt cache that survives restarts ----------
-# Hermes' ~20k-token prompt prefix takes ~1 h to read on this CPU the first time, then ~seconds when
-# cached. llama-server can save a slot's KV cache to disk; we save it after Hermes work and restore it
-# when llama-worker starts, so a restart does not cost that hour again.
-SLOT_FILE = "hermes-prefix.bin"
-SLOT_MIN_TOKENS = 4000
-_slot_saved_at = 0.0
-
-
-async def save_worker_slot() -> None:
-    global _slot_saved_at
-    if time.monotonic() - _slot_saved_at < 600:
-        return
-    _slot_saved_at = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=120) as c:
-            await c.post("http://llama-worker:8080/slots/0?action=save", json={"filename": SLOT_FILE})
-    except httpx.HTTPError as e:
-        log.debug("slot save failed: %s", e)
-
-
-async def restore_worker_slot() -> bool:
-    try:
-        async with httpx.AsyncClient(timeout=300) as c:
-            r = await c.post("http://llama-worker:8080/slots/0?action=restore", json={"filename": SLOT_FILE})
-        return r.status_code == 200
-    except httpx.HTTPError:
-        return False
 
 
 def _note_exhausted(route: Route, status: int, text: str) -> None:
@@ -538,10 +490,6 @@ async def _stream(category: str, body: dict, *, caller: str, session_id: str | N
             await resp.aclose()
             await client.aclose()
             await _record(route, category, caller, usage, started, first_ms, ok, err, session_id, att.extra())
-            if ok and route.provider == LOCAL_WORKER and caller == "hermes" and (usage.get("prompt_tokens") or 0) >= SLOT_MIN_TOKENS:
-                # only Hermes' own long prompt is worth keeping on disk: a small call saved here once replaced
-                # the 22k-token Hermes prefix with 279 tokens, and every restore then forced a full re-read
-                asyncio.create_task(save_worker_slot())
         return
     raise GatewayError("semua model gagal: " + " | ".join(errors))
 
