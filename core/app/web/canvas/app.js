@@ -389,6 +389,7 @@ function applyDeskMode() {
   if (!on) for (const name of Object.keys(deskPanels)) board.adoptWidget(name);   // the cards go back where they were on the canvas
 }
 $('#modebtn').addEventListener('click', () => setDeskMode(deskMode === 'geser' ? 'kanvas' : 'geser'));
+$('#pagesbtn').addEventListener('click', () => switcher.toggle());
 addEventListener('resize', () => applyDeskMode());
 
 // The areas' sizes and locks (ADR-062) are the owner's, kept on the server so the phone and the browser show the same desk.
@@ -541,7 +542,7 @@ async function pollLive() {
     renderPanels(d);
     lastDesk = d;
     applyDeskMode();
-    if (switcherOn()) switcher.update(d, { projects: projectsCard?.active() });
+    if (switcherOn()) { switcher.update(d, { projects: projectsCard?.active() }); $('#pagesbtn').textContent = `▢ ${switcher.count}`; }
   } catch { /* offline: the next poll tries again */ } finally { pollingLive = false; }
 }
 setInterval(pollLive, 1300);
