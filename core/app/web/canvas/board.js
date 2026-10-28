@@ -1016,7 +1016,9 @@ export function createBoard(ctx) {
     get view() { return view; }, get vp() { return vp; }, get tool() { return tool; }, get shapeKind() { return shapeKind; },
     get sel() { return sel; }, get edges() { return edges; }, get zones() { return zones; }, get settings() { return { snapOn, guidesOn, gridOn, edgesOn, zonesOn, hiddenKinds }; },
     on(kind, fn) { on[kind].push(fn); return () => { on[kind] = on[kind].filter((f) => f !== fn); }; },
-    setContent, setWidget, setArea, openFull, closeFull, get fullArea() { return fullName; }, setView, fit, fitAll, fitInitial, fitSelection, focusRect, zoomBy, zoomTo, worldAt, rectOf, widgetRect,
+    setContent, setWidget, setArea, openFull, closeFull,
+    /** ADR-082: a widget the page switcher held goes back on the board, where it was. */
+    adoptWidget(name) { const w = widgets.get(name); if (w && w.el.parentNode !== cardsEl) cardsEl.append(w.el); }, get fullArea() { return fullName; }, setView, fit, fitAll, fitInitial, fitSelection, focusRect, zoomBy, zoomTo, worldAt, rectOf, widgetRect,
     flyToCard(id, k = 0.9, ms = 700) { const c = cards.get(id); if (c) focusRect(rectOf(c), k, ms); },
     flyToPoint(x, y, k = 0.8, ms = 800) { setView({ cx: x, cy: y, k }, ms); },
     select, selectEdge, setTool, setShape(s) { shapeKind = s; setTool('shape'); },

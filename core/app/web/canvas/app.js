@@ -14,6 +14,7 @@ import { createWorkersCard } from './workerscard.js';
 import { createDevTeamCard } from './devteamcard.js';
 import { createProjectsCard } from './projectscard.js';
 import { openChoice } from './choicepopup.js';
+import { createSwitcher } from './switcher.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -281,6 +282,8 @@ const liveVideo = (() => {
       l.last = frame; l.shownSeq = h.seq; l.liveAt = performance.now();
       const card = cardOfRef(l.st.ref), cv = card?.el.querySelector('.livebox canvas');
       if (cv && !l.drawing && !card.el.classList.contains('off')) { l.drawing = true; drawBitmap(cv, frame).catch(() => {}).finally(() => { l.drawing = false; }); }
+      const sp = stationEls.get(h.task);   // its page in the switcher (ADR-082)
+      if (sp && sp.el.isConnected && !sp.drawing) { sp.drawing = true; sp.seq = h.seq; drawBitmap(sp.cv, frame).catch(() => {}).finally(() => { sp.drawing = false; }); }
     };
     ws.onclose = () => { if (ws) ws.ready = false; setTimeout(connect, Math.min(1000 * 2 ** retry++, 15000)); };
     ws.onerror = () => ws.close();
@@ -315,6 +318,64 @@ function panelFor(name) {
   return (deskPanels[name] = { el: e, ...PANELS[name] });
 }
 
+// ---------- the page switcher (ADR-082): the desk as pages of what is active, like Android's app switcher ----------
+let deskMode = LS('jarvis_desk_mode') || 'geser';
+const stationEls = new Map();   // task id → its page in the switcher (a picture of the worker's browser + its steps)
+
+function stationPage(taskId) {
+  let s = stationEls.get(taskId);
+  if (s) return s.el;
+  const box = el('div', 'sw-station');
+  const head = el('div', 'livehead'), line = el('div', 'pageline'), help = el('div', 'helpline'), cv = el('canvas', 'frame'), steps = el('ul', 'steps'), thought = el('div', 'thought');
+  const grab = el('button', 'takebtn', '✋ Intervensi'); grab.dataset.gesture = 'ok';
+  grab.addEventListener('click', (ev) => { ev.stopPropagation(); const l = [...liveByRef.values()].find((x) => x.st.task_id === taskId); if (l) takeover.open(l.st); });
+  cv.hidden = true; help.hidden = true;
+  box.append(head, line, help, cv, grab, steps, thought);
+  s = { el: box, head, line, help, cv, steps, thought, grab, seq: -1 };
+  stationEls.set(taskId, s);
+  return box;
+}
+
+function updateStationPage(l) {
+  const s = stationEls.get(l.st.task_id), st = l.st;
+  if (!s) return;
+  s.head.replaceChildren(el('span', `dot ${st.status}`), el('b', null, ` ${st.title}`), el('span', 'muted', ` · ${STATUS_TEXT[st.status] || st.status} · ${ago(st.seconds)}`));
+  s.line.textContent = st.page_title || st.url || ''; s.line.hidden = !(st.page_title || st.url);
+  s.help.hidden = !(st.asking || st.controlled);
+  s.help.textContent = st.controlled ? `✋ ${st.control_by || 'Seseorang'} sedang mengendalikan browser ini` : (st.asking ? `❓ Jarvis butuh bantuanmu: ${st.asking}` : '');
+  s.grab.hidden = !((st.has_frame || st.browsing) && !['completed', 'failed', 'cancelled', 'stopped'].includes(st.status));
+  s.steps.replaceChildren(...st.steps.slice(-6).map((x) => el('li', x.status === 'running' ? 'now' : '', `${x.icon} ${x.text}`)));
+  s.thought.textContent = st.thought ? `💭 ${st.thought}` : '';
+  if (l.last && l.shownSeq !== s.seq) { s.seq = l.shownSeq; drawBitmap(s.cv, l.last).catch(() => {}); }
+}
+
+const switcher = createSwitcher({
+  root: $('#switcher'), holder: $('#sw-holder'), toast,
+  panelOf: (kind) => panelFor(kind).el,
+  stationPage,
+  onMode: (m) => setDeskMode(m),
+  onFull: (on) => { try { window.JarvisHost?.fullscreen?.(on); } catch { /* an older app */ } },
+});
+
+function switcherOn() { return deskMode === 'geser' && current?.context === 'utama'; }
+
+function setDeskMode(mode) {
+  deskMode = mode; LS('jarvis_desk_mode', mode);
+  applyDeskMode();
+}
+
+function applyDeskMode() {
+  const on = switcherOn();
+  document.body.classList.toggle('mode-switch', on);
+  $('#modebtn').textContent = deskMode === 'geser' ? '▦ Kanvas' : '▤ Aktivitas';
+  $('#modebtn').title = deskMode === 'geser' ? 'Tampilkan kanvas tak berujung' : 'Tampilkan halaman kegiatan aktif (seperti pengalih aplikasi Android)';
+  const tb = $('#topbar').getBoundingClientRect();
+  document.documentElement.style.setProperty('--tb', `${Math.round(tb.bottom + 8)}px`);
+  if (!on) for (const name of Object.keys(deskPanels)) board.adoptWidget(name);   // the cards go back where they were on the canvas
+}
+$('#modebtn').addEventListener('click', () => setDeskMode(deskMode === 'geser' ? 'kanvas' : 'geser'));
+addEventListener('resize', () => applyDeskMode());
+
 // The areas' sizes and locks (ADR-062) are the owner's, kept on the server so the phone and the browser show the same desk.
 let areaLayout = {};
 async function loadAreas() {
@@ -336,7 +397,10 @@ board.on('fullscreen', (name) => {
   }
 });
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && board.fullArea) board.closeFull(); });
-window.__jarvisAreaExit = () => { if (board.fullArea) board.closeFull(); };   // the phone's Back button
+window.__jarvisAreaExit = () => {   // the phone's Back button: an open page goes back to all pages (▢), an open area back to the canvas
+  if (switcherOn() && switcher.back()) return;
+  if (board.fullArea) board.closeFull();
+};
 
 // The player and the meeting recorder (ADR-054): feature cards at fixed places; the camera flies to one when it shows up.
 let dockApi = null, playerCard = null, meetingCard = null, videoCard = null, googleCard = null, workersCard = null, devteamCard = null, projectsCard = null;
@@ -392,6 +456,7 @@ let lastActivity = null;
 function flash(node) { if (!node) return; node.classList.remove('flash'); void node.offsetWidth; node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 2600); }
 $('#projectsbtn').addEventListener('click', () => {   // "Proyek": straight to the projects area, full screen
   if (current?.context !== 'utama') { toast('Proyek ada di papan utama — pilih "Utama" dulu.'); return; }
+  if (switcherOn()) { switcher.show('projects'); pollLive(); return; }
   if (deskPanels.projects) board.openFull('projects');
 });
 $('#lastact').addEventListener('click', async () => {
@@ -449,6 +514,7 @@ async function pollLive() {
       if (!card) { if (!l.asked) { l.asked = true; refresh(true).catch(() => {}); } continue; }   // its card is on the way
       card.live = l;
       renderLive(card, l);
+      updateStationPage(l);
       takeover.update(st);
       const first = !seenStations.has(st.task_id);
       seenStations.add(st.task_id);
@@ -458,6 +524,8 @@ async function pollLive() {
       }
     }
     renderPanels(d);
+    applyDeskMode();
+    if (switcherOn()) switcher.update(d, { projects: projectsCard?.active() });
   } catch { /* offline: the next poll tries again */ } finally { pollingLive = false; }
 }
 setInterval(pollLive, 1300);

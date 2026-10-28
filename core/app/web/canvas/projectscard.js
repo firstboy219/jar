@@ -196,5 +196,9 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
   }
 
   load(); setInterval(load, 6000);
-  return { reload: () => { shown = ''; return load(); } };
+  return {
+    reload: () => { shown = ''; return load(); },
+    /** ADR-082: is any project at work right now (workers busy, or waiting for the owner's pick / its start time)? */
+    active: () => !!data?.projects?.some((p) => p.chain || p.workers.some((w) => ['queued', 'running'].includes(w.status) && w.project_run === p.runs)),
+  };
 }

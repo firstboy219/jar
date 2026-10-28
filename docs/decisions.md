@@ -1325,3 +1325,17 @@ OpenJarvis — both using OpenRouter models; chosen by how heavy the load is.
   - **hermes** — everything else (private, with a picture, for a company, JARVIS' own kinds never leave it); a task that has to queue says "antre: semua n slot terpakai".
 - The desk's worker card shows each task's lane as a chip (hover: why) and one line of load: Hermes running/slots (+queued), OpenJarvis, ringan.
 - The earlier "fast worker" ran only while the main model was the local CPU one, so with the cloud models it was dormant; this lane replaces it for all tasks.
+
+## ADR-082 — The desk as pages of what is active, like Android's app switcher (Blueprint v4 Fase 12)
+Owner (2026-10-28): replace the desk with a multi-page slider like Android's app switch (the ▢ button): pages only for what is active in
+JARVIS — music player, web player/browser, video player, projects, …
+- **`switcher.js`**: one page per active thing (`pagesFrom`, pure): a worker's browser (live picture, steps, ✋ Intervensi), video, music, the
+  web page / map / document / picture / note / draft JARVIS showed, the meeting recorder while it records or is processed, projects at work
+  (busy workers, a pick or a start time waiting), the workers while any is busy, the dev team while it works. Nothing active → an empty page
+  with 🗂 Proyek and ▦ Kanvas.
+- **Two views, like Android**: ▢ shows all pages side by side (scaled, swipe, tap to open); an open page fills the screen (in the app the
+  app's own bars hide too) and swiping moves between pages; the phone's Back returns to ▢. A page that appears comes to the front unless the
+  owner is touching the desk.
+- The pages hold the SAME live cards the canvas shows (moved into the page, moved back — `board.adoptWidget` — when the owner switches to
+  ▦ Kanvas), so the player, the takeover, the projects card, the choice popup… all work as before. The slider is the default; the canvas is one
+  tap away (remembered per device); a company's board is always the canvas.
