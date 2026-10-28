@@ -562,3 +562,4 @@ body.mode-switch #gesture { display: none !important; }
 .sw-empty-icon { font-size: 44px; } .sw-empty-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 #switcher.full .sw-body > .widget .wbody, #switcher.full .sw-body > .widget .sread, #switcher.full .sw-body > .widget .dtjobs { max-height: none; }
 #switcher.full .sw-body > .widget .smap { height: calc(100vh - 200px); }
+#pagesbtn { display: none; font-weight: 700; } body.mode-switch #pagesbtn { display: inline-flex; }

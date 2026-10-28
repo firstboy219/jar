@@ -207,6 +207,9 @@ export function createSwitcher({ root, holder, panelOf, stationPage, onMode, onF
     /** "🗂 Proyek" from the top bar: show that page even when nothing runs in it. */
     show(kind) { pin(kind); },
     get full() { return full; },
+    /** The top bar's ▢ n: all pages ⇄ the open one (the bottom ▢ may be under the chat). */
+    toggle() { setFull(!full); },
+    get count() { return pages.length; },
     /** The phone's Back: an open page goes back to the overview of all pages. */
     back() { if (full) { setFull(false); return true; } return false; },
     pagesNow: () => pages.map((p) => p.id),
