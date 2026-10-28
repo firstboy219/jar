@@ -1,5 +1,6 @@
 // The desk's Proyek area (ADR-073): the owner's projects — goal, schedule, and a team of workers by role (how many, which AI model, whether they
 // operate websites) — with what the latest run's workers are doing, and the schedules Jarvis made in chat (Hermes' cron jobs).
+import { openChoice } from './choicepopup.js';
 import { openResults } from './resultview.js';
 import { shortModel } from './workerscard.js';
 
@@ -11,6 +12,21 @@ export const SCHEDULES = [['manual', 'Manual'], ['hourly', 'Tiap jam'], ['daily'
 /** Apps JARVIS can operate on the phone (ADR-077, phone_agent.APPS). */
 export const APPS = { gojek: 'Gojek' };
 const DAYS = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
+
+/** The stage of every role (pure; same rule as project_flow.stages_of): a role that starts after the previous one opens the next stage. */
+export function stagesOf(roles) {
+  let stage = 0;
+  return (roles || []).map((r, i) => { if (i && r.after_prev) stage += 1; return stage; });
+}
+
+/** One line for a role's place in the order: "① bersamaan", "② setelah ①, tanya aku → 5 mnt sebelum jam pilihan" (pure; unit-tested). */
+export function orderText(roles, i) {
+  const st = stagesOf(roles), n = st[i], mark = ['①', '②', '③', '④', '⑤', '⑥'][n] || String(n + 1);
+  const r = roles[i];
+  if (!i || !r.after_prev) return `${mark} ${i ? `bersamaan dengan ${['①', '②', '③', '④', '⑤', '⑥'][n]}` : 'mulai pertama'}`;
+  const ask = r.ask_owner ? `, tanya aku dulu${r.start_offset_min != null && r.start_offset_min !== '' ? ` → ${r.start_offset_min} mnt sebelum jam pilihan` : ''}` : '';
+  return `${mark} setelah ${['①', '②', '③', '④', '⑤', '⑥'][n - 1]} selesai${ask}`;
+}
 
 /** Workers a project would start in one run (pure; unit-tested). */
 export const teamSize = (roles) => (roles || []).reduce((n, r) => n + Math.max(1, Math.min(5, Number(r.workers) || 1)), 0);
@@ -24,7 +40,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
   async function load() {
     if (box.hidden || editing) return;
     try { data = await api.req('GET', '/api/v1/projects'); } catch { return; }
-    const key = JSON.stringify([data.projects.map((p) => [p.id, p.status, p.runs, p.next_run, p.workers.map((w) => [w.id, w.status])]), data.cron.length]);
+    const key = JSON.stringify([data.projects.map((p) => [p.id, p.status, p.runs, p.next_run, p.workers.map((w) => [w.id, w.status]), p.chain && [p.chain.state, p.chain.next_stage, p.chain.start_at]]), data.cron.length]);
     if (key !== shown) { shown = key; render(); }
   }
   async function act(fn, ok) {
@@ -35,7 +51,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
     body.replaceChildren();
     if (editing) { body.append(editor(editing)); return; }
     const top = el('div', 'pctl');
-    top.append(button('＋ Proyek baru', 'mgo', () => { editing = { name: '', goal: '', schedule: 'manual', at_time: '08:00', weekday: 0, roles: [{ role: '', brief: '', workers: 1, model: '', web: false, app: null }] }; render(); }));
+    top.append(button('＋ Proyek baru', 'mgo', () => { editing = { name: '', goal: '', schedule: 'manual', at_time: '08:00', weekday: 0, roles: [{ role: '', brief: '', workers: 1, model: '', web: false, app: null, after_prev: false, ask_owner: false, start_offset_min: null }] }; render(); }));
     body.append(top);
     if (!data?.projects.length) body.append(el('div', 'snippet', 'Belum ada proyek. Contoh: "Cari & lamar kerja" — peran Pencari (2 pekerja, operasi web) dan Penulis surat lamaran (1 pekerja), tiap hari 08:00.'));
     for (const p of data?.projects || []) body.append(project(p));
@@ -63,7 +79,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
     meta.append(el('span', 'chip', `${p.runs}× jalan`));
     c.append(meta);
     const roles = el('div', 'wmeta');
-    for (const r of p.roles) roles.append(el('span', 'chip wmodel', `${r.app ? `📱 ${APPS[r.app] || r.app} · ` : r.web ? '🌐 ' : ''}${r.role} ×${r.workers} · ${r.model ? shortModel(r.model) : 'model kategori'}`));
+    p.roles.forEach((r, i) => roles.append(el('span', 'chip wmodel', `${r.app ? `📱 ${APPS[r.app] || r.app} · ` : r.web ? '🌐 ' : ''}${r.role} ×${r.workers} · ${r.model ? shortModel(r.model) : 'model kategori'}${p.roles.length > 1 ? ` · ${orderText(p.roles, i)}` : ''}`)));
     c.append(roles);
     const ctl = el('div', 'pctl');
     ctl.append(button('📊 Hasil & laporan', 'pbtn wgo', () => openResults({ api, toast, projectId: p.id, onShowTask }), 'Laporan semua run + hasil tiap pekerja: tabel, grafik, gambar, dokumen'),
@@ -71,7 +87,18 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
       button(p.status === 'active' ? '⏸ Jeda' : '▶ Aktifkan jadwal', 'pbtn', () => act(() => api.req('PATCH', `/api/v1/projects/${p.id}`, { status: p.status === 'active' ? 'paused' : 'active' }))),
       button('✎ Kelola', 'pbtn', () => { editing = { ...p, roles: p.roles.map((r) => ({ ...r, model: r.model || '' })) }; render(); }),
       button('🗑', 'pbtn wstop', () => { if (confirm(`Hapus proyek "${p.name}"? Pekerja yang sedang jalan dihentikan; hasil tugas tetap ada.`)) act(() => api.req('DELETE', `/api/v1/projects/${p.id}`), 'Proyek dihapus.'); }, 'Hapus proyek'));
+    if (p.chain || p.workers.some((w) => ['queued', 'running'].includes(w.status) && w.project_run === p.runs)) {
+      ctl.append(button('⏹ Batalkan run', 'pbtn wstop', () => { if (confirm('Hentikan pekerja yang berjalan dan batalkan langkah berikutnya?')) act(() => api.req('POST', `/api/v1/projects/${p.id}/stop`), 'Run dibatalkan.'); }));
+    }
     c.append(ctl);
+    if (p.chain) {
+      const ch = el('div', `pjchain ${p.chain.state}`);
+      const txt = { choice: '🔔 Menunggu pilihanmu', timer: `⏱ Mulai ${p.chain.start_at ? new Date(p.chain.start_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : 'nanti'} WIB`,
+        running: '➡ Lanjut otomatis setelah tahap ini selesai' }[p.chain.state] || '';
+      ch.append(el('b', null, txt), el('span', 'muted', ` · berikutnya: ${(p.chain.waiting || []).join(', ')}`));
+      if (p.chain.state === 'choice' && p.chain.choice) ch.append(button('Pilih sekarang', 'pbtn wgo', () => openChoice({ api, toast }, p.chain.choice, () => { shown = ''; load(); })));
+      c.append(ch);
+    }
     const latest = p.workers.filter((w) => w.project_run === p.runs);
     if (latest.length) {
       c.append(el('div', 'slabel', `Run #${p.runs}`));
@@ -124,11 +151,27 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
         web.append(cb, el('span', null, '🌐 Operasikan situs (browser) — mis. bantu apply kerja; berhenti sebelum mengirim'));
         const app = el('select'); for (const [v, t] of [['', '— tidak —'], ...Object.entries(APPS)]) { const o = el('option', null, t); o.value = v; app.append(o); }
         app.value = r.app || '';
-        const appNote = el('div', 'snippet', 'Setiap ▶ Jalankan minta persetujuanmu di aplikasi JARVIS (password admin); hanya run TERJADWAL yang langsung jalan. PIN/OTP tetap kamu yang ketik. 1 pekerja (HP punya satu layar).');
+        const appNote = el('div', 'snippet', 'Run dari proyek ini langsung jalan tanpa password admin (yang minta password hanya permintaan lewat chat). PIN/OTP tetap kamu yang ketik; ada tombol Hentikan di layar. 1 pekerja (HP punya satu layar).');
         const syncApp = () => { appNote.hidden = !app.value; n.disabled = !!app.value; if (app.value) { n.value = '1'; r.workers = 1; } total.textContent = totalText(); };
         app.addEventListener('change', () => { r.app = app.value || null; syncApp(); });
         const row = el('div', 'pctl'); row.append(field('Jumlah pekerja', n), field('Model AI', model));
-        b.append(field(`Peran ${i + 1}`, role), brief, row, web, field('📱 Operasikan aplikasi di HP', app), appNote, button('Hapus peran', 'pbtn', () => { roles.splice(i, 1); drawRoles(); }));
+        // the order (ADR-079): with the previous role, or after it finished — and then optionally ask the owner to pick first
+        const flow = el('div', 'pjflow');
+        if (i > 0) {
+          const mode = el('select');
+          for (const [v, t] of [['0', 'Bersamaan dengan peran sebelumnya (paralel)'], ['1', 'Setelah peran sebelumnya selesai (berurutan)']]) { const o = el('option', null, t); o.value = v; mode.append(o); }
+          mode.value = r.after_prev ? '1' : '0';
+          const ask = el('label', 'mcheck'), askCb = el('input'); askCb.type = 'checkbox'; askCb.checked = !!r.ask_owner;
+          ask.append(askCb, el('span', null, '🔔 Tanya aku dulu: pilih salah satu opsi hasil sebelumnya (notifikasi + popup)'));
+          const off = typing(el('input')); off.type = 'number'; off.min = '0'; off.max = '180'; off.placeholder = 'kosong = langsung'; off.value = r.start_offset_min ?? '';
+          const offField = field('Mulai … menit sebelum jam opsi yang kupilih', off);
+          const sync = () => { ask.hidden = mode.value !== '1'; offField.hidden = !(mode.value === '1' && askCb.checked); };
+          mode.addEventListener('change', () => { r.after_prev = mode.value === '1'; if (!r.after_prev) { r.ask_owner = false; askCb.checked = false; } sync(); });
+          askCb.addEventListener('change', () => { r.ask_owner = askCb.checked; sync(); });
+          off.addEventListener('input', () => { r.start_offset_min = off.value === '' ? null : Number(off.value); });
+          flow.append(field('Urutan kerja', mode), ask, offField); sync();
+        } else flow.append(el('div', 'snippet', 'Peran pertama selalu mulai lebih dulu.'));
+        b.append(field(`Peran ${i + 1}`, role), brief, row, flow, web, field('📱 Operasikan aplikasi di HP', app), appNote, button('Hapus peran', 'pbtn', () => { roles.splice(i, 1); drawRoles(); }));
         syncApp();
         return b;
       }));
@@ -145,7 +188,7 @@ export function createProjectsCard({ box, api, toast, onShowTask }) {
       } catch (err) { toast(err.message, true); }
     });
     f.append(field('Nama proyek', name), field('Tujuan', goal), when, el('div', 'slabel', 'Tim pekerja'), rolesBox,
-      button('＋ Peran', 'pbtn', () => { roles.push({ role: '', brief: '', workers: 1, model: '', web: false }); drawRoles(); }), total, dl);
+      button('＋ Peran', 'pbtn', () => { roles.push({ role: '', brief: '', workers: 1, model: '', web: false, app: null, after_prev: roles.length > 0, ask_owner: false, start_offset_min: null }); drawRoles(); }), total, dl);
     const ctl = el('div', 'pctl'); ctl.append(save, button('Batal', 'pbtn', () => { editing = null; render(); }));
     f.append(ctl);
     f.addEventListener('submit', (e) => e.preventDefault());

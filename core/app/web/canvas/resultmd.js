@@ -79,6 +79,7 @@ export function blocksOf(doc, text) {
   const d = doc || {}, out = [];
   if (d.ringkasan) out.push({ type: 'summary', text: d.ringkasan });
   if (d.poin?.length) out.push({ type: 'list', ordered: false, items: d.poin });
+  if (d.pilihan?.length) out.push({ type: 'list', ordered: true, items: d.pilihan.map((o) => `${o.label}${o.waktu ? ` (jam ${o.waktu})` : ''}${o.detail ? ` — ${o.detail}` : ''}`) });
   for (const t of d.tabel || []) out.push({ type: 'table', title: t.judul || '', head: t.kolom, rows: t.baris });
   for (const g of d.grafik || []) out.push({ type: 'chart', title: g.judul || '', kind: g.jenis || 'bar', labels: g.label, values: g.nilai, unit: g.satuan || '' });
   for (const i of d.gambar || []) if (safeUrl(i.url)) out.push({ type: 'image', alt: i.keterangan || '', url: i.url });

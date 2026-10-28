@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import audit, db, phone_agent, results
+from . import audit, db, phone_agent, project_flow, results
 
 log = logging.getLogger("jarvis-core.projects")
 TZ = ZoneInfo("Asia/Jakarta")
@@ -27,7 +27,7 @@ WEEKDAYS = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
 BRIEF = """[PROYEK: {name} · run #{run}] Kamu pekerja proyek ini dengan peran: {role} (pekerja {n} dari {total} dengan peran yang sama).
 TUJUAN PROYEK: {goal}
 TUGAS PERANMU: {brief}
-{split}{web}Akhiri dengan HASIL: apa yang sudah kamu kerjakan dalam run ini (fakta, tautan, angka), apa yang tidak berhasil dan kenapa, dan apa
+{context}{split}{web}Akhiri dengan HASIL: apa yang sudah kamu kerjakan dalam run ini (fakta, tautan, angka), apa yang tidak berhasil dan kenapa, dan apa
 yang sebaiknya dikerjakan run berikutnya.
 {format}"""
 SPLIT = ("Ada {total} pekerja dengan peran ini yang bekerja bersamaan: ambil bagian ke-{n} (mis. item, halaman, perusahaan, atau rentang yang berbeda) "
@@ -70,10 +70,23 @@ def clean(data: dict) -> dict:
         app = str(r.get("app") or "").strip().lower() or None
         if app and app not in phone_agent.APPS:
             raise ProjectError(f"aplikasi HP untuk peran {role} belum didukung: {app}")
+        after_prev = bool(r.get("after_prev")) and bool(roles)
+        ask_owner = bool(r.get("ask_owner"))
+        if ask_owner and not after_prev:
+            raise ProjectError(f"peran {role}: \"tanya saya dulu\" hanya untuk peran yang mulai setelah peran sebelumnya")
+        try:
+            offset = int(r["start_offset_min"]) if ask_owner and r.get("start_offset_min") not in (None, "") else None
+        except (TypeError, ValueError):
+            offset = None
+        if offset is not None and not 0 <= offset <= 180:
+            raise ProjectError(f"peran {role}: mulai 0–180 menit sebelum jam pilihan")
         roles.append({"role": role, "brief": str(r.get("brief") or "").strip()[:3000], "workers": 1 if app else max(1, min(5, workers)),
-                      "model": model, "web": bool(r.get("web")) and not app, "app": app})   # the phone has one screen: one app worker
+                      "model": model, "web": bool(r.get("web")) and not app, "app": app,   # the phone has one screen: one app worker
+                      "after_prev": after_prev, "ask_owner": ask_owner, "start_offset_min": offset})
     if not roles:
         raise ProjectError("tambahkan minimal satu peran pekerja")
+    for r, st in zip(roles, project_flow.stages_of(roles)):
+        r["stage"] = st
     if sum(r["workers"] for r in roles) > MAX_WORKERS:
         raise ProjectError(f"paling banyak {MAX_WORKERS} pekerja sekali jalan (semua peran)")
     return {"name": name, "goal": str(data.get("goal") or "").strip()[:4000], "schedule": schedule,
@@ -139,9 +152,10 @@ async def save(data: dict, actor: str, project_id: int | None = None) -> dict:
                 """INSERT INTO projects (name, goal, schedule, at_time, weekday, next_run) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""",
                 p["name"], p["goal"], p["schedule"], p["at_time"], p["weekday"], nxt)
         for i, r in enumerate(p["roles"]):
-            await conn.execute("""INSERT INTO project_roles (project_id, role, brief, workers, model, web, sort, app)
-                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
-                               row["id"], r["role"], r["brief"], r["workers"], r["model"], r["web"], i, r["app"])
+            await conn.execute("""INSERT INTO project_roles (project_id, role, brief, workers, model, web, sort, app, stage, after_prev, ask_owner, start_offset_min)
+                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                               row["id"], r["role"], r["brief"], r["workers"], r["model"], r["web"], i, r["app"], r["stage"], r["after_prev"],
+                               r["ask_owner"], r["start_offset_min"])
     await audit.record(actor, "project.saved", f"project:{row['id']}", name=p["name"])
     return await get(row["id"])
 
@@ -162,6 +176,7 @@ async def delete(project_id: int, actor: str) -> bool:
     from . import workers
     for t in await db.pool().fetch("SELECT id FROM tasks WHERE project_id = $1 AND status IN ('queued', 'running')", project_id):
         await workers.stop(t["id"], actor)
+    await project_flow.stop(project_id, actor)
     done = (await db.pool().execute("DELETE FROM projects WHERE id = $1", project_id)).endswith("1")
     if done:
         await audit.record(actor, "project.deleted", f"project:{project_id}")
@@ -175,6 +190,13 @@ async def get(project_id: int) -> dict | None:
     p = dict(row)
     p["roles"] = [dict(r) for r in await db.pool().fetch("SELECT * FROM project_roles WHERE project_id = $1 ORDER BY sort, id", project_id)]
     p["schedule_text"] = schedule_text(p)
+    p["chain"] = None
+    if ch := await project_flow.chain(project_id):
+        c = await db.pool().fetchrow("SELECT id, status, options FROM owner_choices WHERE id = $1", ch["choice_id"]) if ch["choice_id"] else None
+        waiting = [r["role"] for r in p["roles"] if r["stage"] >= ch["next_stage"]]
+        p["chain"] = {"state": ch["state"], "run": ch["run"], "next_stage": ch["next_stage"], "start_at": ch["start_at"], "waiting": waiting,
+                      "choice": project_flow.choice_card({**dict(c), "title": p["name"], "prompt": "", "project_id": project_id,
+                                                          "expires_at": None}) if c and c["status"] == "open" else None}
     p["workers"] = [dict(r) for r in await db.pool().fetch(
         """SELECT t.id, t.title, t.status, t.model_used, t.model_override, t.project_run, r.role, left(coalesce(t.error, ''), 160) AS error,
                   left(coalesce(t.result, ''), 8000) AS result, t.created_at, t.finished_at
@@ -195,35 +217,55 @@ async def list_() -> dict:
     return {"projects": [await get(i) for i in ids], "cron": cron, "max_workers": MAX_WORKERS}
 
 
-async def run(project_id: int, actor: str, trigger: str = "manual") -> dict:
-    """Spawn this run's workers (as owner tasks, each with its role's brief and model)."""
+def phone_goal(p: dict, n_run: int, r: dict, context: str) -> str:
+    """What the phone worker is asked to do: the role's brief, the project's goal and — for a later stage — the owner's pick."""
+    return (f"[PROYEK: {p['name']} · run #{n_run} · peran {r['role']}] {r['brief'] or r['role']}"
+            + (f" — tujuan proyek: {p['goal']}" if p["goal"] else "") + (f"\n{context}" if context else ""))
+
+
+async def spawn_roles(p: dict, n_run: int, roles: list[dict], actor: str, trigger: str, context: str = "", asks_next: bool = False) -> tuple[list, list]:
+    """Start the workers of `roles` (one stage). A project run never asks for the admin password (the owner's rule, ADR-079): the phone worker
+    starts with the project — its own safety rules (no PIN/OTP, only the approved app, no top-ups) still hold."""
     from . import workers
-    p = await get(project_id)
-    if not p:
-        raise ProjectError("proyek tidak ditemukan")
-    busy = await db.pool().fetchval("SELECT count(*) FROM tasks WHERE project_id = $1 AND status IN ('queued', 'running')", project_id)
-    if busy:
-        raise ProjectError(f"run sebelumnya masih berjalan ({busy} pekerja) — tunggu atau hentikan dulu")
-    n_run = await db.pool().fetchval(
-        "UPDATE projects SET runs = runs + 1, last_run = now(), next_run = $2, updated_at = now() WHERE id = $1 RETURNING runs",
-        project_id, next_run(p, datetime.now(TZ)) if p["status"] == "active" else None)
     spawned, asked = [], []
-    for r in p["roles"]:
-        if r.get("app"):   # an app on the owner's phone (ADR-077): only the owner's schedule starts it unasked; ▶ Jalankan asks for approval too
-            goal = f"[PROYEK: {p['name']} · run #{n_run} · peran {r['role']}] {r['brief'] or r['role']}" + (f" — tujuan proyek: {p['goal']}" if p["goal"] else "")
-            pr = await phone_agent.request(goal, r["app"], actor, f"project-{project_id}", scheduled=trigger == "schedule",
+    project_id = p["id"]
+    for r in roles:
+        if r.get("app"):
+            pr = await phone_agent.request(phone_goal(p, n_run, r, context), r["app"], actor, f"project-{project_id}", scheduled=True,
+                                           by="jadwal" if trigger == "schedule" else "proyek",
                                            project={"project_id": project_id, "role_id": r["id"], "run": n_run, "model": r["model"]})
             (spawned.append(pr["task_id"]) if pr.get("task_id") else asked.append(pr["id"]))
             continue
         for n in range(1, r["workers"] + 1):
+            extra = (context + ("PENTING: langkah berikutnya meminta pemilik MEMILIH salah satu opsi hasilmu. Sertakan di blok hasil `pilihan` (3–6 opsi; "
+                                "`waktu` = jam HH:MM WIB yang menentukan kapan langkah berikutnya jalan).\n" if asks_next else ""))
             brief = BRIEF.format(name=p["name"], run=n_run, role=r["role"], n=n, total=r["workers"], goal=p["goal"] or "(lihat tugas peran)",
-                                 brief=r["brief"] or r["role"], split=SPLIT.format(n=n, total=r["workers"]) if r["workers"] > 1 else "",
+                                 brief=r["brief"] or r["role"], context=extra, split=SPLIT.format(n=n, total=r["workers"]) if r["workers"] > 1 else "",
                                  web=WEB if r["web"] else "", format=results.FORMAT_HELP)
             t = await workers.spawn(f"{p['name']} · {r['role']}" + (f" {n}/{r['workers']}" if r["workers"] > 1 else ""),
                                     brief, f"project-{project_id}", actor, category="web" if r["web"] else "analisis")
             await db.pool().execute("UPDATE tasks SET project_id = $2, project_role = $3, project_run = $4, model_override = $5 WHERE id = $1",
                                     t["id"], project_id, r["id"], n_run, r["model"])
             spawned.append(t["id"])
+    return spawned, asked
+
+
+async def run(project_id: int, actor: str, trigger: str = "manual") -> dict:
+    """Start a run: the first stage's workers now; later stages follow in order (project_flow)."""
+    p = await get(project_id)
+    if not p:
+        raise ProjectError("proyek tidak ditemukan")
+    busy = await db.pool().fetchval("SELECT count(*) FROM tasks WHERE project_id = $1 AND status IN ('queued', 'running')", project_id)
+    if busy:
+        raise ProjectError(f"run sebelumnya masih berjalan ({busy} pekerja) — tunggu atau hentikan dulu")
+    if p.get("chain"):
+        raise ProjectError("run sebelumnya masih menunggu langkah berikutnya (pilihanmu / jamnya) — batalkan dulu dengan ⏹")
+    n_run = await db.pool().fetchval(
+        "UPDATE projects SET runs = runs + 1, last_run = now(), next_run = $2, updated_at = now() WHERE id = $1 RETURNING runs",
+        project_id, next_run(p, datetime.now(TZ)) if p["status"] == "active" else None)
+    first = [r for r in p["roles"] if r["stage"] == 0]
+    spawned, asked = await spawn_roles(p, n_run, first, actor, trigger, asks_next=any(r["ask_owner"] for r in p["roles"] if r["stage"] == 1))
+    await project_flow.begin(project_id, n_run)
     await audit.record(actor, "project.run", f"project:{project_id}", run=n_run, trigger=trigger, workers=len(spawned), approvals=len(asked))
     return {"run": n_run, "tasks": spawned, "approvals": asked}
 
@@ -238,6 +280,7 @@ async def tick() -> int:
             p = await get(r["id"])
             await db.pool().execute("UPDATE projects SET next_run = $2 WHERE id = $1", r["id"], next_run(p, datetime.now(TZ)))
             log.info("project %s skipped: %s", r["id"], e)
+    await project_flow.advance_all()   # timers, expiring choices, runs nobody has been told the end of
     return len(due)
 
 
@@ -256,6 +299,17 @@ def find(projects: list[dict], name: str) -> dict | None:
     return by[close[0]] if close else (hits[0] if hits else None)
 
 
+def _chain_text(p: dict) -> str:
+    c = p.get("chain")
+    if not c:
+        return ""
+    if c["state"] == "choice":
+        return f" Menunggu PILIHANMU (notifikasi/popup di aplikasi) untuk: {', '.join(c['waiting'])}."
+    if c["state"] == "timer" and c.get("start_at"):
+        return f" {', '.join(c['waiting'])} mulai {c['start_at'].astimezone(TZ):%H:%M} WIB."
+    return f" Berikutnya setelah selesai: {', '.join(c['waiting'])}."
+
+
 STATUS_WORD = {"queued": "antre", "running": "bekerja", "completed": "selesai", "failed": "gagal", "stopped": "dihentikan", "cancelled": "batal"}
 
 
@@ -267,11 +321,11 @@ def status_text(p: dict) -> str:
         head += f", berikutnya {WEEKDAYS[nr.weekday()]} {nr:%d/%m %H:%M} WIB"
     last = [w for w in p.get("workers") or [] if w.get("project_run") == p.get("runs")]
     if not last:
-        return head + " — belum pernah dijalankan." if not p.get("runs") else head + "."
+        return head + " — belum pernah dijalankan." if not p.get("runs") else head + "." + _chain_text(p)
     count: dict[str, int] = {}
     for w in last:
         count[STATUS_WORD.get(w["status"], w["status"])] = count.get(STATUS_WORD.get(w["status"], w["status"]), 0) + 1
-    lines = [head + f" — run #{p['runs']}: " + ", ".join(f"{v} {k}" for k, v in count.items()) + "."]
+    lines = [head + f" — run #{p['runs']}: " + ", ".join(f"{v} {k}" for k, v in count.items()) + "." + _chain_text(p)]
     for w in last[:6]:
         tail = w.get("error") if w["status"] == "failed" else (w.get("result") or "")[:160] if w["status"] == "completed" else ""
         lines.append(f"  · #{w['id']} {w.get('role') or w['title']}: {STATUS_WORD.get(w['status'], w['status'])}" + (f" — {tail}" if tail else ""))

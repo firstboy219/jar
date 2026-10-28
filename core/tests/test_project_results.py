@@ -48,7 +48,7 @@ def test_the_voice_hears_the_text_not_the_json():
 def test_project_workers_are_told_how_to_write_their_result():
     from app import projects, results
     assert "```hasil" in results.FORMAT_HELP and "```hasil" in projects.BRIEF.format(
-        name="n", run=1, role="r", n=1, total=1, goal="g", brief="b", split="", web="", format=results.FORMAT_HELP)
+        name="n", run=1, role="r", n=1, total=1, goal="g", brief="b", context="", split="", web="", format=results.FORMAT_HELP)
 
 
 @needs_db

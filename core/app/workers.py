@@ -267,6 +267,9 @@ async def _run(task_id: int, context: str) -> None:
             _stopping.discard(task_id)
             _progress.pop(task_id, None)
             waiting.discard(task_id)
+            if row["kind"] == "owner":   # a project worker: the project moves on (next stage, the owner's pick, the end notice — ADR-079)
+                from . import project_flow
+                asyncio.create_task(project_flow.on_task_finished(task_id))
 
 
 # OpenJarvis has no JARVIS tools (no memory, documents, n8n, approvals): it gets the task and what it can do, nothing about Hermes.

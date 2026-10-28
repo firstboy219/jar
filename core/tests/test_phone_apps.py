@@ -182,26 +182,32 @@ async def test_the_loop_waits_for_the_pin_refuses_what_is_not_allowed_and_report
 
 
 @needs_db
-async def test_a_scheduled_project_starts_the_app_unasked_a_manual_run_asks(pool, monkeypatch):
+async def test_a_project_run_starts_the_app_without_the_admin_password(pool, monkeypatch):
     from app import hub, main, projects, workers
     started = []
     monkeypatch.setattr(workers, "_start", lambda task_id, context="": started.append(task_id))
+    sent = []
 
-    async def quiet(ev):
+    async def broadcast(ev):
+        sent.append(ev)
         return 1
-    monkeypatch.setattr(hub, "broadcast", quiet)
+    monkeypatch.setattr(hub, "broadcast", broadcast)
     await pool.execute("TRUNCATE projects, phone_runs CASCADE")
     dev = {"name": "HP pemilik", "scope": "owner"}
     p = await main.projects_create(main.ProjectIn(name="Makan siang", goal="pesan makan siang kantor", schedule="weekdays", at_time="11:30",
                                                   roles=[{"role": "Pemesan", "brief": "GoFood nasi padang ke kantor, maks Rp50.000",
                                                           "workers": 3, "app": "gojek", "web": True}]), device=dev)
     assert p["roles"][0]["app"] == "gojek" and p["roles"][0]["workers"] == 1 and not p["roles"][0]["web"]
-    r = await main.projects_run(p["id"], device=dev)                                           # ▶ Jalankan: asks first
-    assert r["tasks"] == [] and len(r["approvals"]) == 1 and not started
-    assert await pool.fetchval("SELECT status FROM phone_runs WHERE id = $1", r["approvals"][0]) == "awaiting"
+    r = await main.projects_run(p["id"], device=dev)                                           # ▶ Jalankan: no password (ADR-079)
+    assert len(r["tasks"]) == 1 and r["approvals"] == [] and len(started) == 1
+    first = await pool.fetchrow("SELECT status, scheduled, approved_by FROM phone_runs ORDER BY id LIMIT 1")
+    assert first["status"] == "approved" and first["scheduled"] and first["approved_by"] == "proyek"
+    assert not any(e.get("type") == "phone_approval" and e.get("status") == "awaiting" for e in sent)
+    assert any(e.get("type") == "notify" and "mengoperasikan Gojek" in e["title"] for e in sent)   # the owner is told it began
+    await pool.execute("UPDATE tasks SET status = 'completed' WHERE project_id = $1", p["id"])
     await pool.execute("UPDATE projects SET next_run = now() - interval '1 minute' WHERE id = $1", p["id"])
-    assert await projects.tick() == 1 and len(started) == 1                                    # the owner's schedule: no approval
-    run = await pool.fetchrow("SELECT * FROM phone_runs WHERE scheduled ORDER BY id DESC LIMIT 1")
+    assert await projects.tick() == 1 and len(started) == 2                                    # the schedule too
+    run = await pool.fetchrow("SELECT * FROM phone_runs ORDER BY id DESC LIMIT 1")
     assert run["approved_by"] == "jadwal" and run["project_id"] == p["id"]
     assert await pool.fetchval("SELECT project_id FROM tasks WHERE id = $1", run["task_id"]) == p["id"]
     with pytest.raises(main.HTTPException):

@@ -37,4 +37,31 @@ object ApprovalNotice {
     }
 
     private const val TAG = "phone_approval"
+
+    /** ADR-079: a plain notification (a project's pick is waiting, a run ended …). Ketuk opens the app, where the pick shows as a dialog. */
+    fun notice(context: Context, id: Int, title: String, text: String, urgent: Boolean) {
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(NotificationChannel(INFO_CHANNEL, "Proyek & pemberitahuan", NotificationManager.IMPORTANCE_DEFAULT))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Persetujuan operasi aplikasi", NotificationManager.IMPORTANCE_HIGH))
+        val open = PendingIntent.getActivity(context, id,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val n = NotificationCompat.Builder(context, if (urgent) CHANNEL else INFO_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(if (urgent) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build()
+        runCatching { nm.notify(NOTICE_TAG, id, n) }
+    }
+
+    fun cancelNotice(context: Context, id: Int) {
+        context.getSystemService(NotificationManager::class.java)?.cancel(NOTICE_TAG, id)
+    }
+
+    private const val INFO_CHANNEL = "jarvis_project_info"
+    private const val NOTICE_TAG = "jarvis_notice"
 }

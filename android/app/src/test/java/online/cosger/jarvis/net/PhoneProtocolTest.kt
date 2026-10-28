@@ -34,3 +34,28 @@ class PhoneProtocolTest {
         assertTrue(JarvisSocket.CAPS.split(",").contains("phone_agent"))
     }
 }
+
+/** ADR-079: a project's pick and the notifications about it. */
+class ProjectFlowProtocolTest {
+    @Test
+    fun aPickWithItsOptionsIsParsed() {
+        val c = Protocol.parse("""{"type":"owner_choice","id":3,"status":"open","title":"Berangkat kerja","prompt":"pilih salah satu",
+            "options":[{"i":0,"label":"KRL 06:27","detail":"dari rumah","waktu":"06:02"},{"i":1,"label":"KRL 07:09"}],"expires_in_s":600}""") as ServerEvent.OwnerChoice
+        assertEquals(3L, c.id)
+        assertEquals("open", c.status)
+        assertEquals(2, c.options.size)
+        assertEquals("06:02", c.options[0].time)
+        assertEquals("", c.options[1].time)
+        assertEquals(600L, c.expiresInS)
+        val closed = Protocol.parse("""{"type":"owner_choice","id":3,"status":"answered"}""") as ServerEvent.OwnerChoice
+        assertEquals("answered", closed.status)
+        assertTrue(closed.options.isEmpty())
+    }
+
+    @Test
+    fun aNotificationIsParsed() {
+        val n = Protocol.parse("""{"type":"notify","title":"Berangkat kerja: pilih dulu","text":"5 opsi menunggu","kind":"choice","project_id":1}""") as ServerEvent.Notify
+        assertEquals("choice", n.kind)
+        assertEquals("5 opsi menunggu", n.text)
+    }
+}

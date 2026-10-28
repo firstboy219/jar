@@ -5,7 +5,7 @@ import json
 import re
 
 BLOCK = re.compile(r"```hasil[ \t]*\r?\n(.*?)```", re.DOTALL)
-MAX_TABLES, MAX_ROWS, MAX_COLS, MAX_CHARTS, MAX_POINTS, MAX_IMAGES, MAX_LINKS, MAX_POINTS_LIST = 6, 200, 12, 6, 40, 12, 20, 30
+MAX_TABLES, MAX_ROWS, MAX_COLS, MAX_CHARTS, MAX_POINTS, MAX_IMAGES, MAX_LINKS, MAX_POINTS_LIST, MAX_PICKS = 6, 200, 12, 6, 40, 12, 20, 30, 8
 CHART_KINDS = ("bar", "line", "pie")
 
 FORMAT_HELP = """Tulis hasilmu terstruktur supaya pemilik bisa membukanya sebagai tabel, grafik, dan gambar. Setelah penjelasan singkat, akhiri dengan SATU blok seperti ini
@@ -16,8 +16,10 @@ FORMAT_HELP = """Tulis hasilmu terstruktur supaya pemilik bisa membukanya sebaga
  "tabel": [{"judul": "Lowongan ditemukan", "kolom": ["Perusahaan", "Posisi", "Gaji", "Status"], "baris": [["PT A", "IT Manager", "25 jt", "siap dilamar"]]}],
  "grafik": [{"judul": "Gaji per perusahaan", "jenis": "bar", "label": ["PT A", "PT B"], "nilai": [25, 30], "satuan": "jt"}],
  "gambar": [{"url": "https://…", "keterangan": "apa isi gambar ini"}],
- "tautan": [{"teks": "Lowongan PT A", "url": "https://…"}]}
+ "tautan": [{"teks": "Lowongan PT A", "url": "https://…"}],
+ "pilihan": [{"label": "KRL 06:27 → tiba kantor 07:05", "waktu": "06:02", "detail": "berangkat dari rumah 06:02"}]}
 ```
+("pilihan" hanya bila pemilik harus memilih salah satu opsi hasilmu untuk langkah berikutnya: 3–6 opsi; "waktu" = jam HH:MM WIB yang menentukan kapan langkah berikutnya jalan, bila ada.)
 (grafik jenis: bar, line, atau pie.) Pakai tabel untuk daftar/perbandingan, grafik untuk angka yang bisa dibandingkan, gambar hanya dari URL https yang benar-benar kamu lihat."""
 
 
@@ -71,6 +73,13 @@ def clean(data) -> dict:
                            "label": [a for a, _ in pts], "nilai": [b for _, b in pts], "satuan": _s(g.get("satuan"), 16)})
     if charts:
         out["grafik"] = charts
+    picks = []
+    for o in (data.get("pilihan") if isinstance(data.get("pilihan"), list) else [])[:MAX_PICKS]:
+        if isinstance(o, dict) and (label := _s(o.get("label"), 200)):
+            w = re.match(r"^([01]?\d|2[0-3])[:.]([0-5]\d)$", str(o.get("waktu") or "").strip())
+            picks.append({"label": label, "waktu": f"{int(w[1]):02d}:{w[2]}" if w else "", "detail": _s(o.get("detail"), 300)})
+    if picks:
+        out["pilihan"] = picks
     images = [{"url": u, "keterangan": _s(i.get("keterangan"), 200)} for i in (data.get("gambar") if isinstance(data.get("gambar"), list) else [])[:MAX_IMAGES]
               if isinstance(i, dict) and (u := _url(i.get("url")))]
     if images:
