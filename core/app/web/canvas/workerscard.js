@@ -11,8 +11,19 @@ export const shortModel = (m) => String(m || '').replace(/^[^/]+\//, '').replace
 /** 75 → "1m15s". */
 export const dur = (s) => (s < 60 ? `${s}d` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}d` : `${Math.floor(s / 3600)}j${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`);
 
+/** Which brain a task went to, as a chip: "🪶 Jar (ringan)", "OpenJarvis (berat)" or "Hermes" — the one that governs (pure; unit-tested). */
+export const laneLabel = (runtime) => (runtime === 'ringan' ? '🪶 Jar (ringan)' : runtime === 'openjarvis' ? 'OpenJarvis (berat)' : 'Hermes');
+
+/** One line about the load of the lanes (pure; unit-tested). */
+export function loadText(l) {
+  if (!l) return '';
+  const q = (l.hermes_queued || 0) + (l.openjarvis_queued || 0);
+  return `Hermes mengatur — jar (ringan) ${l.light_running}${l.openjarvis_on ? ` · OpenJarvis (berat) ${l.openjarvis_running}` : ''}`
+    + ` · Hermes ${l.hermes_running}/${l.slots}${l.hermes_queued ? ` (+${l.hermes_queued} antre)` : ''}${q && !l.hermes_queued ? ` · ${q} antre` : ''}`;
+}
+
 export function createWorkersCard({ box, api, toast }) {
-  let list = [], open = null, mode = '', shown = '', models = null, busy = false;
+  let list = [], lanesInfo = null, open = null, mode = '', shown = '', models = null, busy = false;
   const kind = el('div', 'kind', 'meja · pekerja'), head = el('div', 'title', 'Pekerja'), body = el('div', 'wbody');
   box.replaceChildren(kind, head, body);
   box.classList.add('workerscard');
@@ -74,8 +85,9 @@ export function createWorkersCard({ box, api, toast }) {
     const top = el('div', 'wtop');
     top.append(el('span', `dot ${DOT[w.status] || 'queued'}`), el('b', 'wtitle', w.title), el('span', 'wtime', `${STATUS[w.status] || w.status} · ${dur(w.seconds)}`));
     const meta = el('div', 'wmeta');
-    meta.append(el('span', 'chip', w.category || '—'), el('span', 'chip', w.runtime === 'openjarvis' ? 'OpenJarvis' : 'Hermes'),
+    meta.append(el('span', 'chip', w.category || '—'), el('span', 'chip', laneLabel(w.runtime)),
       el('span', 'chip wmodel', shortModel(w.model)), ...(w.cost ? [el('span', 'chip', `$${w.cost.toFixed(4)}`)] : []));
+    if (w.lane_note) meta.children[1].title = w.lane_note;
     if (w.model && w.main && w.model !== w.main) meta.lastChild.title = `Utama kategori ini: ${w.main}`;
     const ctl = el('div', 'pctl');
     if (w.can_stop) ctl.append(button('■ Stop', 'pbtn wstop', () => act(() => api.req('POST', `/api/v1/workers/${w.task_id}/stop`), 'Dihentikan.')));
@@ -92,15 +104,22 @@ export function createWorkersCard({ box, api, toast }) {
     body.replaceChildren();
     const active = list.filter((w) => w.can_stop).length;
     head.textContent = active ? `Pekerja — ${active} bekerja` : 'Pekerja';
+    const lane = el('div', 'wlanes');
+    lane.append(el('span', 'muted', loadText(lanesInfo)));
+    if (lanesInfo) lane.append(button(lanesInfo.light_on ? '🪶 Jalur ringan: aktif' : '🪶 Jalur ringan: mati', 'pbtn', () => act(
+      () => api.req('PUT', '/api/v1/workers/lanes', { light: !lanesInfo.light_on }), lanesInfo.light_on ? 'Jalur ringan dimatikan — semua lewat Hermes.' : 'Jalur ringan menyala.'),
+      'Pencarian sederhana dijawab detik-an oleh model murah, tanpa sesi Hermes'));
+    body.append(lane);
     if (!list.length) { body.append(el('div', 'snippet', 'Belum ada pekerja. Minta Jarvis mengerjakan sesuatu — ia muncul di sini lengkap dengan modelnya.')); return; }
     for (const w of list) body.append(row(w));
   }
 
   return {
     /** The server's workers list. Rebuilds only when something changed, and never while the owner is typing in it. */
-    update(next) {
+    update(next, lanes) {
       list = next || [];
-      const key = JSON.stringify(list.map((w) => [w.task_id, w.status, w.model, w.can_say, Math.floor(w.seconds / 10)])) + open + mode;
+      lanesInfo = lanes || lanesInfo;
+      const key = JSON.stringify(list.map((w) => [w.task_id, w.status, w.model, w.can_say, w.runtime, Math.floor(w.seconds / 10)])) + open + mode + JSON.stringify(lanesInfo);
       if (key === shown || body.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
       shown = key; render();
     },

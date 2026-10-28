@@ -974,6 +974,12 @@ async def _openjarvis_env(pool, monkeypatch, on=True, answer=None, error=None):
         yield {"type": "done", "reply": hermes.HermesReply("Hasil dari Hermes.", 1, 1, 1)}
     monkeypatch.setattr(hermes, "stream", hermes_stream)
     await openjarvis.set_enabled(on)
+
+    async def healthy():
+        return True
+    monkeypatch.setattr(openjarvis, "healthy", healthy)
+    from app import lanes
+    lanes._oj.update(at=0.0, ok=True)
     return sent, prompts
 
 
@@ -988,9 +994,9 @@ async def test_v4_f2_a_heavy_task_goes_to_openjarvis_when_it_is_on(pool, monkeyp
     t = await _heavy_task(workers)
     assert await _wait(lambda: _status(pool, t["id"], "completed"))
     row = await pool.fetchrow("SELECT runtime, runtime_note, result FROM tasks WHERE id = $1", t["id"])
-    assert row["runtime"] == "openjarvis" and row["runtime_note"] is None and "Kategori web" in row["result"]
+    assert row["runtime"] == "openjarvis" and row["runtime_note"] == "tugas berat" and "Kategori web" in row["result"]
     assert prompts == []                                                               # Hermes was never asked
-    assert sent[0][1] == "analisis" and sent[0][0].startswith(f"[tugas #{t['id']}]")   # the number ties the gateway's cost to the task
+    assert sent[0][1] == "berat" and sent[0][0].startswith(f"[tugas #{t['id']}]")   # the number ties the gateway's cost to the task
     assert "capability_search" not in sent[0][0] and "task_plan" not in sent[0][0]      # no Hermes-only instructions leak to it
 
 

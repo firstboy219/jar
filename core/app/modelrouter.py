@@ -23,7 +23,7 @@ from . import db, modelinsight
 
 log = logging.getLogger("jarvis-core.modelrouter")
 NO_FREE: contextvars.ContextVar[bool] = contextvars.ContextVar("jarvis_no_free", default=False)
-NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "review"}
+NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "berat", "review"}
 FREE_FALLBACK = "openrouter/free"
 RETRY_DELAY_S = 1.5
 DEFAULT_TASK_USD = 0.50

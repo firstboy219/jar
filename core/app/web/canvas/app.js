@@ -372,7 +372,7 @@ function renderFeatureCards(d) {
   googleCard ||= createGoogleCard({ box: panelFor('google').el, api, toast, embedded: !!fromApp.embedded });
   panelFor('google').el.hidden = !googleCard.allowed;
   workersCard ||= createWorkersCard({ box: panelFor('workers').el, api, toast });
-  workersCard.update(d.workers);
+  workersCard.update(d.workers, d.lanes);
   // ADR-079: a project asks the owner to pick — the popup (in the phone app its native dialog does this instead)
   if (!fromApp.embedded) for (const c of d.choices || []) if (!seenChoices.has(c.id)) { seenChoices.add(c.id); openChoice({ api, toast }, c, () => projectsCard?.reload()); }
   panelFor('workers').el.hidden = false;

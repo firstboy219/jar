@@ -6,11 +6,12 @@ result becomes a spoken report (see reports.py).
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 
-from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, memory, modelrouter, openjarvis, phone_agent, quick, reports, writer
+from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, lanes, memory, modelrouter, openjarvis, phone_agent, quick, reports, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -105,15 +106,16 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
         category = KIND_CATEGORY.get(kind) or ("analisis" if await composition.strong_mode() else "web")
     if private:
         category = "privat"
-    # a heavy owner task goes to OpenJarvis first — only while the owner has it on, never private, never with a picture
-    runtime = "openjarvis" if (heavy and kind == "owner" and not private and not image and await openjarvis.enabled()) else "hermes"
+    # the lane (ADR-081): a simple look-up goes "ringan", a heavy task to OpenJarvis (only while the owner has it on and it answers), the rest to Hermes
+    runtime, why = await lanes.pick(kind=kind, category=category, instruction=instruction, image=image, private=private,
+                                    company_id=company_id, heavy=heavy)
     row = await db.pool().fetchrow(
-        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd, company_id, runtime)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd, company_id, runtime, runtime_note)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
            RETURNING id, title, status, kind, category, created_at""",
         session_id, device_id, title.strip()[:120] or "Tugas", instruction.strip()[:12000], kind, image,
         category, private, re.sub(r"\s+", " ", instruction.split(quick.CONTEXT_MARK)[0]).strip()[:500],
-        await modelrouter.default_task_budget(), company_id, runtime)
+        await modelrouter.default_task_budget(), company_id, runtime, why or None)
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
     if kind == "owner" and not private:  # the task appears on the desk (the canvas) the moment it exists, not when it ends (ADR-051)
@@ -133,8 +135,26 @@ def _start(task_id: int, context: str = "") -> None:
     t.add_done_callback(lambda _: _running.pop(task_id, None))
 
 
+async def _light_answer(task_id: int) -> str | None:
+    """The "ringan" lane (ADR-081): a simple look-up is answered here, before — and without — a worker slot. Nothing found (or any trouble)
+    → the task becomes an ordinary Hermes task, with the reason noted."""
+    row = await db.pool().fetchrow("SELECT runtime, status, instruction FROM tasks WHERE id = $1", task_id)
+    if not row or row["runtime"] != "ringan" or row["status"] != "queued":
+        return None
+    try:
+        text = await quick.answer(row["instruction"])
+    except Exception:
+        log.exception("light lane for task %s", task_id)
+        text = None
+    if text:
+        return text
+    await db.pool().execute("UPDATE tasks SET runtime = 'hermes', runtime_note = 'Jalur ringan tidak menemukan jawaban — Hermes mengerjakannya' WHERE id = $1", task_id)
+    return None
+
+
 async def _run(task_id: int, context: str) -> None:
-    async with _sem_():
+    light = await _light_answer(task_id)
+    async with (contextlib.nullcontext() if light else _sem_()):   # a light answer needs no worker slot
         row = await db.pool().fetchrow(
             "UPDATE tasks SET status = 'running', started_at = now(), phase = 'executing' WHERE id = $1 AND status = 'queued' "
             "RETURNING id, title, instruction, session_id, kind, image, category, private, goal, company_id, runtime", task_id)
@@ -178,11 +198,10 @@ async def _run(task_id: int, context: str) -> None:
                     _note(task_id, e)
                 result = hermes.HermesReply(await phone_agent.produce(
                     task_id, row, lambda pct, text, extra=None: _tell_progress(row, task_id, pct, text, extra), phone_event), None, None, 0)
-            elif await _quick_first(kind, row):  # simple look-up while workers run locally: seconds, not a Hermes session
+            elif light:   # the light lane found the answer (ADR-081): seconds, not a Hermes session
                 await hub.broadcast({"type": "task_event", "task_id": task_id,
-                                     "event": {"type": "thought", "text": "mencari cepat di web"}})
-                if text := await quick.answer(row["instruction"]):
-                    result = hermes.HermesReply(text, None, None, 0)
+                                     "event": {"type": "thought", "text": "jalur ringan: mencari cepat di web"}})
+                result = hermes.HermesReply(light, None, None, 0)
             if row["runtime"] == "openjarvis" and result is None:
                 result = await _try_openjarvis(task_id, row, OPENJARVIS_BRIEF.format(id=task_id) + context + row["instruction"])
             steps = 0
@@ -286,7 +305,7 @@ async def _try_openjarvis(task_id: int, row, text: str):
     """A heavy task on OpenJarvis (ADR-043). Anything but a usable answer → None, and Hermes does the task as usual."""
     await hub.broadcast({"type": "task_event", "task_id": task_id, "event": {"type": "thought", "text": "mengerjakan dengan OpenJarvis"}})
     try:
-        answer = await openjarvis.run(text, row["category"], f"task-{task_id}")
+        answer = await openjarvis.run(text, "berat", f"task-{task_id}")   # the heavy brain has its own model category (ADR-081)
     except openjarvis.OpenJarvisError as e:
         log.warning("worker %s: OpenJarvis gave no answer (%s), Hermes takes over", task_id, e)
         await db.pool().execute("UPDATE tasks SET runtime = 'hermes', runtime_note = $2 WHERE id = $1", task_id,
@@ -308,12 +327,6 @@ async def _yield_to_owner(task_id: int, kind: str, row) -> asyncio.Lock | None:
 async def _nothing():
     return
     yield
-
-
-async def _quick_first(kind: str, row) -> bool:
-    if kind != "owner" or row["image"] or row["category"] != "web" or not quick.suitable(row["instruction"]):
-        return False
-    return False   # a quick look-up in place of a Hermes session only made sense on the slow local CPU model (ADR-080)
 
 
 async def _bridge_approval(task_id: int, title: str, ev: dict) -> None:
@@ -618,7 +631,7 @@ def overview_row(r: dict, cats: dict) -> dict:
     """One worker for the desk (pure; unit-tested). The model is the one that really answered ('model_used'), else the category's main one."""
     chain = _chain(cats, r["category"] or "")
     running = r["status"] == "running"
-    return {"task_id": r["id"], "title": r["title"], "status": r["status"], "kind": r["kind"], "category": r["category"], "runtime": r["runtime"],
+    return {"task_id": r["id"], "title": r["title"], "status": r["status"], "kind": r["kind"], "category": r["category"], "runtime": r["runtime"], "lane_note": r.get("runtime_note") or "",
             "model": r["model_used"] or (chain[0] if chain else ""), "main": chain[0] if chain else "", "chain": chain,
             "locked": r["category"] == "privat", "seconds": int(r["seconds"] or 0), "cost": r["cost_usd"] or 0.0, "budget": r["budget_usd"],
             "can_say": running and bool(r["hermes_run"]), "can_stop": r["status"] in ("queued", "running"),
@@ -635,7 +648,7 @@ async def overview() -> list[dict]:
     """The owner's workers: the active ones, then what finished in the last hour (newest first)."""
     cats = await gateway.categories()
     rows = await db.pool().fetch(
-        """SELECT id, title, status, kind, category, dev_role, runtime, model_used, hermes_run, error,
+        """SELECT id, title, status, kind, category, dev_role, runtime, runtime_note, model_used, hermes_run, error,
                   cost_usd::float AS cost_usd, budget_usd::float AS budget_usd,
                   EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at))) AS seconds
            FROM tasks WHERE company_id IS NULL AND kind NOT IN ('flowcheck')
