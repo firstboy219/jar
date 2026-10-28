@@ -141,16 +141,17 @@ async def answer(instruction: str) -> str | None:
             lines = [f"{i + 1}. {it['title']} ({it['source']})" for i, it in enumerate(items[:5])]
             head = f"Berita terbaru{' tentang ' + topic if topic else ''} dari Google News"
             return f"HASIL: {head}:\n" + "\n".join(lines)
-        results = await search(news_topic(ask) or ask)
+        results = await search(news_topic(ask) or ask, limit=6)
         if not results:
             return None
-        pages = await asyncio.gather(*(page_text(r["url"], 1500) for r in results[:2]))
-        sources = "\n\n".join(
-            f"[{i + 1}] {r['title']} — {urlparse(r['url']).hostname}\n{r['snippet']}\n{pages[i] if i < len(pages) else ''}"
-            for i, r in enumerate(results[:4]))
+        # read up to six pages at once and keep the first four that gave text: price pages are often scripts only (empty) — the first
+        # attempt used two pages and the model rightly said "not found" (2026-10-28)
+        pages = await asyncio.gather(*(page_text(r["url"], 1800) for r in results[:6]))
+        readable = [(r, p) for r, p in zip(results, pages) if p][:4] or [(r, "") for r in results[:3]]
+        sources = "\n\n".join(f"[{i + 1}] {r['title']} — {urlparse(r['url']).hostname}\n{r['snippet']}\n{p}" for i, (r, p) in enumerate(readable))
         today = datetime.now(WIB).strftime("%A %d %B %Y")
         text = await llm.complete([{"role": "system", "content": ANSWER.format(today=today)},
-                                   {"role": "user", "content": f"PERMINTAAN: {ask}\n\nSUMBER:\n{sources[:4500]}"}],
+                                   {"role": "user", "content": f"PERMINTAAN: {ask}\n\nSUMBER:\n{sources[:6500]}"}],
                                   category="ringan", max_tokens=260, caller="worker", temperature=0.2)
     except (httpx.HTTPError, llm.LLMError) as e:
         log.info("quick worker gave up (%s): %s", type(e).__name__, e)
