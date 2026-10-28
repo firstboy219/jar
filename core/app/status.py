@@ -22,8 +22,6 @@ async def check_all() -> list[dict]:
                    {"Authorization": f"Bearer {settings.hermes_api_key}"}),
             _probe(c, "n8n", f"{settings.n8n_url}/healthz"),
             _probe(c, "Qdrant", f"{settings.qdrant_url}/collections", {"api-key": settings.qdrant_api_key}),
-            _probe(c, "Model lokal (ngobrol)", "http://llama-chat:8080/health"),
-            _probe(c, "Model lokal (kerja)", "http://llama-worker:8080/health"),
             _probe(c, "Pendengaran lokal (Whisper)", f"{settings.whisper_url}/health"),
         ]
         if settings.n8n_api_key:
@@ -32,10 +30,10 @@ async def check_all() -> list[dict]:
         results = list(await asyncio.gather(*checks))
     if not settings.n8n_api_key:
         results.append({"name": "n8n API key", "ok": False, "detail": "belum diisi"})
-    # Cloud keys are optional (default composition is fully local): missing = "not used", not an error.
+    # All models run on OpenRouter since the local ones were removed (ADR-080): no key = nothing can answer.
     from . import billing, budget
-    results.append({"name": "OpenRouter (opsional)", "ok": True,
-                    "detail": "terisi" if settings.openrouter_api_key else "belum diisi — semua AI lokal"})
+    results.append({"name": "OpenRouter", "ok": bool(settings.openrouter_api_key),
+                    "detail": "terisi" if settings.openrouter_api_key else "belum diisi — tidak ada model yang bisa menjawab"})
     if settings.openrouter_api_key:
         v = await billing.verdict()
         results.append({"name": "Saldo OpenRouter", "ok": v["working"] is not False, "detail": v["text"]})

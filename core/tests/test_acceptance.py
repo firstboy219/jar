@@ -263,7 +263,7 @@ async def test_13_secret_data_never_reaches_an_endpoint_that_does_not_fit(pool, 
     await pool.execute("""UPDATE llm_categories SET allow_free = true, routes = '[{"provider":"openrouter","model":"x/free:free"},
                           {"provider":"openrouter","model":"x/paid"}]' WHERE name = 'ngobrol'""")
     gateway.invalidate()
-    assert [r.model for r in await gateway.plan("ngobrol", private=True)] == ["qwen-lokal"]        # /privat: local only
+    assert [r.model for r in await gateway.plan("ngobrol", private=True)] == ["x/paid"]            # sensitive: paid cloud only, never the free endpoint
     modelrouter.NO_FREE.set(True)                                                                   # the owner's own documents
     assert not any(r.model.endswith(":free") or r.model == "openrouter/free" for r in await gateway.plan("ngobrol"))
     modelrouter.NO_FREE.set(False)

@@ -35,8 +35,7 @@ sed -i \
   -e "s|^ADMIN_SESSION_SECRET=$|ADMIN_SESSION_SECRET=$(gen)|" \
   .env
 
-mkdir -p data/{npm/logs,letsencrypt,hermes,n8n,qdrant,postgres,admin,documents,models,llm-slots/chat,llm-slots/worker}
+mkdir -p data/{npm/logs,letsencrypt,hermes,n8n,qdrant,postgres,admin,documents,models}
 echo "Created .env (mode 600)."
 echo "Web admin password (shown once, change it after first login): $admin_pw"
-echo "Download the local models: ./scripts/get-models.sh"
 echo "Optional (from the web admin or APK): OpenRouter / Groq / Deepgram keys, n8n API key."

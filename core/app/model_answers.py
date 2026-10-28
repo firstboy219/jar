@@ -96,7 +96,7 @@ async def stats(text: str) -> str:
         title = "Paling sering gagal"
     lines = [f"{title} — {days} hari terakhir (kegagalan karena kredit habis tidak dihitung):"]
     for r in rows[:6]:
-        name = r["model"] if r["provider"] == "openrouter" else ("model lokal (ngobrol)" if r["provider"] == "lokal" else "model lokal (kerja)")
+        name = r["model"] if r["provider"] == "openrouter" else f"{r['model']} ({r['provider']})"
         err = ", ".join(f"{k} ×{n}" for k, n in sorted(r["errors"].items(), key=lambda kv: -kv[1])[:2])
         lines.append(f"• {name}: {r['calls']} panggilan, {r['ok_pct']}% berhasil, median {modelinsight.fmt_ms(r['p50_ms'])}, "
                      f"{'gratis' if not r['cost_usd'] else f'${r['cost_per_call_usd']:.4f}/panggilan'}" + (f" — gagal: {err}" if err else ""))

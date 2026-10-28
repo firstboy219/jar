@@ -112,7 +112,7 @@ fun MeetingsScreen(vm: JarvisViewModel, onBack: (() -> Unit)?, onOpen: (String) 
                 OutlinedTextField(agenda, { agenda = it }, Modifier.fillMaxWidth(), label = { Text("Agenda / topik (opsional)") },
                     supportingText = { Text("Istilah, proyek, atau produk yang akan dibahas — dipakai untuk mengenali kata yang sulit.") })
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Body("Rahasia (hanya model lokal)", size = 13)
+                    Body("Rahasia (hanya transkrip lokal, tanpa notulen AI)", size = 13)
                     Spacer(Modifier.weight(1f))
                     Switch(confidential, { confidential = it })
                 }

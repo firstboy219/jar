@@ -34,8 +34,7 @@ async def needs_confirmation() -> bool:
     cat = cats.get("balas-pesan") or {}
     if not cat.get("confirm_cloud"):
         return False
-    first = (await gateway.plan("balas-pesan", caller="chat"))[0]
-    return first.cloud
+    return True   # every model is a cloud model (ADR-080)
 
 
 def _json(text: str) -> dict:

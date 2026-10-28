@@ -159,7 +159,7 @@ TRIAGE = ("Kamu menyortir email pemilik. Untuk SETIAP email di bawah (urut), ber
 
 
 async def check(limit: int = 15, notify: bool = True) -> dict:
-    """Fetch unread mail through n8n, keep the new ones, sort them with the LOCAL model, tell the owner what matters."""
+    """Fetch unread mail through n8n, keep the new ones, sort them with a paid cloud model (never a free one: it may log prompts), tell the owner what matters."""
     from . import llm, reports
     data = await _post("list", {"limit": max(1, min(int(limit), 30))})
     new = []
@@ -175,7 +175,7 @@ async def check(limit: int = 15, notify: bool = True) -> dict:
             new.append({**item, "id": row["id"]})
     if new:
         listing = "\n".join(f"{i + 1}. dari {m['sender']}: {m['subject']} — {m['snippet']}" for i, m in enumerate(new))
-        try:  # private=True: the mail text is only ever read by the local model
+        try:  # private=True: paid cloud models only — a free endpoint may log the mail text (ADR-080)
             raw = await llm.complete([{"role": "system", "content": TRIAGE}, {"role": "user", "content": listing}],
                                      category="privat", private=True, max_tokens=60 * len(new) + 100, temperature=0.1)
         except Exception as e:

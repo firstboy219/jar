@@ -14,6 +14,10 @@ from .router import HELP, Intent, parse
 Emit = Callable[[dict], Awaitable[None]]
 
 
+PRIVATE_OFF = ("Mode /privat dimatikan: model lokal di server sudah dihapus, jadi tidak ada tempat yang bisa memproses pesan itu tanpa lewat cloud. "
+               "Kirim tanpa /privat kalau mau kujawab — data sensitif seperti OTP atau kata sandi tetap hanya dikirim ke model berbayar, tidak ke model gratis.")
+
+
 @dataclass
 class Turn:
     reply: str
@@ -22,8 +26,8 @@ class Turn:
 
 
 async def _cloud_chat() -> bool:
-    """Is the main agent's model in the cloud (bigger prompt budget for attached documents)?"""
-    return (await gateway.plan("ngobrol", caller="chat"))[0].cloud
+    """Is the main agent's model in the cloud (bigger prompt budget for attached documents)? Always: there is no local model (ADR-080)."""
+    return True
 
 
 def _fmt_approval(a: dict) -> str:
@@ -74,8 +78,7 @@ async def _run_intent(intent: Intent, actor: str, location: Location | None = No
 
             def first(cat: str) -> str:
                 r = (routes.get(cat) or [{}])[0]
-                return "model lokal di server (Qwen)" if str(r.get("provider", "")).startswith("lokal") or not r \
-                    else f"{r.get('model')} lewat {r.get('provider')}"
+                return "(belum dipilih)" if not r else f"{r.get('model')} lewat {r.get('provider')}"
             return (f"Komposisi '{c['preset']}': ngobrol pakai {first('ngobrol')}, tugas web pakai {first('web')}, "
                     f"coding pakai {first('coding')}. Bisa diganti di menu Komposisi AI, atau bilang saja padaku.")
         case "relieve":
@@ -119,6 +122,10 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
     if location:
         await remember_last(location)
     private = sensitive.is_private(text)
+    if private and not intent:   # "/privat" meant "only the local model"; there is none any more (ADR-080): say so, send nothing anywhere
+        await _log(session_id, device_id, "user", "[pesan /privat — tidak diproses]", "blocked")
+        await _log(session_id, device_id, "assistant", PRIVATE_OFF, "blocked")
+        return Turn(PRIVATE_OFF, "blocked")
     found = sensitive.scan(text)
     # Attachments (ADR-032): their text goes into the prompt; sensitive content inside keeps the turn local.
     files, attached = "", []
@@ -147,7 +154,7 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
             reply, route = f"Tidak bisa: {e}", "error"
     else:
         # Main agent answers right away; real work is delegated to workers (see assistant.py).
-        # /privat or sensitive content: answered by the local model only — it never leaves the server.
+        # sensitive content (OTP, passwords, cards): paid cloud models only, never a free endpoint that may log prompts (ADR-080).
         if local_only:
             await audit.record(actor, "chat.local_only", f"session:{session_id}", reasons=found or ["private"])
         await say("thinking")

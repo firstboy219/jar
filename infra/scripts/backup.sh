@@ -8,7 +8,7 @@
 # Off-site copy (a backup on the same disk does not survive the disk): when BACKUP_REMOTE (an rclone
 # remote, e.g. "gdrive:jarvis-backup" or "r2:jarvis") and backups/age-recipients.txt exist, the backup is
 # encrypted with age (only the owner's private key can open it) and uploaded; 14 copies are kept there.
-# Not backed up: models (scripts/get-models.sh downloads them again), prompt caches, music cache, and
+# Not backed up: downloaded speech models (jarvis-ears fetches them again), prompt caches, music cache, and
 # meeting audio (deleted after 30 days anyway; transcripts and minutes are in Postgres).
 set -euo pipefail
 cd "$(dirname "$0")/.."

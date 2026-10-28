@@ -2,7 +2,7 @@
 
 Only the owner (their phone's owner-scope device token, or an owner turn in the chat) may change it. Since
 ADR-038 the only permanent parts are Qdrant (memory) and n8n (automation); every model — chat, Hermes' work,
-vision, drafts, minutes — is the owner's pick from OpenRouter's live catalog (or the local Qwen).
+vision, drafts, minutes — is the owner's pick from OpenRouter's live catalog (there is no local model any more, ADR-080).
 """
 
 import logging
@@ -16,7 +16,7 @@ log = logging.getLogger("jarvis-core.composition")
 CORE = ["Qdrant", "n8n"]
 STT_ENGINES = {"whisper": "Whisper lokal (privat, gratis)", "groq": "Groq Whisper (cepat, ±gratis)",
                "deepgram": "Deepgram (cloud, berbayar per jam)", "openrouter": "Model OpenRouter pilihanmu (ElevenLabs Scribe, GPT, …)"}
-LOCKED = {"privat"}  # always local, not editable
+LOCKED: set[str] = set()   # no category is locked any more: "privat" used to be local-only (ADR-080)
 BUILTIN = {"ngobrol", "cepat", "penglihatan", "balas-pesan", "web", "coding", "produktivitas", "analisis", "rapat",
            "latar-belakang", "privat"}
 NEEDS_TOOLS = {"ngobrol", "web", "coding", "produktivitas", "analisis", "latar-belakang", "review", "dev-bisan", "dev-coder", "dev-qaqa"}  # tool calling: chat agent, Hermes
@@ -30,62 +30,54 @@ def r(provider: str, model: str) -> dict:
     return {"provider": provider, "model": model}
 
 
-L, LK = r("lokal", gateway.LOCAL_MODEL), r("lokal-kerja", gateway.LOCAL_MODEL)
-
 # Presets (model choices measured/priced 2026-10-21; free models: OpenRouter ':free', ≤20 req/min).
 PRESETS: dict[str, dict] = {
-    "lokal": {
-        "title": "Lokal penuh", "stt": "whisper",
-        "summary": "Semua di server sendiri. Gratis & privat, tapi lambat (balasan pertama bisa >1 menit).",
-        "routes": {c: [L] for c in ("ngobrol", "cepat", "penglihatan", "balas-pesan")}
-                  | {c: [LK] for c in ("web", "coding", "produktivitas", "analisis", "rapat", "latar-belakang")},
-    },
     "hemat": {
         "title": "Hemat gratis", "stt": "groq",
         "summary": "Model gratis OpenRouter (butuh pembelian kredit $10 sekali) + Groq. Hampir $0/bulan.",
         "routes": {
-            "ngobrol": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "qwen/qwen3.7-flash"), L],
-            "cepat": [r(OR, "nvidia/nemotron-3.5-lightning:free"), r(OR, "qwen/qwen3.7-flash"), L],
-            "penglihatan": [r(OR, "google/gemma-4-31b-it:free"), r(OR, "qwen/qwen3.7-flash"), L],
-            "web": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "coding": [r(OR, "cohere/north-mini-code:free"), r(OR, "qwen/qwen3-coder-next"), LK],
-            "produktivitas": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "analisis": [r(OR, "nvidia/nemotron-3-ultra-550b-a55b:free"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "balas-pesan": [r(OR, "qwen/qwen3.7-flash"), L],
-            "rapat": [r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "latar-belakang": [r(OR, "nvidia/nemotron-3.5-lightning:free"), LK],
+            "ngobrol": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "qwen/qwen3.7-flash")],
+            "cepat": [r(OR, "nvidia/nemotron-3.5-lightning:free"), r(OR, "qwen/qwen3.7-flash")],
+            "penglihatan": [r(OR, "google/gemma-4-31b-it:free"), r(OR, "qwen/qwen3.7-flash")],
+            "web": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "coding": [r(OR, "cohere/north-mini-code:free"), r(OR, "qwen/qwen3-coder-next")],
+            "produktivitas": [r(OR, "nvidia/nemotron-3-super-120b-a12b:free"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "analisis": [r(OR, "nvidia/nemotron-3-ultra-550b-a55b:free"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "balas-pesan": [r(OR, "qwen/qwen3.7-flash")],
+            "rapat": [r(OR, "deepseek/deepseek-v4.1-flash")],
+            "latar-belakang": [r(OR, "nvidia/nemotron-3.5-lightning:free")],
         },
     },
     "seimbang": {
         "title": "Seimbang (rekomendasi)", "stt": "groq",
         "summary": "Cepat untuk ngobrol (Haiku), kuat & murah untuk kerja (DeepSeek + cache). ±$3–8/bulan.",
         "routes": {
-            "ngobrol": [r(OR, "anthropic/claude-haiku-5.5"), r(OR, "qwen/qwen3.7-flash"), L],
-            "cepat": [r(OR, "qwen/qwen3.7-flash"), r(OR, "nvidia/nemotron-3.5-lightning:free"), L],
-            "penglihatan": [r(OR, "qwen/qwen3.7-flash"), r(OR, "google/gemma-4-31b-it:free"), L],
-            "web": [r(OR, "deepseek/deepseek-v4.1-flash"), r(OR, "deepseek/deepseek-v4-flash"), LK],
-            "coding": [r(OR, "qwen/qwen3-coder-next"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "produktivitas": [r(OR, "openai/gpt-5.6-luna"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "analisis": [r(OR, "deepseek/deepseek-v4.1-flash"), r(OR, "qwen/qwen3.8-flash"), LK],
-            "balas-pesan": [r(OR, "qwen/qwen3.7-flash"), L],
-            "rapat": [r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "latar-belakang": [r(OR, "nvidia/nemotron-3.5-lightning:free"), r(OR, "qwen/qwen3.7-flash"), LK],
+            "ngobrol": [r(OR, "anthropic/claude-haiku-5.5"), r(OR, "qwen/qwen3.7-flash")],
+            "cepat": [r(OR, "qwen/qwen3.7-flash"), r(OR, "nvidia/nemotron-3.5-lightning:free")],
+            "penglihatan": [r(OR, "qwen/qwen3.7-flash"), r(OR, "google/gemma-4-31b-it:free")],
+            "web": [r(OR, "deepseek/deepseek-v4.1-flash"), r(OR, "deepseek/deepseek-v4-flash")],
+            "coding": [r(OR, "qwen/qwen3-coder-next"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "produktivitas": [r(OR, "openai/gpt-5.6-luna"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "analisis": [r(OR, "deepseek/deepseek-v4.1-flash"), r(OR, "qwen/qwen3.8-flash")],
+            "balas-pesan": [r(OR, "qwen/qwen3.7-flash")],
+            "rapat": [r(OR, "deepseek/deepseek-v4.1-flash")],
+            "latar-belakang": [r(OR, "nvidia/nemotron-3.5-lightning:free"), r(OR, "qwen/qwen3.7-flash")],
         },
     },
     "pemilik": {
         "title": "Kombinasi pemilik", "stt": "groq",
         "summary": "Ngobrol Haiku 5.5, coding Sonnet 5.5 (anggaran $8), dokumen ChatGPT. ±$10–20/bulan.",
         "routes": {
-            "ngobrol": [r(OR, "anthropic/claude-haiku-5.5"), r(OR, "qwen/qwen3.7-flash"), L],
-            "cepat": [r(OR, "qwen/qwen3.7-flash"), L],
-            "penglihatan": [r(OR, "qwen/qwen3.7-flash"), L],
-            "web": [r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "coding": [r(OR, "anthropic/claude-sonnet-5.5"), r(OR, "qwen/qwen3-coder-next"), LK],
-            "produktivitas": [r(OR, "openai/gpt-5.6-luna"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "analisis": [r(OR, "anthropic/claude-sonnet-5.5"), r(OR, "deepseek/deepseek-v4.1-flash"), LK],
-            "balas-pesan": [r(OR, "anthropic/claude-haiku-5.5"), L],
-            "rapat": [r(OR, "openai/gpt-5.6-luna"), LK],
-            "latar-belakang": [r(OR, "nvidia/nemotron-3.5-lightning:free"), LK],
+            "ngobrol": [r(OR, "anthropic/claude-haiku-5.5"), r(OR, "qwen/qwen3.7-flash")],
+            "cepat": [r(OR, "qwen/qwen3.7-flash")],
+            "penglihatan": [r(OR, "qwen/qwen3.7-flash")],
+            "web": [r(OR, "deepseek/deepseek-v4.1-flash")],
+            "coding": [r(OR, "anthropic/claude-sonnet-5.5"), r(OR, "qwen/qwen3-coder-next")],
+            "produktivitas": [r(OR, "openai/gpt-5.6-luna"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "analisis": [r(OR, "anthropic/claude-sonnet-5.5"), r(OR, "deepseek/deepseek-v4.1-flash")],
+            "balas-pesan": [r(OR, "anthropic/claude-haiku-5.5")],
+            "rapat": [r(OR, "openai/gpt-5.6-luna")],
+            "latar-belakang": [r(OR, "nvidia/nemotron-3.5-lightning:free")],
         },
         "budgets": {"coding": 8, "analisis": 4},
     },
@@ -103,11 +95,10 @@ def registry_preset(path: Path = REGISTRY_FILE) -> dict | None:
         data = yaml.safe_load(path.read_text())
     except (OSError, ImportError, ValueError):
         return None
-    local_for = {"ngobrol", "cepat", "penglihatan", "balas-pesan"}
     routes, limits, new = {}, {}, {}
     for cat, spec in (data.get("categories") or {}).items():
         chain = [r(OR, m) for m in [spec["primary"], *(spec.get("fallback") or [])] if m]
-        routes[cat] = chain + [L if cat in local_for else LK]
+        routes[cat] = chain
         limits[cat] = {"paid_attempt_limit": int(spec.get("paid_attempt_limit", 1))}
         if cat not in BUILTIN:
             new[cat] = {"title": spec.get("title") or cat, "description": spec.get("description") or ""}
@@ -161,7 +152,7 @@ async def get() -> dict:
         "openrouter": {"has_key": any(p["name"] == OR and gateway.has_key(p) for p in provs.values()),
                        "balance_usd": bal["remaining"] if bal else None,
                        "working": verdict["working"], "status": verdict["text"], "models": len(catalog)},
-        "preset": await _kv("composition:preset", "lokal"),
+        "preset": await _kv("composition:preset", "seimbang"),
         "core": CORE,
         "stt": {"engine": await stt_engine(), "options": STT_ENGINES},
         "strong_mode": await strong_mode(),
@@ -216,8 +207,8 @@ async def apply_preset(name: str, actor: str) -> dict:
             await conn.execute("UPDATE llm_categories SET paid_attempt_limit = $2 WHERE name = $1", cat, lim["paid_attempt_limit"])
         for cat, routes in preset["routes"].items():
             if models is not None:  # a preset must never write a model OpenRouter does not have
-                routes = [x for x in routes if x["provider"] != OR or openrouter.get(models, x["model"])] or [L]
-            await conn.execute("UPDATE llm_categories SET routes = $2 WHERE name = $1 AND name <> 'privat'", cat, routes)
+                routes = [x for x in routes if x["provider"] != OR or openrouter.get(models, x["model"])]
+            await conn.execute("UPDATE llm_categories SET routes = $2 WHERE name = $1", cat, routes)
         for cat, cap in (preset.get("budgets") or {}).items():
             await conn.execute("UPDATE llm_categories SET budget_usd = $2 WHERE name = $1", cat, cap)
     await _set_kv("composition:preset", name)
@@ -243,7 +234,7 @@ async def update(changes: dict, actor: str) -> dict:
         if name not in cats:
             raise CompositionError(f"kategori tidak dikenal: {name}")
         if name in LOCKED:
-            raise CompositionError("kategori privat selalu memakai model lokal")
+            raise CompositionError(f"kategori {name} tidak bisa diubah")
         if "routes" in c:
             await db.pool().execute("UPDATE llm_categories SET routes = $2 WHERE name = $1",
                                     name, await _validate_routes(c["routes"]))
@@ -280,7 +271,7 @@ ADMIN_URL = "http://jarvis-admin:8000"
 
 
 def hermes_profile_for(web_route_is_cloud: bool) -> str:
-    """Hermes on the local CPU gets the lean prompt; on a cloud model everything eager (ADR-031). Pure."""
+    """Hermes on a cloud model gets everything eager (ADR-031); the lean prompt was for the local CPU model, now gone (ADR-080). Pure."""
     return "full" if web_route_is_cloud else "lean"
 
 
@@ -289,7 +280,7 @@ async def sync_hermes_profile(actor: str) -> str | None:
     profile (jarvis-admin writes .env; jarvis-apply recreates only Hermes). Returns the new profile, if changed."""
     import httpx
     from .config import settings
-    want = hermes_profile_for((await gateway.plan("web", caller="hermes", worker=True))[0].cloud)
+    want = hermes_profile_for(True)
     headers = {"X-Admin-Token": settings.admin_token}
     try:
         async with httpx.AsyncClient(timeout=20) as c:
@@ -310,7 +301,7 @@ async def sync_hermes_profile(actor: str) -> str | None:
 
 def _price_text(m: dict | None) -> str:
     if not m:
-        return "model lokal (gratis)"
+        return "harga tidak diketahui"
     return "gratis" if m["free"] else f"${m['price_in']:g} masuk / ${m['price_out']:g} keluar per 1 juta token"
 
 
@@ -345,7 +336,7 @@ async def set_model(category: str, model: str, actor: str, *, provider: str = OR
     if category not in cats:
         raise CompositionError(f"kategori tidak dikenal: {category} (ada: {', '.join(sorted(cats))})")
     if category in LOCKED:
-        raise CompositionError("kategori privat selalu memakai model lokal")
+        raise CompositionError(f"kategori {category} tidak bisa diubah")
     model = model.strip()
     info = None
     if provider == OR:
@@ -372,7 +363,7 @@ async def set_model(category: str, model: str, actor: str, *, provider: str = OR
     routes = ([entry] + rest if role != "cadangan" else rest[:1] + [entry] + rest[1:])[:4]
     await update({"categories": {category: {"routes": routes}}}, actor)
     return {"category": category, "main": routes[0]["model"], "chain": [x["model"] for x in routes],
-            "price": _price_text(info) if provider == OR else "model lokal (gratis)"}
+            "price": _price_text(info)}
 
 
 async def set_total_budget(usd: float, actor: str) -> float:
@@ -442,10 +433,10 @@ async def summary() -> dict:
         chain = []
         for x in cat["routes"]:
             info = openrouter.get(models, x["model"]) if x["provider"] == OR else None
-            chain.append(x["model"] + (f" ({_price_text(info)})" if info else "" if x["provider"] == OR else " (lokal)"))
-        out.append({"kategori": cat["name"], "model": chain or ["model lokal (Qwen)"],
+            chain.append(x["model"] + (f" ({_price_text(info)})" if info else "" if x["provider"] == OR else ""))
+        out.append({"kategori": cat["name"], "model": chain or ["(belum ada model — pilih di Komposisi AI)"],
                     **({"anggaran": cat["budget_usd"]} if cat["budget_usd"] is not None else {}),
-                    **({"terkunci": "selalu lokal"} if cat["locked"] else {})})
+                    **({"terkunci": "tidak bisa diubah"} if cat["locked"] else {})})
     from . import billing
     verdict = await billing.verdict()
     return {"preset": c["preset"], "kategori": out, "suara": c["stt"]["engine"], "mode_kuat": c["strong_mode"],

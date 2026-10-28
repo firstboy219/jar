@@ -165,7 +165,7 @@ export function createMeetingCard({ box, api, toast, embedded }) {
       head.textContent = 'Siap merekam rapat';
       const d = draft || { title: m.title, participants: (m.participants || []).join(', '), agenda: m.agenda, confidential: m.confidential };
       const title = field('Judul', d.title, 'mis. Rapat anggaran'), who = field('Peserta', d.participants, 'nama, pisahkan koma'), agenda = field('Agenda', d.agenda, 'topik / istilah (opsional)');
-      const conf = check('Rahasia (diproses hanya di server sendiri)'); conf.c.checked = !!d.confidential;
+      const conf = check('Rahasia (hanya transkrip lokal, tanpa notulen AI)'); conf.c.checked = !!d.confidential;
       const ok = check('Semua peserta sudah tahu dan setuju rapat ini direkam.');
       const go = button('● Mulai rekam', 'mgo', () => start({ title: title.i.value, participants: who.i.value, agenda: agenda.i.value, confidential: conf.c.checked }));
       go.disabled = true; ok.c.addEventListener('change', () => { go.disabled = !ok.c.checked; });

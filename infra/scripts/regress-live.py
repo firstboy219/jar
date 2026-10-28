@@ -111,7 +111,7 @@ async def main():
             n = await db.pool().fetchval("SELECT count(*) FROM company_vault"); rec("fase1-isolasi", "RLS: brankas perusahaan tak terlihat tanpa lingkup", n == 0, n)
             # ---- infra reachability ----
             for name, url in (("Hermes", "http://jarvis-brain:8642/health"), ("OpenJarvis", "http://jarvis-openjarvis:8765/health"), ("Browser bersama", "http://jarvis-browser-gw:9222/json/version"),
-                              ("n8n", f"{settings.n8n_url}/healthz"), ("llama chat", "http://llama-chat:8080/health"), ("Qdrant", "http://qdrant:6333/healthz")):
+                              ("n8n", f"{settings.n8n_url}/healthz"), ("Qdrant", "http://qdrant:6333/healthz")):
                 try: r = await c.get(url, timeout=8); rec("infra", f"{name} menjawab", r.status_code == 200, r.status_code)
                 except Exception as e: rec("infra", f"{name} menjawab", False, type(e).__name__)
     finally:

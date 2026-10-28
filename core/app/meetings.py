@@ -3,7 +3,8 @@ in 60-second Opus chunks; here they are assembled, transcribed, split by speaker
 
 Pipeline (one meeting at a time, lowest CPU priority so live voice and chat stay fast):
   1. speech → text with the owner's speech engine (Whisper local / Groq / Deepgram); a "Rahasia"
-     (confidential) meeting is always local, end to end;
+     (confidential) meeting is transcribed by the local Whisper only and gets NO AI minutes or Q&A — there is no local text model
+     any more (ADR-080), so nothing of it is ever sent to a cloud model;
   2. who spoke when (sherpa-onnx diarization on this server); the owner's voiceprint names "Pemilik";
   3. minutes by the 'rapat' category model, map-reduce over ~10-minute blocks: summary, decisions,
      action items (who / what / due), open questions, topics;
@@ -415,8 +416,14 @@ async def context_text(meeting: dict) -> str:
     return "\n".join(lines)
 
 
+CONFIDENTIAL_NOTE = ("Rapat rahasia: transkrip dibuat di server sendiri (Whisper), tapi notulen AI tidak dibuat karena tidak ada model "
+                     "lokal untuk meringkasnya — tidak ada isinya yang dikirim ke cloud. Baca transkrip di bawah.")
+
+
 async def _summarize(meeting: dict, transcript: list[dict]) -> dict:
     private = meeting["confidential"]
+    if private:
+        return {"ringkasan": CONFIDENTIAL_NOTE, "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}
     notes = []
     system = NOTES_PROMPT.format(context=await context_text(meeting))
     for b in blocks(transcript):
@@ -529,6 +536,8 @@ async def ask(meeting_id: str, question: str) -> dict:
     meeting = await get(meeting_id)
     if not meeting or meeting["status"] != "done":
         raise MeetingError("notulen rapat ini belum siap")
+    if meeting["confidential"]:
+        raise MeetingError("rapat rahasia tidak bisa ditanya ke AI (tidak ada model lokal): cari kata di transkripnya")
     [vector] = await memory.embed([question])
     async with memory._qdrant() as q:
         r = await q.post(f"/collections/{COLLECTION}/points/search", json={

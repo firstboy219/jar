@@ -111,12 +111,12 @@ async def _maybe_notify(st: dict) -> None:
         now = datetime.now(WIB)
         key, every = f"100:{now:%d}{'pm' if now.hour >= 12 else 'am'}", 12 * 3600
         text = (f"Anggaran AI bulan ini (${st['budget_usd']:.0f}) sudah habis terpakai. Aku tetap jalan memakai "
-                "model gratis dan model lokal di server, jadi mungkin lebih lambat sampai bulan depan — "
+                "model gratis saja, jadi mungkin lebih lambat atau sering kena batas sampai bulan depan — "
                 "atau naikkan anggarannya di menu Komposisi AI.")
     elif level >= 80:
         key, every = f"80:{st['month']}", 40 * 86400
         text = (f"Anggaran AI bulan ini sudah terpakai {st['pct']:.0f}% (${st['spent_usd']:.2f} dari "
-                f"${st['budget_usd']:.0f}). Tugas latar belakang kupindah ke model gratis/lokal supaya hemat.")
+                f"${st['budget_usd']:.0f}). Tugas latar belakang kupindah ke model gratis supaya hemat.")
     else:
         return
     if time.monotonic() - _notified.get(key, -1e12) < every:

@@ -17,8 +17,8 @@ from .config import settings
 EXHAUSTED = re.compile(r"HTTP 402|requires more credits|credits exhausted|can only afford", re.IGNORECASE)
 NOTIFY_EVERY_S = 12 * 3600
 LOW_BALANCE_USD = 0.5
-MESSAGE = ("Saldo OpenRouter-ku habis, jadi sementara aku memakai model lokal di server — tetap jalan, tapi "
-           "lebih lambat. Kalau mau cepat lagi, isi kredit di openrouter.ai/settings/credits.")
+MESSAGE = ("Saldo OpenRouter-ku habis, jadi hanya model gratis yang masih bisa kupakai (dan itu pun sering kena batas). "
+           "Isi kredit di openrouter.ai/settings/credits supaya aku kembali normal.")
 
 _cache: tuple[float, dict | None] = (0.0, None)
 _last_notified = 0.0
@@ -59,7 +59,7 @@ def judge(paid_ok, paid_fail, credits: dict | None) -> dict:
     if paid_ok is not None and (paid_fail is None or paid_ok > paid_fail):
         return {"working": True, "text": "berfungsi (panggilan berbayar sungguhan berhasil)"}
     if paid_fail is not None:
-        return {"working": False, "text": "HABIS — panggilan berbayar terakhir ditolak (HTTP 402: kredit tidak cukup); model gratis/lokal dipakai"}
+        return {"working": False, "text": "HABIS — panggilan berbayar terakhir ditolak (HTTP 402: kredit tidak cukup); hanya model gratis yang masih jalan"}
     if credits is not None:
         ok = credits["remaining"] >= LOW_BALANCE_USD
         return {"working": ok, "text": f"${credits['remaining']:.2f} tersisa" if ok else f"HABIS (${credits['remaining']:.2f}) — kredit di akun kunci ini belum ada"}

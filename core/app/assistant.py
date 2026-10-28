@@ -798,8 +798,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
         ms = int((time.monotonic() - started) * 1000)
         return Answer(reply, spoken_live=speak_live, first_say_ms=ms if speak_live else None,
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
-    first_route = (await gateway.plan("ngobrol", caller="chat", private=private))[0]
-    compact = not first_route.cloud
+    compact = False   # the short prompt was for the local CPU model (every token cost time); every model is in the cloud now (ADR-080)
     # Static first (cacheable), then the append-only history, then everything that changes per turn.
     messages = [{"role": "system", "content": SYSTEM + "\n\nTENTANG DIRIMU:\n" + await self_model.describe()},
                 *await _history(session_id, limit=8 if compact else 16, private=private),
