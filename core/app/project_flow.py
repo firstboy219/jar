@@ -77,6 +77,8 @@ def start_time(option: dict, offset_min: int | None, now: datetime) -> datetime 
         return None
     hh, mm = (int(x) for x in option["waktu"].split(":"))
     at = now.astimezone(_tz()).replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if now - at > timedelta(hours=12):   # 00:10 picked at 23:30 is tomorrow's, not a time that has passed
+        at += timedelta(days=1)
     if at < now - timedelta(minutes=LATE_MINUTES):
         raise FlowError(f"jam {option['waktu']} sudah lewat — minta run baru atau pilih opsi lain")
     start = at - timedelta(minutes=offset_min)
