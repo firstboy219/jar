@@ -123,9 +123,24 @@ def project_intent(text: str) -> Intent | None:
     return None
 
 
+# "pesankan goride ke kantor", "tolong order gofood nasi padang" — an app on the owner's phone, after their approval (ADR-077)
+_PHONE_APP = re.compile(r"^(?:(?:jarvis|tolong|tlg|coba|bisa|bisakah|mohon)[, ]+)*(?:kamu\s+)?(?:pesan(?:kan|in)?|pesen(?:in)?|order(?:kan|in)?|"
+                        r"booking(?:kan|in)?|book|panggil(?:kan|in)?|beli(?:kan|in)?|kirim(?:kan|in)?)\b", re.IGNORECASE)
+
+
+def phone_intent(text: str) -> Intent | None:
+    """Ordering through a phone app, said plainly (pure; unit-tested)."""
+    from .phone_agent import detect_app
+    t = " ".join(text.strip().split())
+    app = detect_app(t)
+    if app and _PHONE_APP.match(t) and not t.endswith("?"):
+        return Intent("phone_app", {"app": app, "text": t})
+    return None
+
+
 def parse_action(text: str) -> Intent | None:
     lowered = " ".join(text.strip().lower().split())
-    if p := project_intent(text):
+    if p := project_intent(text) or phone_intent(text):
         return p
     if m := _TODO.match(text.strip()):   # "tambah tugas telepon pak budi besok" → Catatan's task list (ADR-060)
         return Intent("todo_add", {"text": m["text"].strip()})

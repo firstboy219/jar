@@ -62,6 +62,19 @@ async def broadcast(event: dict) -> int:
     return delivered
 
 
+async def send_cap(cap: str, event: dict) -> bool:
+    """Send to the newest connected device that says it can do `cap` (e.g. the phone that operates apps, ADR-077)."""
+    for cid in sorted(_clients, reverse=True):
+        if cap in (_meta.get(cid, {}).get("caps") or []):
+            try:
+                await _clients[cid](event)
+                return True
+            except Exception:
+                log.debug("dropping client %s", cid)
+                unregister(cid)
+    return False
+
+
 async def wait_online() -> None:
     await _connected.wait()
 

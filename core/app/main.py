@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import devteam, google_auth, notes, projects
+from . import devteam, google_auth, notes, phone_agent, projects
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -1185,6 +1185,9 @@ async def ws(websocket: WebSocket):
         if current_stage := stage.current():
             await send(current_stage)
         await reports.on_connect(send)
+        if "phone_agent" in caps and device.get("scope") == "owner":   # approvals asked while this phone was away (ADR-077)
+            for r in await phone_agent.pending():
+                await send(phone_agent.approval_card(r))
 
         async def run(cmd: Command) -> None:
             # a private or sensitive turn, or one about attachments/screen text, is never read out by a cloud voice
@@ -1227,6 +1230,15 @@ async def ws(websocket: WebSocket):
                 try:
                     await notifications.receive(notifications.Notification(**(msg.get("notification") or {})), device["id"])
                 except ValueError:
+                    pass
+                continue
+            if kind == "phone_result":   # the phone's accessibility service answered an instruction (ADR-077)
+                phone_agent.on_reply(msg)
+                continue
+            if kind == "phone_stop":     # the owner tapped "Hentikan" on the banner while JARVIS operated an app
+                try:
+                    await phone_agent.stop_from_phone(int(msg.get("run") or 0), f"device:{device['name']}")
+                except (TypeError, ValueError):
                     pass
                 continue
             if kind == "stage_event":
@@ -1688,6 +1700,50 @@ async def document_get(doc_id: str, device: dict = Depends(device_auth)):
     row, path = found
     return FileResponse(path, media_type=documents.FORMATS[row["format"]],
                         filename=f"{row['title'][:60]}.{row['format']}")
+
+
+# ---------- apps on the owner's phone (ADR-077) ----------
+
+class PhoneApproveIn(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
+
+
+_approve_failures: dict[str, list[float]] = {}
+
+
+@app.get("/api/v1/phone/runs")
+async def phone_runs(device: dict = Depends(owner_device_auth)):
+    return jsonable({"pending": [phone_agent.approval_card(r) for r in await phone_agent.pending()],
+                     "recent": await phone_agent.recent(), "apps": {k: v["label"] for k, v in phone_agent.APPS.items()},
+                     "phone_online": phone_agent.phone_online()})
+
+
+@app.post("/api/v1/phone/runs/{run_id}/approve")
+async def phone_run_approve(run_id: int, body: PhoneApproveIn, request: Request, device: dict = Depends(owner_device_auth)):
+    """Approving a run of an app on the phone needs the ADMIN PASSWORD as well as the owner's device (the owner's rule).
+    5 wrong passwords per device per 15 minutes."""
+    who, now = f"device:{device['name']}", time.time()
+    recent = [t for t in _approve_failures.get(str(device["id"]), []) if now - t < 900]
+    _approve_failures[str(device["id"])] = recent
+    if len(recent) >= 5:
+        raise HTTPException(429, "Terlalu banyak password salah. Coba lagi dalam 15 menit.")
+    r = await _admin_internal("POST", "/internal/check-admin-password", json={"password": body.password})
+    if r.status_code != 200:
+        if r.status_code == 401:
+            recent.append(now)
+            await audit.record(who, "phone.approve_bad_password", f"phone_run:{run_id}")
+            raise HTTPException(401, "Password admin salah")
+        raise HTTPException(502 if r.status_code != 429 else 429, "Gagal memeriksa password")
+    _approve_failures.pop(str(device["id"]), None)
+    try:
+        return jsonable(await phone_agent.approve(run_id, who))
+    except phone_agent.PhoneError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post("/api/v1/phone/runs/{run_id}/reject")
+async def phone_run_reject(run_id: int, device: dict = Depends(owner_device_auth)):
+    return {"rejected": await phone_agent.reject(run_id, f"device:{device['name']}")}
 
 
 # ---------- the desk's workers area (ADR-058) ----------

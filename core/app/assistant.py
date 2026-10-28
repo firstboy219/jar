@@ -49,6 +49,7 @@ ringkasan apa yang akan dikirim. Kalau pemilik bilang pekerja kesulitan (captcha
 "Intervensi" di kartu tugasnya (bisa kapan saja, pekerja langsung diam), lalu tekan "Selesai, lanjutkan Jarvis" — jangan minta kata sandi atau kode lewat chat. \
 Permintaan untuk MENGEMBANGKAN JARVIS SENDIRI (ubah tampilan meja/aplikasi, perbaiki fitur, tambah kemampuan kecil) selalu lewat \
 tim_dev — bukan spawn_task — dan jangan mengaku sudah dikerjakan sebelum tim_dev mengembalikan dev_job.
+Aplikasi di HP pemilik (Gojek: ojek, mobil, makanan, kirim barang, belanja): pakai operasi_hp — JANGAN spawn_task, jangan mengaku sudah memesan; pemilik harus menyetujui di aplikasi JARVIS dengan password admin dulu, lalu JARVIS mengoperasikan HP-nya (PIN/OTP tetap pemilik yang ketik).
 Kamu MENGAWASI semua pekerjaan: tugas worker, PROYEK pemilik (alat proyek: lihat status, jalankan, jeda, lanjutkan, buat proyek baru dengan peran pekerjanya) dan Tim Dev. "POLA SERUPA" berisi pekerjaan mirip yang pernah dikerjakan pekerja beserta polanya (berhasil/gagal, berapa lama, langkah, model, apakah pemilik harus membantu): kenali polanya — perkirakan waktu dan cara, ingatkan pemilik bila dulu ia harus membantu (login, captcha, persetujuan) atau bila cara yang sama dulu gagal, dan tulis pelajarannya ke instruksi spawn_task.
 
 Laporan: daftar "LAPORAN BELUM DIKONFIRMASI" berisi hasil worker yang sudah kamu sampaikan. Jika ucapan \
@@ -369,6 +370,13 @@ TOOLS = [
                        "Tulis permintaan pemilik SELENGKAPNYA dengan kata-katanya sendiri (jangan diringkas, jangan dipecah).",
         "parameters": {"type": "object", "properties": {"permintaan": {"type": "string"}}, "required": ["permintaan"]}}},
     {"type": "function", "function": {
+        "name": "operasi_hp",
+        "description": "Operasikan aplikasi di HP pemilik (saat ini: Gojek — GoRide, GoCar, GoFood, GoSend, GoMart): JARVIS membuka aplikasinya dan "
+                       "mengetuk/mengetik sendiri. Selalu minta persetujuan pemilik dulu di aplikasi JARVIS (password admin); tulis tujuannya "
+                       "selengkap kata-kata pemilik (layanan, alamat/menu, catatan, batas harga bila ada).",
+        "parameters": {"type": "object", "properties": {
+            "aplikasi": {"type": "string", "enum": ["gojek"]}, "tujuan": {"type": "string"}}, "required": ["aplikasi", "tujuan"]}}},
+    {"type": "function", "function": {
         "name": "proyek",
         "description": "Proyek pemilik (tim pekerja berperan + jadwal, mis. bantu lamar kerja tiap pagi): list = semua proyek; status = keadaan satu "
                        "proyek dan pekerja run terakhirnya; run = jalankan sekarang; pause/resume = jeda/lanjutkan jadwalnya; create = buat proyek baru "
@@ -571,6 +579,8 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                    "say": "Tim dev sudah mulai; pantau di area Tim Dev di Meja."}, ensure_ascii=False)
             case "proyek":
                 return json.dumps(await _project_tool(a, actor), ensure_ascii=False, default=str)
+            case "operasi_hp":
+                return json.dumps(await _phone_tool(a, actor, session_id), ensure_ascii=False, default=str)
             case "memory_correct":
                 if (refused := await chat_settings.guard("memory_correct", device_id, stt, bool(screen_text or attachments))):
                     return json.dumps({"error": refused})
@@ -1073,6 +1083,21 @@ async def start_draft(request: str, session_id: str, actor: str, device_id, loca
     return {"task_id": t["id"], "status": "queued", "say": "Draf sedang ditulis (±2–3 menit), nanti muncul di layar + file .docx."}
 
 
+async def _phone_tool(a: dict, actor: str, session_id: str) -> dict:
+    """An app on the owner's phone (ADR-077): asked for approval in the JARVIS app (admin password) — never started from the chat alone."""
+    from . import phone_agent
+    app = str(a.get("aplikasi") or "").lower() or phone_agent.detect_app(str(a.get("tujuan") or "")) or ""
+    try:
+        run = await phone_agent.request(str(a.get("tujuan") or ""), app, actor, session_id)
+    except phone_agent.PhoneError as e:
+        return {"error": str(e)}
+    label = phone_agent.APPS[app]["label"]
+    away = "" if phone_agent.phone_online() else " (HP-nya sedang tidak tersambung — buka aplikasi JARVIS dulu)"
+    return {"phone_run": run["id"], "status": "menunggu persetujuan",
+            "say": f"Siap. Sebelum aku buka {label}, setujui dulu di aplikasi JARVIS di HP: periksa permintaannya, masukkan password admin, "
+                   f"lalu Setujui (berlaku {phone_agent.APPROVAL_MINUTES} menit){away}. PIN dan OTP tetap kamu yang ketik."}
+
+
 async def _project_tool(a: dict, actor: str) -> dict:
     """The owner's projects from the chat (ADR-074): whatever the desk's Projects card does, the main agent can do too."""
     from . import projects
@@ -1092,7 +1117,8 @@ async def _project_tool(a: dict, actor: str) -> dict:
             return {"status": projects.status_text(p)}
         if act == "run":
             r = await projects.run(p["id"], actor)
-            return {"run": r["run"], "tasks": r["tasks"], "say": f"Proyek \"{p['name']}\" run #{r['run']} jalan dengan {len(r['tasks'])} pekerja."}
+            ask = f" {len(r['approvals'])} operasi aplikasi HP menunggu persetujuanmu di aplikasi JARVIS (password admin)." if r.get("approvals") else ""
+            return {"run": r["run"], "tasks": r["tasks"], "say": f"Proyek \"{p['name']}\" run #{r['run']} jalan dengan {len(r['tasks'])} pekerja.{ask}"}
         if act in ("pause", "resume"):
             p = await projects.set_status(p["id"], "paused" if act == "pause" else "active", actor)
             return {"status": projects.status_text(p)}
@@ -1128,6 +1154,9 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             except devteam.DevTeamError as e:
                 return f"Maaf, {e}."
             return f"Oke, tim dev menerima permintaan #{job['id']}. bisan sedang menulis spesifikasinya — pantau di area Tim Dev di Meja."
+        case "phone_app":
+            r = await _phone_tool({"aplikasi": a["app"], "tujuan": a["text"]}, actor, session_id)
+            return r.get("say") or f"Maaf, {r['error']}."
         case "project":
             r = await _project_tool({"action": a["op"], "nama": a.get("name", "")}, actor)
             if r.get("error"):

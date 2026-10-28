@@ -13,7 +13,7 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from . import audit, db, results
+from . import audit, db, phone_agent, results
 
 log = logging.getLogger("jarvis-core.projects")
 TZ = ZoneInfo("Asia/Jakarta")
@@ -67,8 +67,11 @@ def clean(data: dict) -> dict:
         model = str(r.get("model") or "").strip() or None
         if model and not _MODEL.match(model):
             raise ProjectError(f"model untuk peran {role} tidak dikenal: {model}")
-        roles.append({"role": role, "brief": str(r.get("brief") or "").strip()[:3000], "workers": max(1, min(5, workers)),
-                      "model": model, "web": bool(r.get("web"))})
+        app = str(r.get("app") or "").strip().lower() or None
+        if app and app not in phone_agent.APPS:
+            raise ProjectError(f"aplikasi HP untuk peran {role} belum didukung: {app}")
+        roles.append({"role": role, "brief": str(r.get("brief") or "").strip()[:3000], "workers": 1 if app else max(1, min(5, workers)),
+                      "model": model, "web": bool(r.get("web")) and not app, "app": app})   # the phone has one screen: one app worker
     if not roles:
         raise ProjectError("tambahkan minimal satu peran pekerja")
     if sum(r["workers"] for r in roles) > MAX_WORKERS:
@@ -136,8 +139,9 @@ async def save(data: dict, actor: str, project_id: int | None = None) -> dict:
                 """INSERT INTO projects (name, goal, schedule, at_time, weekday, next_run) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""",
                 p["name"], p["goal"], p["schedule"], p["at_time"], p["weekday"], nxt)
         for i, r in enumerate(p["roles"]):
-            await conn.execute("""INSERT INTO project_roles (project_id, role, brief, workers, model, web, sort) VALUES ($1, $2, $3, $4, $5, $6, $7)""",
-                               row["id"], r["role"], r["brief"], r["workers"], r["model"], r["web"], i)
+            await conn.execute("""INSERT INTO project_roles (project_id, role, brief, workers, model, web, sort, app)
+                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                               row["id"], r["role"], r["brief"], r["workers"], r["model"], r["web"], i, r["app"])
     await audit.record(actor, "project.saved", f"project:{row['id']}", name=p["name"])
     return await get(row["id"])
 
@@ -203,8 +207,14 @@ async def run(project_id: int, actor: str, trigger: str = "manual") -> dict:
     n_run = await db.pool().fetchval(
         "UPDATE projects SET runs = runs + 1, last_run = now(), next_run = $2, updated_at = now() WHERE id = $1 RETURNING runs",
         project_id, next_run(p, datetime.now(TZ)) if p["status"] == "active" else None)
-    spawned = []
+    spawned, asked = [], []
     for r in p["roles"]:
+        if r.get("app"):   # an app on the owner's phone (ADR-077): only the owner's schedule starts it unasked; ▶ Jalankan asks for approval too
+            goal = f"[PROYEK: {p['name']} · run #{n_run} · peran {r['role']}] {r['brief'] or r['role']}" + (f" — tujuan proyek: {p['goal']}" if p["goal"] else "")
+            pr = await phone_agent.request(goal, r["app"], actor, f"project-{project_id}", scheduled=trigger == "schedule",
+                                           project={"project_id": project_id, "role_id": r["id"], "run": n_run, "model": r["model"]})
+            (spawned.append(pr["task_id"]) if pr.get("task_id") else asked.append(pr["id"]))
+            continue
         for n in range(1, r["workers"] + 1):
             brief = BRIEF.format(name=p["name"], run=n_run, role=r["role"], n=n, total=r["workers"], goal=p["goal"] or "(lihat tugas peran)",
                                  brief=r["brief"] or r["role"], split=SPLIT.format(n=n, total=r["workers"]) if r["workers"] > 1 else "",
@@ -214,8 +224,8 @@ async def run(project_id: int, actor: str, trigger: str = "manual") -> dict:
             await db.pool().execute("UPDATE tasks SET project_id = $2, project_role = $3, project_run = $4, model_override = $5 WHERE id = $1",
                                     t["id"], project_id, r["id"], n_run, r["model"])
             spawned.append(t["id"])
-    await audit.record(actor, "project.run", f"project:{project_id}", run=n_run, trigger=trigger, workers=len(spawned))
-    return {"run": n_run, "tasks": spawned}
+    await audit.record(actor, "project.run", f"project:{project_id}", run=n_run, trigger=trigger, workers=len(spawned), approvals=len(asked))
+    return {"run": n_run, "tasks": spawned, "approvals": asked}
 
 
 async def tick() -> int:
