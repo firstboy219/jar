@@ -1159,8 +1159,9 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
         case "project":
             r = await _project_tool({"action": a["op"], "nama": a.get("name", "")}, actor)
             if r.get("error"):
-                if "ada" in r:   # no such project: the chat model (with the list in its situation and the proyek tool) sorts out what was meant
-                    return None if r["ada"] else "Belum ada proyek — buat di menu Proyek di Meja, atau bilang ke aku proyek apa yang mau dibuat."
+                if "ada" in r:   # no such project: say so with the names there are (the chat model only answered "Oke, sedang kuurus." — a promise, not an action)
+                    return (f"Proyek \"{a.get('name')}\" tidak ketemu. Yang ada: {', '.join(r['ada'])}." if r["ada"] else
+                            "Belum ada proyek — buat di menu Proyek di Meja, atau bilang ke aku proyek apa yang mau dibuat.")
                 return f"Maaf, {r['error']}."
             return r.get("say") or r.get("status") or "\n".join(r.get("projects") or [])
         case "meeting_start":

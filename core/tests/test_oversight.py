@@ -111,6 +111,6 @@ async def test_the_owners_projects_are_driven_from_the_chat(pool, monkeypatch):
     assert await pool.fetchval("SELECT count(*) FROM tasks WHERE project_id = $1", made["created"]) == 1
     said = await assistant._act(assistant.router.parse_action("jeda proyek laporan emas"), "s", "owner", None, None, False)
     assert "dijeda" in said
-    assert await assistant._act(assistant.router.parse_action("jalankan proyek resep rendang"), "s", "owner", None, None, False) is None
+    assert "tidak ketemu" in await assistant._act(assistant.router.parse_action("jalankan proyek resep rendang"), "s", "owner", None, None, False)
     text = await assistant._situation("halo", None)
     assert 'PROYEK PEMILIK' in text and 'Proyek "Laporan emas" (dijeda' in text and "1 antre" in text

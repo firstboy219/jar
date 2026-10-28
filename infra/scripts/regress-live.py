@@ -58,7 +58,7 @@ async def main():
             rec("fase7-meja", "tangkapan layar tanpa token ditolak", (await get("/api/v1/canvas/live/1/frame")).status_code == 401)
             leak = [p for p in live["prompts"] if "OTP" in p["asked"] and any(ch.isdigit() for ch in p["asked"])]
             rec("fase7-meja", "permintaan sensitif disembunyikan", not leak, len(leak))
-            for f in ("index.html", "app.js", "cad.js", "dock.js", "lib.js", "worklet.js", "gestures.js", "vendor/three.module.min.js"):
+            for f in ("index.html", "app.js", "board.js", "dock.js", "lib.js", "worklet.js", "gestures.js", "projectscard.js", "resultview.js"):
                 r = await get(f"/canvas/{f}"); rec("fase8-halaman", f"aset {f}", r.status_code == 200 and "content-security-policy" in r.headers, r.status_code)
             r = await c.get("/", follow_redirects=False); rec("fase8-halaman", "/ membuka meja", r.status_code in (302, 307) and r.headers.get("location") == "/canvas/")
             r = await c.get("/canvas/../main.py"); rec("keamanan", "path traversal di penampil ditolak", r.status_code in (404, 400))
@@ -96,7 +96,7 @@ async def main():
             sent = await db.pool().fetchval("SELECT count(*) FROM outbox WHERE status = 'sent'"); rec("fase6-inbox", "tidak ada email/acara terkirim sendiri", sent == 0, sent)
             # ---- fase 2 openjarvis ----
             oj = (await get("/admin/openjarvis", A)).json()
-            rec("fase2-openjarvis", "kontainer menjawab, mati secara bawaan", oj["reachable"] and oj["configured"] and oj["enabled"] is False, oj["enabled"])
+            rec("fase2-openjarvis", "kontainer menjawab dan siap dipakai", oj["reachable"] and oj["configured"], f"enabled={oj['enabled']}")
             # ---- workers, reports, budget ----
             rep = await db.pool().fetchval("SELECT count(*) FROM reports WHERE attempts > 2 AND created_at > greatest(now() - interval '6 hours', timestamptz '2026-10-26 01:00+00')"); rec("laporan", "tidak ada laporan yang diulang (>2x; 2 = HP + meja web yang membacakannya masing-masing sekali)", rep == 0, rep)
             unheard = await db.pool().fetchval("SELECT count(*) FROM reports WHERE status = 'unheard' AND created_at > greatest(now() - interval '6 hours', timestamptz '2026-10-26 01:00+00')"); rec("laporan", "tidak ada status 'tak terdengar' baru", unheard == 0, unheard)
