@@ -92,3 +92,15 @@ def test_the_owner_is_not_told_a_local_model_will_catch_him():
     from app import billing, budget, router
     assert "lokal" not in billing.MESSAGE and "Qwen" not in billing.MESSAGE
     assert "/privat" not in router.HELP and "model lokal" not in router.HELP
+
+
+@needs_db
+async def test_a_project_command_for_an_unknown_name_says_so(pool, monkeypatch):
+    from app import assistant, router
+    await pool.execute("TRUNCATE projects CASCADE")
+    none = await assistant._act(router.parse_action("jalankan proyek tidak ada sama sekali"), "s", "owner", None, None, False)
+    assert "Belum ada proyek" in none
+    await assistant._project_tool({"action": "create", "nama": "Laporan emas", "tujuan": "harga emas", "peran": [{"role": "Peneliti"}]}, "owner")
+    said = await assistant._act(router.parse_action("jalankan proyek resep rendang"), "s", "owner", None, None, False)
+    assert 'tidak ketemu' in said and "Laporan emas" in said                       # not a vague "sedang kuurus"
+    await pool.execute("TRUNCATE projects CASCADE")
