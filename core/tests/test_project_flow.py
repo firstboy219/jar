@@ -45,6 +45,8 @@ def test_the_next_stage_starts_n_minutes_before_the_picked_time():
     assert project_flow.start_time(opt, 5, datetime(2026, 10, 28, 6, 10, tzinfo=WIB)) is None        # 8 minutes late: still go
     with pytest.raises(project_flow.FlowError, match="sudah lewat"):
         project_flow.start_time(opt, 5, datetime(2026, 10, 28, 6, 30, tzinfo=WIB))                  # the train left half an hour ago
+    late = datetime(2026, 10, 28, 23, 30, tzinfo=WIB)
+    assert project_flow.start_time({"label": "KRL", "waktu": "00:10"}, 5, late) == datetime(2026, 10, 29, 0, 5, tzinfo=WIB)   # after midnight: tomorrow
 
 
 def test_the_next_stage_is_told_what_the_last_found_and_what_the_owner_picked():
