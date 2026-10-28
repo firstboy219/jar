@@ -1333,9 +1333,12 @@ JARVIS — music player, web player/browser, video player, projects, …
   web page / map / document / picture / note / draft JARVIS showed, the meeting recorder while it records or is processed, projects at work
   (busy workers, a pick or a start time waiting), the workers while any is busy, the dev team while it works. Nothing active → an empty page
   with 🗂 Proyek and ▦ Kanvas.
-- **Two views, like Android**: ▢ shows all pages side by side (scaled, swipe, tap to open); an open page fills the screen (in the app the
-  app's own bars hide too) and swiping moves between pages; the phone's Back returns to ▢. A page that appears comes to the front unless the
-  owner is touching the desk.
+- **Two views**: an open page fills the screen (in the app the app's own bars hide too) and swiping moves between pages; ▢ shows ALL pages
+  as a grid of live miniatures like Chrome's tab overview — "+" (ask Jarvis to open something), how many pages there are, a search
+  ("Telusuri halaman"), the current page highlighted, a ✕ per page (media / shown pages are closed, a worker's browser stops its worker after
+  asking, an overview is only hidden until something changes in it; a meeting is never closed by a ✕). The phone's Back returns to the grid.
+  A page that appears comes to the front unless the owner is touching the desk.
+- **The phone app has no infinite canvas any more** (owner, same day): in the app the desk is always the switcher; the canvas is the web's
+  (default there, with "▤ Aktivitas" to switch).
 - The pages hold the SAME live cards the canvas shows (moved into the page, moved back — `board.adoptWidget` — when the owner switches to
-  ▦ Kanvas), so the player, the takeover, the projects card, the choice popup… all work as before. The slider is the default; the canvas is one
-  tap away (remembered per device); a company's board is always the canvas.
+  ▦ Kanvas), so the player, the takeover, the projects card, the choice popup… all work as before.

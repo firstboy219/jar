@@ -33,3 +33,12 @@ test('the page shown stays, or moves to the one that just appeared', () => {
   assert.equal(nextIndex([], p('x'), undefined), 0);
   assert.equal(nextIndex(['a'], [], 'a'), 0);
 });
+
+test('the search and the ✕ of a page', async () => {
+  const { matches, closeKind } = await import('../switcher.js');
+  const page = { title: 'Halaman web', sub: 'Kompas — berita hari ini', kind: 'web' };
+  assert.ok(matches(page, 'kompas berita')); assert.ok(matches(page, '')); assert.ok(!matches(page, 'youtube'));
+  assert.equal(closeKind({ kind: 'web' }), 'close'); assert.equal(closeKind({ kind: 'player' }), 'close');
+  assert.equal(closeKind({ kind: 'station' }), 'stop'); assert.equal(closeKind({ kind: 'workers' }), 'hide');
+  assert.equal(closeKind({ kind: 'meeting' }), null);    // a recording is stopped on its own page, never by a ✕
+});

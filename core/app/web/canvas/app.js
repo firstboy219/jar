@@ -319,7 +319,9 @@ function panelFor(name) {
 }
 
 // ---------- the page switcher (ADR-082): the desk as pages of what is active, like Android's app switcher ----------
-let deskMode = LS('jarvis_desk_mode') || 'geser';
+// In the phone app the desk IS the page switcher (the infinite canvas is for the web only); in a browser the canvas is the default.
+let deskMode = fromApp.embedded ? 'geser' : (LS('jarvis_desk_mode') || 'kanvas');
+let lastDesk = null;
 const stationEls = new Map();   // task id → its page in the switcher (a picture of the worker's browser + its steps)
 
 function stationPage(taskId) {
@@ -353,13 +355,25 @@ const switcher = createSwitcher({
   root: $('#switcher'), holder: $('#sw-holder'), toast,
   panelOf: (kind) => panelFor(kind).el,
   stationPage,
-  onMode: (m) => setDeskMode(m),
+  onMode: fromApp.embedded ? null : (m) => setDeskMode(m),
   onFull: (on) => { try { window.JarvisHost?.fullscreen?.(on); } catch { /* an older app */ } },
+  onNew: () => { dockApi?.focus?.(); toast('Bilang ke Jarvis apa yang mau dibuka — halamannya muncul di sini.'); },
+  onClose: async (p, how) => {
+    if (how === 'stop') {
+      if (!confirm(`Hentikan pekerja "${p.sub || p.title}"? Pekerjaannya disimpan dan bisa diulang.`)) return;
+      try { await api.req('POST', `/api/v1/workers/${p.id.split(':')[1]}/stop`); toast('Pekerja dihentikan.'); } catch (err) { toast(err.message, true); }
+    } else {
+      const card = p.kind === 'player' ? lastDesk?.player : lastDesk?.cards?.[p.kind];
+      if (card?.id) dockApi?.raw({ type: 'stage_event', id: card.id, event: 'closed' });
+    }
+    setTimeout(pollLive, 300);
+  },
 });
 
-function switcherOn() { return deskMode === 'geser' && current?.context === 'utama'; }
+function switcherOn() { return current?.context === 'utama' ? deskMode === 'geser' : !!fromApp.embedded; }
 
 function setDeskMode(mode) {
+  if (fromApp.embedded) mode = 'geser';
   deskMode = mode; LS('jarvis_desk_mode', mode);
   applyDeskMode();
 }
@@ -367,6 +381,7 @@ function setDeskMode(mode) {
 function applyDeskMode() {
   const on = switcherOn();
   document.body.classList.toggle('mode-switch', on);
+  $('#modebtn').hidden = !!fromApp.embedded;   // the app has no canvas any more
   $('#modebtn').textContent = deskMode === 'geser' ? '▦ Kanvas' : '▤ Aktivitas';
   $('#modebtn').title = deskMode === 'geser' ? 'Tampilkan kanvas tak berujung' : 'Tampilkan halaman kegiatan aktif (seperti pengalih aplikasi Android)';
   const tb = $('#topbar').getBoundingClientRect();
@@ -524,6 +539,7 @@ async function pollLive() {
       }
     }
     renderPanels(d);
+    lastDesk = d;
     applyDeskMode();
     if (switcherOn()) switcher.update(d, { projects: projectsCard?.active() });
   } catch { /* offline: the next poll tries again */ } finally { pollingLive = false; }

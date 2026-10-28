@@ -368,5 +368,5 @@ export function initDock({ api, toast, embedded }) {
   const freshFrame = () => (media.frame && Date.now() - media.frame.at < FRAME_FRESH_MS ? media.frame : null);
 
   connect();
-  return { say: speak, send: sendChat, raw: post };
+  return { say: speak, send: sendChat, raw: post, focus: () => { setOpen(true); setTimeout(() => input.focus(), 60); } };   // focus: the switcher's "+" (ADR-082)
 }
