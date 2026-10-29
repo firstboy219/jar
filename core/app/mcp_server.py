@@ -116,8 +116,10 @@ Every node needs: id (uuid), name (unique), type, typeVersion, position [x, y], 
 Never embed credentials or secrets; leave credential selection to the owner."""
 
 
-def _extract_json(text: str) -> dict:
-    text = text.strip()
+def _extract_json(text: str | None) -> dict:
+    text = (text or "").strip()
+    if "{" not in text:   # the model answered nothing (or only words): say so instead of crashing the tool
+        raise ValueError("model tidak mengembalikan JSON workflow — coba lagi atau ganti model kategori coding")
     fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
     if fence:
         text = fence.group(1)

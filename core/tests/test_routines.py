@@ -196,6 +196,7 @@ async def test_the_phone_uses_a_learned_routine_instead_of_asking_the_ai_every_s
             return fake.obs()
         return await fake.act({"open": "open", "tap": "tap", "type": "type", "scroll": "scroll", "back": "back"}[name], **a)
     monkeypatch.setattr(phone_agent, "op", op)
+    monkeypatch.setattr(phone_agent, "phone_online", lambda: True)   # the fake phone is connected
 
     async def never(*a, **k):
         raise AssertionError("no AI loop while the routine runs")

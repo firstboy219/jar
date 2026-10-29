@@ -36,7 +36,8 @@ async def _word(title: str, result: str) -> str:
 
 async def _create(task_id: int | None, session_id: str, text: str) -> dict:
     row = await db.pool().fetchrow(
-        "INSERT INTO reports (task_id, session_id, text) VALUES ($1, $2, $3) RETURNING *",
+        # the task may be gone (closed / its project deleted) by the time its report is written: keep the report, drop the link
+        "INSERT INTO reports (task_id, session_id, text) VALUES ((SELECT id FROM tasks WHERE id = $1), $2, $3) RETURNING *",
         task_id, session_id, text)
     await db.pool().execute(
         "INSERT INTO messages (session_id, role, content, route) VALUES ($1, 'assistant', $2, 'report')",

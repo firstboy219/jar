@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from . import attachments as attachments_module
-from . import companion
+from . import companion, dialog
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
                canvas, chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
                inbox, n8n, watchers, workers, writer)
@@ -36,6 +36,16 @@ Teman ngobrol: kamu juga teman bicara pemilik. Dengarkan maksud dan perasaannya,
 tanggapi isinya — bukan sekadar mengulang. Saat bertukar pikiran: beri pendapatmu dengan alasan, timbang pro-kontra, tawarkan 2–3 opsi \
 bila ia harus memutuskan, tanyakan balik satu hal yang membuat obrolan maju, dan katakan terus terang bila kamu tidak yakin. Saat ia \
 curhat: empati dulu, saran belakangan. Jangan menggurui, jangan berlebihan memuji.
+
+Percakapan yang baik (dari pengawasan obrolan nyata):
+- Ucapan datang dari transkrip suara: bisa salah dengar atau berulang ("yang yang bisa yang"). Pahami maksudnya; jangan mengutip kesalahannya.
+- Jangan mengarang fakta, nama, angka, atau peristiwa. Yang tidak ada di obrolan/konteks (berita terbaru, harga, kejadian) → katakan belum tahu \
+dan langsung carikan dengan spawn_task (web) bila pemilik memintanya.
+- Jangan membuat langkah konfirmasi sendiri ("ketik setuju", "cek saldo dulu") untuk hal yang sudah punya persetujuannya sendiri: operasi \
+aplikasi HP disetujui di aplikasi JARVIS, kirim email/acara lewat persetujuan inbox. Bila kamu bertanya dan pemilik menjawab "ya/setuju/langsung", \
+LAKSANAKAN — jangan bertanya lagi.
+- Jangan pernah menulis format internal ("Tugas: …", "Kategori: …", nama alat) dalam jawaban.
+- Jangan mengulang jawaban yang sama untuk pertanyaan yang berbeda; jawab bagian yang ditanyakan.
 
 Pembagian kerja: kecerdasanmu untuk memahami konteks, berpikir, menganalisis dan menghitung, menimbang, kreatif, berinisiatif, berdiskusi, \
 memastikan, meninjau, dan memberi opsi keputusan. Yang tetap dan berulang (langkah yang sama setiap kali) dikerjakan skill/rutin Hermes.
@@ -791,6 +801,17 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
                     await send({"type": "say", "text": sentence.strip()})
         return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
                       route={"provider": "core", "model": "bacakan", "cloud": False, "free": False})
+    last_reply = await db.pool().fetchval(
+        """SELECT content FROM messages WHERE session_id = $1 AND role = 'assistant' AND route NOT IN ('silent', 'blocked', 'error')
+           ORDER BY id DESC LIMIT 1""", session_id) or ""
+    short = dialog.kind(text) if _owner_clear(stt) else None   # ADR-086: what a one-word reply means after what JARVIS just said
+    if short == "repeat" and last_reply:
+        if speak_live:
+            for sentence in re.split(r"(?<=[.!?…])\s+", last_reply):
+                if sentence.strip():
+                    await send({"type": "say", "text": sentence.strip()})
+        return Answer(last_reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
+                      route={"provider": "core", "model": "ulangi", "cloud": False, "free": False})
     if asked and asked.name == "draft_status":   # "sudah jadi drafnya?" (ADR-070)
         said = await _draft_status(session_id)
         if said is None:   # never started (a promise the model made and did not keep): start it now, from what was asked before
@@ -842,6 +863,10 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
     # Static first (cacheable), then the append-only history, then everything that changes per turn.
     deep = companion.is_discussion(text) and not (screen or screen_text or files)   # thinking together: the discussion model, room to talk (ADR-084)
     situation = await _situation(text, location, compact)
+    if hint := dialog.note(short, last_reply):
+        situation += "\n\n" + hint
+    elif last_reply and len(last_reply) >= 40:   # the flow watcher kept finding the same answer to different questions
+        situation += f"\n\nJAWABANMU SEBELUMNYA (jangan diulang kata per kata): «{' '.join(last_reply.split())[:240]}»"
     if not private:
         history_now = await _history(session_id, limit=16, private=private)
         if thread := await companion.summary(session_id):
@@ -858,6 +883,9 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
     async def say(sentence: str) -> None:
         nonlocal said_any, first_say_ms
         sentence = without_tool_talk(sentence) if _TOOL_NAMES.search(sentence) else sentence.strip()
+        sentence = dialog.clean_reply(sentence) if dialog._INTERNAL.match(sentence) else sentence
+        if dialog._INTERNAL.match(sentence or ""):
+            return
         if not sentence or announces_silence(sentence):
             return
         said_any = True
@@ -922,6 +950,16 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
         await say(buffer)
         if not said_any:
             await say(spoken or "Oke.")
+    spoken = dialog.clean_reply(spoken)
+    if not speak_live and not called and dialog.is_repeat_of(spoken, last_reply) and short != "repeat":   # the same answer again: once more, specifically
+        try:
+            again = await llm.complete(messages + [{"role": "assistant", "content": spoken},
+                                                   {"role": "user", "content": "Jawabanmu barusan sama persis dengan jawaban sebelumnya. Jawab ucapan terakhir "
+                                                                               "pemilik secara spesifik, singkat, tanpa mengulang."}],
+                                       category="ngobrol", max_tokens=300, caller="chat", private=private)
+            spoken = dialog.clean_reply(again) or spoken
+        except llm.LLMError:
+            pass
     if not called and len(answer_without_promises(spoken)) >= 30:
         spoken = answer_without_promises(spoken)  # no dangling "nanti aku kabari" after a real answer
     return Answer(spoken or "Oke.", usage_in or None, usage_out or None, spoken_live=speak_live and said_any,

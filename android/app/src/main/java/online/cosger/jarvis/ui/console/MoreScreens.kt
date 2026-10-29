@@ -244,6 +244,19 @@ fun PhoneSetupScreen(onBack: () -> Unit) {
                 open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName)))
             }
         }
+        val standby = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(online.cosger.jarvis.StandbyService.enabled(context)) }
+        Card(border = if (standby.value) JarvisColors.Green else JarvisColors.Amber) {
+            Label("6. JARVIS siaga (selalu tersambung)")
+            Small("Menjaga JARVIS tersambung saat aplikasinya di latar belakang, supaya laporan, persetujuan password admin, pilihan proyek, " +
+                "dan operasi Gojek tetap sampai. Ada notifikasi kecil \"JARVIS siaga\".", JarvisColors.Text)
+            Action(if (standby.value) "Matikan" else "Nyalakan") {
+                val on = !standby.value
+                online.cosger.jarvis.StandbyService.setEnabled(context, on)
+                standby.value = on
+                if (on) online.cosger.jarvis.StandbyService.startIfWanted(context)
+                else context.stopService(Intent(context, online.cosger.jarvis.StandbyService::class.java))
+            }
+        }
         Text("Tanpa langkah ini, XOS bisa mematikan JARVIS diam-diam setelah layar mati.", color = JarvisColors.Muted,
             fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
     }
