@@ -45,8 +45,49 @@ async def seed() -> str:
               "keputusan": ["Rilis versi 2 hari Jumat; QA selesai Kamis sore"], "tugas": [{"siapa": "Ilham", "apa": "kirim timeline revisi ke Dimas", "kapan": "besok pagi", "pemilik": true}, {"siapa": "Ayu", "apa": "siapkan materi demo klien", "kapan": "minggu depan", "pemilik": false}], "topik": "rilis v2"}')""")
     if {"bisnis", "tren", "peluang", "sumber"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_bisnis(p)
+    if {"gaji", "invest", "kopi"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+        await seed_money(p)
     await db.close()
     return token
+
+
+async def seed_money(p):
+    """A pay period half spent (pots, one near its limit), a proposed allocation, a Pluang reading with three options, a coffee offer."""
+    await p.execute("""INSERT INTO settings_kv (key, value) VALUES ('app:money', $1), ('app:coffee', $2)""",
+                    {"salary": 15_000_000, "payday": 25, "pots": [{"name": "Makan & kopi", "amount": 2_500_000, "categories": ["makan", "kopi"]},
+                                                                  {"name": "Transport", "amount": 1_200_000, "categories": ["transport"]},
+                                                                  {"name": "Tagihan", "amount": 1_800_000, "categories": ["tagihan"]},
+                                                                  {"name": "Belanja rumah", "amount": 3_000_000, "categories": ["belanja", "anak & keluarga"]}]},
+                    {"usual": "Kopi Kenangan Mantan", "sugar": "less sugar", "max_price": 75000, "pickup": True, "outlet": "Sudirman", "enabled": True, "apps": ["kopikenangan", "qpon"]})
+    rows = [("Kopi Kenangan", "kopi", 28000, "GoPay"), ("GoFood · Bakso Pak Kumis", "makan", 46000, "GoPay"), ("GoRide", "transport", 17000, "GoPay"),
+            ("KRL Commuter", "transport", 5000, "GoPay"), ("Indomaret", "belanja", 182500, "BCA"), ("PLN Prabayar", "tagihan", 500000, "BCA"),
+            ("Solaria", "makan", 87000, "GoPay"), ("Tokopedia", "belanja", 349000, "GoPay"), ("Kopi Kenangan", "kopi", 18000, "GoPay")]
+    for d in range(0, 5):
+        for i, (m, c, a, app) in enumerate(rows):
+            await p.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source, app) VALUES (now() - make_interval(days => $1, hours => $2), $3, 'out', $4, $5, 'notif', $6)",
+                            d, i, a * (1 + d % 3 * 0.2), m, c, app)
+    await p.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source, app) VALUES (now() - interval '1 day', 1250000, 'out', 'Rumah Makan Padang (keluarga)', 'makan', 'notif', 'BCA')")
+    await p.execute("""INSERT INTO money_plans (period_start, data) VALUES (current_date + 26, '{"ringkasan": "Makan & kopi membengkak 18%; tabungan dinaikkan ke 20% dengan memangkas belanja online.", "lane": "berat", "salary": 15000000, "total": 15000000,
+        "pos": [{"name": "Zakat & sedekah", "amount": 375000, "categories": ["zakat & sedekah"], "alasan": "2,5% gaji"}, {"name": "Tagihan", "amount": 1800000, "categories": ["tagihan"], "alasan": "PLN, internet, BPJS"},
+                {"name": "Tabungan & dana darurat", "amount": 3000000, "categories": [], "alasan": "20% gaji"}, {"name": "Investasi (Pluang)", "amount": 1500000, "categories": ["investasi"], "alasan": "rutin bulanan"},
+                {"name": "Makan & kopi", "amount": 2600000, "categories": ["makan", "kopi"], "alasan": "realistis dari 3 bulan"}, {"name": "Transport", "amount": 1100000, "categories": ["transport"], "alasan": "KRL + GoRide"},
+                {"name": "Belanja rumah & anak", "amount": 3125000, "categories": ["belanja", "anak & keluarga"], "alasan": ""}, {"name": "Lain-lain", "amount": 1500000, "categories": ["lainnya", "hiburan", "kesehatan"], "alasan": ""}],
+        "hemat": ["Masak/bekal 2× seminggu menghemat ±Rp400 rb", "Kopi pakai promo saja (rata-rata Rp18 rb, bukan Rp28 rb)"]}')""")
+    sid = await p.fetchval("""INSERT INTO invest_snapshots (data) VALUES ('{"total": 48250000, "kas": 1250000, "aset": [
+        {"nama": "Emas", "kode": "", "jenis": "emas", "jumlah": 14.2, "nilai": 23430000, "untung_pct": 12.4, "harga": 1650000},
+        {"nama": "Apple", "kode": "AAPL", "jenis": "saham_as", "jumlah": 3.1, "nilai": 11200000, "untung_pct": 6.1, "harga": 3612000},
+        {"nama": "Bitcoin", "kode": "BTC", "jenis": "kripto", "jumlah": 0.0072, "nilai": 9870000, "untung_pct": -4.3, "harga": 1370000000},
+        {"nama": "Reksa Dana Pasar Uang", "kode": "", "jenis": "reksa_dana", "jumlah": 0, "nilai": 2500000, "untung_pct": 1.9, "harga": 0}]}') RETURNING id""")
+    await p.execute("""INSERT INTO settings_kv (key, value) VALUES ('app:invest', '{"targets": {"emas": 40, "saham_as": 30, "kripto": 15, "reksa_dana": 15}}')""")
+    await p.execute("""INSERT INTO invest_proposals (snapshot_id, data) VALUES ($1, '{"ringkasan": "Emas sudah 50% portofolio (target 40%) setelah naik 4% sebulan; Bitcoin turun 4% dan masih di bawah target 15%. Rupiah melemah 0,8%.",
+        "lane": "berat", "kondisi": ["Emas di atas target alokasi", "Bitcoin terkoreksi 4% sepekan", "S&P 500 naik 1,2% sebulan"],
+        "opsi": [{"id": "A", "judul": "Seimbangkan: tambah reksa dana & Bitcoin", "aksi": [{"jenis": "beli", "aset": "Reksa Dana Pasar Uang", "nominal": 1000000}, {"jenis": "beli", "aset": "Bitcoin", "nominal": 500000}], "alasan": "Mendekatkan ke target tanpa menjual emas yang sedang naik.", "risiko": "Bitcoin bisa turun lagi"},
+                 {"id": "B", "judul": "Ambil untung emas Rp2 jt", "aksi": [{"jenis": "jual", "aset": "Emas", "nominal": 2000000}], "alasan": "Untung 12,4%; kembalikan ke target 40%.", "risiko": "Emas bisa lanjut naik"},
+                 {"id": "C", "judul": "Tahan dulu", "aksi": [], "alasan": "Tidak ada transaksi minggu ini.", "risiko": ""}]}')""", sid)
+    await p.execute("""INSERT INTO coffee_offers (status, promos, trigger) VALUES ('offered', '[
+        {"app": "kopikenangan", "label": "Kopi Kenangan", "menu": "Kopi Kenangan Mantan", "merchant": "Kopi Kenangan", "harga": 18000, "harga_normal": 28000, "hemat_pct": 36, "voucher": "MANTAN18", "syarat": "hari ini s/d 17.00"},
+        {"app": "qpon", "label": "Qpon", "menu": "Es Kopi Susu Gula Aren", "merchant": "Janji Jiwa", "harga": 15000, "harga_normal": 24000, "hemat_pct": 38, "voucher": "", "syarat": "kupon, ambil di outlet"},
+        {"app": "kopikenangan", "label": "Kopi Kenangan", "menu": "Americano", "merchant": "Kopi Kenangan", "harga": 22000, "harga_normal": 25000, "hemat_pct": 12, "voucher": "", "syarat": ""}]', 'habit')""")
 
 
 async def seed_bisnis(p):

@@ -54,7 +54,7 @@ async def require_password(device: dict, password: str, target: str) -> None:
     if code == 401:
         recent.append(now)
         await audit.record(actor(device), "app.bad_password", target)
-        raise HTTPException(401, "Password admin salah")
+        raise HTTPException(422, "Password admin salah")   # not 401: the app would take it for a lost login
     if code != 200:
         raise HTTPException(429 if code == 429 else 502, "Gagal memeriksa password")
     _failures.pop(key, None)

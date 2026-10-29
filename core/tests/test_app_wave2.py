@@ -129,10 +129,11 @@ async def test_an_ask_habit_makes_an_offer_and_arrival_fires_place_habits(pool, 
     now = datetime.now(WIB)
     if 16 <= now.hour < 23:
         assert ran == ["rumah.recap"]
-    kopi = await pool.fetchrow("SELECT * FROM habits WHERE key = 'siang.kopi'")
-    monkeypatch.setitem(habits.ACTIONS, "coffee.offer", ("Kopi", act))
-    r = await habits.fire(dict(kopi), "jam 14:30")
-    assert r == {"offered": kopi["title"]} and sent[-1]["route"] == "#/kopi" and await habits.offered("coffee.offer")
+    story = await pool.fetchrow("SELECT * FROM habits WHERE key = 'malam.dongeng'")   # an 'ask' habit (the coffee offer asks by itself: auto)
+    assert story["mode"] == "ask" and await pool.fetchval("SELECT mode FROM habits WHERE key = 'siang.kopi'") == "auto"
+    monkeypatch.setitem(habits.ACTIONS, "story.offer", ("Dongeng", act))
+    r = await habits.fire(dict(story), "jam 20:00")
+    assert r == {"offered": story["title"]} and sent[-1]["route"] == "#/dongeng" and await habits.offered("story.offer")
 
 
 @needs_db

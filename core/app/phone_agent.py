@@ -26,6 +26,17 @@ APPS = {
               "words": r"gojek|go-?jek|go-?ride|go-?car|go-?food|go-?send|go-?mart|go-?box|go-?bluebird|go-?pulsa|go-?tagihan",
               "hint": "Beranda Gojek berisi tombol layanan (GoRide, GoCar, GoFood, GoSend, GoMart). Tujuan/alamat diisi di kolom pencarian "
                       "'Mau ke mana?'; pilih hasil yang paling cocok, lalu periksa tarif dan metode bayar sebelum memesan."},
+    # ADR-087 (owner 2026-10-29): coffee paid with GoPay — the payment screen may open in GoPay/Gojek; the owner types the PIN there
+    "kopikenangan": {"label": "Kopi Kenangan", "packages": ["com.kopikenangan", "com.gojek.gopay", "com.gojek.app"], "words": r"kopi ?kenangan",
+                     "hint": "Kopi Kenangan: menu di tab Menu/Order; pilih outlet (Pick Up) atau Delivery; promo & voucher di halaman Voucher/Promo atau "
+                             "saat checkout. Bayar dengan GoPay: layar pembayaran bisa pindah ke GoPay/Gojek — PIN diketik pemilik."},
+    "qpon": {"label": "Qpon", "packages": ["com.qpon.platform", "com.gojek.gopay", "com.gojek.app"], "words": r"qpon",
+             "hint": "Qpon (aplikasi kupon diskon): cari merchant/menu di kolom pencarian, lihat kupon dengan harga diskon, beli kupon lalu bayar "
+                     "(GoPay: PIN diketik pemilik); kupon dipakai di outlet."},
+    "pluang": {"label": "Pluang", "packages": ["com.EmasDigi"], "words": r"pluang",
+               "hint": "Pluang: Beranda menunjukkan total portofolio; tab Portofolio/Aset berisi tiap aset (emas, saham AS, kripto, reksa dana) dengan "
+                       "nilai dan untung/rugi. Membeli: pilih aset → Beli → isi nominal Rupiah → periksa harga & ringkasan → konfirmasi; menjual sama "
+                       "dengan Jual. Jangan Top Up/Tarik saldo. PIN diketik pemilik."},
 }
 MARK = "[OPERASI-HP]"
 CAP = "phone_agent"                  # what a JARVIS app with the accessibility service says it can do (X-App-Caps)

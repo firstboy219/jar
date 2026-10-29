@@ -32,7 +32,7 @@ BUILTIN = [
     {"key": "pagi.plan", "title": "Rencana berangkat (KRL + GoRide)", "trigger": {"type": "time", "at": "06:30", "days": WORKDAYS}, "action": "commute.plan_out", "mode": "auto"},
     {"key": "kantor.inbox", "title": "Sampai kantor: pilah email & WhatsApp", "trigger": {"type": "arrive", "place": "kantor", "after": "06:00", "before": "12:00"},
      "action": "inbox.triage", "mode": "auto"},
-    {"key": "siang.kopi", "title": "Tawarkan kopi (cek promo)", "trigger": {"type": "time", "at": "14:30", "days": WORKDAYS, "place": "kantor"}, "action": "coffee.offer", "mode": "ask"},
+    {"key": "siang.kopi", "title": "Tawarkan kopi (cek promo)", "trigger": {"type": "time", "at": "14:30", "days": WORKDAYS, "place": "kantor"}, "action": "coffee.offer", "mode": "auto"},   # the offer itself is the question ("Mau kopi? Lagi diskon …")
     {"key": "sore.plan", "title": "Rencana pulang (KRL + GoRide)", "trigger": {"type": "time", "at": "16:45", "days": WORKDAYS}, "action": "commute.plan_back", "mode": "auto"},
     {"key": "rumah.recap", "title": "Sampai rumah: rekap hari ini + action plan", "trigger": {"type": "arrive", "place": "rumah", "after": "16:00", "before": "23:30"},
      "action": "recap.compose", "mode": "auto"},
