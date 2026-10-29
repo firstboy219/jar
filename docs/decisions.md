@@ -1378,3 +1378,13 @@ out, exchanges ideas and understands context.
   short (< 450 characters) or written on request (a poem, a story) is simply read.
 - **Understanding context**: a long conversation is summarised (`session_summaries`, `ringan`) beyond the 16 turns the model sees word for
   word and the summary is in front of the model; a new conversation starts with what the previous one (≤ 3 days) was about.
+
+## ADR-085 — 🔤 / 🎧: the owner chooses whether the AI only reads his words or also hears them (Blueprint v4 Fase 12)
+Owner (2026-10-29): a button on the desk — use STT, or send the audio itself — labelled with icons only.
+- `🔤` (default): as before — the recording is transcribed and the main agent gets the text. `🎧`: the transcript is still made (quick commands,
+  history, memory, the sensitive-data check and the workers need text) and the recording goes to the model too, as `input_audio` next to the
+  words, marked "transcript may be wrong — follow the recording" — for tone, feelings, names, mixed languages.
+- The turn then uses the category `dengar` (models that hear AND use tools; default gemini-2.5-flash-lite → qwen3.8-omni-flash → voxtral-small;
+  the owner picks in Komposisi AI). No model could hear it → the same turn is answered from the transcript.
+- Never with the recording: a sensitive turn (OTP, password…) or `/privat`. Setting `voice:input`, `PUT /api/v1/voice/input`, shown in the desk
+  poll (`voice_input`); the button sits in the desk's top bar (web and app).

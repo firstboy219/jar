@@ -520,7 +520,8 @@ async def snapshot(context: str = "utama") -> dict:
     out = {"now": time.time(), "stations": mine}
     if company is None:  # the owner's own desk; a company galaxy shows only that company's tasks
         from . import devteam, lanes, meetings, project_flow, stage, workers
-        out |= {"choices": await project_flow.open_choices(), "lanes": await lanes.view(), "n8n": await n8n_recent(), "prompts": await prompts(), "storage": await storage(),
+        from . import voice
+        out |= {"choices": await project_flow.open_choices(), "lanes": await lanes.view(), "voice_input": await voice.input_mode(), "n8n": await n8n_recent(), "prompts": await prompts(), "storage": await storage(),
                 "player": stage.desk_player(), "cards": stage.desk_cards(), "meeting": await meetings.desk_card(),
                 "workers": await workers.overview(), "devteam": await devteam.overview(), "last_activity": await last_activity()}
     return out

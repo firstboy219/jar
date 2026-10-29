@@ -508,6 +508,19 @@ async def voice_put(v: VoiceIn, device: dict = Depends(owner_device_auth)):
         raise HTTPException(e.status, str(e))
 
 
+class VoiceInputIn(BaseModel):
+    mode: str
+
+
+@app.put("/api/v1/voice/input")
+async def voice_input(v: VoiceInputIn, device: dict = Depends(owner_device_auth)):
+    """🔤 the transcript only / 🎧 the AI also hears the recording (ADR-085)."""
+    try:
+        return {"mode": await voice.set_input_mode(v.mode, f"device:{device['name']}")}
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
+
+
 class SpeakIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
@@ -1184,7 +1197,7 @@ async def ws(websocket: WebSocket):
             for c in await project_flow.open_choices():
                 await send(c)
 
-        async def run(cmd: Command) -> None:
+        async def run(cmd: Command, audio: str | None = None) -> None:
             # a private or sensitive turn, or one about attachments/screen text, is never read out by a cloud voice
             local_voice = bool(sensitive.is_private(cmd.user_command) or sensitive.scan(cmd.user_command)
                                or cmd.attachments or cmd.screen_text)
@@ -1195,7 +1208,7 @@ async def ws(websocket: WebSocket):
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
                                          device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen,
                                          image_source=cmd.image_source, stt=cmd.stt, speak_live="say" in caps,
-                                         screen_text=cmd.screen_text or "", attachment_ids=cmd.attachments)
+                                         screen_text=cmd.screen_text or "", attachment_ids=cmd.attachments, audio=audio)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "spoken": turn.spoken,
                             "session_id": cmd.session_id}, local_voice)
             except (WebSocketDisconnect, RuntimeError):
@@ -1275,7 +1288,9 @@ async def ws(websocket: WebSocket):
                                       screen_text=m.get("screen_text"))
                     except ValueError:
                         return
-                    await run(cmd)
+                    # 🎧 (ADR-085): the recording goes to the model too — the transcript stays for commands, history and memory
+                    heard_audio = base64.b64encode(stt.wav(pcm)).decode() if await voice.input_mode() == "audio" else None
+                    await run(cmd, heard_audio)
                 task = asyncio.create_task(hear())
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)

@@ -109,7 +109,7 @@ async def _log(session_id: str, device_id, role: str, content: str, route: str, 
 async def handle(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
                  location: Location | None = None, screen: str | None = None, image_source: str | None = None,
                  stt: dict | None = None, speak_live: bool = False, screen_text: str = "",
-                 attachment_ids: list[str] | None = None) -> Turn:
+                 attachment_ids: list[str] | None = None, audio: str | None = None) -> Turn:
     async def send(event: dict) -> None:
         if emit:
             await emit(event)
@@ -162,7 +162,7 @@ async def handle(text: str, session_id: str, actor: str, device_id=None, emit: E
         try:
             a = await assistant.respond(text, session_id, actor, device_id, send, location, screen, image_source, stt,
                                         private=local_only, speak_live=speak_live, screen_text=screen_text,
-                                        files=files, attachments=attached)
+                                        files=files, attachments=attached, audio=None if local_only else audio)
             trace = {"first_token_ms": a.first_token_ms, "first_say_ms": a.first_say_ms,
                      "total_ms": int((time.monotonic() - started) * 1000), "route": a.route,
                      **({"stt_ms": stt["stt_ms"]} if isinstance((stt or {}).get("stt_ms"), int) else {})}

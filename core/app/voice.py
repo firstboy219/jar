@@ -657,3 +657,25 @@ async def nightly() -> None:
         await evaluate("auto")
     except Exception:
         log.exception("voice nightly failed")
+
+
+# ---------- 🔤 / 🎧: how the main agent takes in what the owner says (ADR-085) ----------
+INPUT_KEY = "voice:input"
+INPUT_MODES = ("stt", "audio")
+
+
+async def input_mode() -> str:
+    """'stt' (the transcript only — the default) or 'audio' (the model also hears the recording)."""
+    v = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", INPUT_KEY)
+    return v if v in INPUT_MODES else "stt"
+
+
+async def set_input_mode(mode: str, actor: str) -> str:
+    if mode not in INPUT_MODES:
+        raise VoiceError("mode: stt atau audio", 422)
+    await db.pool().execute("""INSERT INTO settings_kv (key, value) VALUES ($1, $2::jsonb)
+                               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""", INPUT_KEY, mode)
+    from . import audit
+    await audit.record(actor, "voice.input_mode", None, mode=mode)
+    return mode
+
