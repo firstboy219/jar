@@ -1388,3 +1388,21 @@ Owner (2026-10-29): a button on the desk — use STT, or send the audio itself �
   the owner picks in Komposisi AI). No model could hear it → the same turn is answered from the transcript.
 - Never with the recording: a sensitive turn (OTP, password…) or `/privat`. Setting `voice:input`, `PUT /api/v1/voice/input`, shown in the desk
   poll (`voice_input`); the button sits in the desk's top bar (web and app).
+
+## ADR-086 — A professional JARVIS, from a week of real conversations (Blueprint v4 Fase 13)
+Owner (2026-10-29): read everything, front to back, and make JARVIS proper, professional, world class, able to do many things on its own.
+The audit started from what really happened (7 days): 139 owner tasks (126 done, 13 failed — Hermes run failures and the phone not connected),
+the flow watcher's findings in real conversations (off-context 90 open, repeated 24, "Setuju" loops, invented facts after "maksudnya?"),
+the error log (Hermes tools broken by a shadowed helper — already fixed on 10-26; three live bugs below), model failure rates per category.
+- **Dialogue state** (`dialog.py`): a short reply is read against what JARVIS just said — "ya/setuju/langsung aja" after a question → the
+  model is told to DO it now and not ask again (the GoRide "Setuju ×5" loop); "tidak" → leave it; "maksudnya?" → explain again with no new
+  facts; "ulangi" → the last answer again, without a model. The previous answer is in front of the model ("do not repeat word for word"); an
+  identical answer to a different question is regenerated once (text chat). Internal formats ("Tugas: …", "Kategori: …") and markdown marks
+  never reach the voice.
+- **Prompt**: the transcript may be misheard — understand, do not quote; no invented facts, offer to look up instead; no self-made
+  confirmation steps for things that have their own approval (phone runs in the app, mail via the inbox approval).
+- **Phone link**: a run whose phone is not connected now asks (notification + spoken) for the app to be opened and waits up to 5 minutes
+  instead of failing in 30 s; APK 0.25 adds "JARVIS siaga" — a quiet foreground service (special use) that keeps the link while the app is in
+  the background (Setelan HP → 6; on by default, "Matikan" in its notification).
+- **Bugs**: `n8n_draft_workflow` crashed on an empty model answer; a report for a task that no longer exists broke the worker (FK) — the
+  report is kept without the link; tests that fake the phone now say it is connected.

@@ -80,6 +80,7 @@ def _phone(monkeypatch, screens):
             return {"ok": True}
         return screens.pop(0) if len(screens) > 1 else screens[0]
     monkeypatch.setattr(phone_agent, "op", op)
+    monkeypatch.setattr(phone_agent, "phone_online", lambda: True)   # the fake phone is connected
     return told
 
 
@@ -213,3 +214,23 @@ async def test_a_project_run_starts_the_app_without_the_admin_password(pool, mon
     with pytest.raises(main.HTTPException):
         await main.projects_create(main.ProjectIn(name="x", roles=[{"role": "a", "app": "grab"}]), device=dev)
     await pool.execute("DELETE FROM projects")   # the other project tests expect a clean list
+
+
+@needs_db
+async def test_a_run_waits_for_the_phone_and_asks_for_the_app_to_be_opened(pool, monkeypatch):
+    from app import hub, phone_agent
+    sent = []
+
+    async def broadcast(ev):
+        sent.append(ev)
+        return 1
+    monkeypatch.setattr(hub, "broadcast", broadcast)
+    monkeypatch.setattr(phone_agent, "OFFLINE_WAIT_S", 0)
+    monkeypatch.setattr(phone_agent, "phone_online", lambda: False)
+
+    async def progress(*a, **k):
+        return None
+    with pytest.raises(phone_agent.PhoneError, match="5 menit"):
+        await phone_agent._start_app(1, "gojek", phone_agent.APPS["gojek"], progress)
+    assert any(e.get("type") == "notify" and "Buka aplikasi JARVIS" in e["title"] for e in sent)
+    assert any(e.get("type") == "announce" for e in sent)

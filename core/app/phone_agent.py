@@ -33,6 +33,7 @@ APPROVAL_MINUTES = 15
 MAX_STEPS = 45
 MAX_MINUTES = 15
 OP_TIMEOUT = 25
+OFFLINE_WAIT_S = 300                 # at the start of a run: how long to wait for the owner to open the app (ADR-086)
 ONLINE_WAIT_S = 30                   # how long an instruction waits for the phone to be connected
 PIN_WAIT_S = 240                     # how long a run waits for the owner to type a PIN / OTP themself
 SECRET_WORDS = re.compile(r"\b(pin|otp|kata sandi|password|kode verifikasi|kode otp|verification code|masukkan kode)\b", re.IGNORECASE)
@@ -386,6 +387,13 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
 
 
 async def _start_app(run_id: int, app: str, a: dict, progress) -> dict:
+    if not phone_online():   # ADR-086: the app is closed or asleep — ask for it and wait a few minutes instead of failing at once
+        await progress(6, "Menunggu HP tersambung — buka aplikasi JARVIS")
+        await hub.broadcast({"type": "notify", "kind": "phone", "title": f"Buka aplikasi JARVIS untuk {a['label']}",
+                             "text": "Aku menunggu HP-mu tersambung supaya bisa mengoperasikan aplikasinya (sampai 5 menit)."})
+        await hub.broadcast({"type": "announce", "text": f"Buka aplikasi JARVIS di HP ya, aku perlu HP-nya untuk membuka {a['label']}."})
+        if not await wait_online(OFFLINE_WAIT_S):
+            raise PhoneError("HP tidak tersambung selama 5 menit — buka aplikasi JARVIS (dan nyalakan JARVIS siaga di Setelan HP)")
     await progress(8, f"Membuka {a['label']} di HP…")
     await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"])
     obs = await op("open", package=a["packages"][0])

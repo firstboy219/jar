@@ -89,6 +89,7 @@ class MainActivity : FragmentActivity() {
         (application as JarvisApp).engine.checkUpdateSoon()
         (application as JarvisApp).engine.refreshPhoneApprovals()   // ADR-077: an approval asked while the app was closed
         (application as JarvisApp).engine.refreshChoices()           // ADR-079: a pick asked while the app was closed
+        if ((application as JarvisApp).settings.state.value.isConfigured) StandbyService.startIfWanted(this)   // ADR-086: stay connected in the background
     }
 
     @OptIn(ExperimentalLayoutApi::class)   // consumeWindowInsets (stable in newer Compose; harmless when it already is)
