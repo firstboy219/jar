@@ -172,6 +172,21 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+/** Read text aloud: the phone's own voice in the app, the browser's voice on the web. */
+export function speak(text) {
+  const t = String(text || '').trim();
+  if (!t) return;
+  if (host.has('speak')) return host.call('speak', t);
+  if (!window.speechSynthesis) return toast('Browser ini tidak bisa membacakan.', true);
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(t);
+  u.lang = 'id-ID';
+  const v = window.speechSynthesis.getVoices().find((x) => x.lang?.startsWith('id'));
+  if (v) u.voice = v;
+  window.speechSynthesis.speak(u);
+}
+export function stopSpeaking() { if (host.has('stopSpeaking')) host.call('stopSpeaking'); else window.speechSynthesis?.cancel(); }
+
 /** A feature only the phone can do. On the web: say so. */
 export function openNative(what) {
   if (what === 'talk') { if (host.has('talk')) return host.call('talk'); return go('#/obrolan?mic=1'); }

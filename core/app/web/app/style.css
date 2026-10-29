@@ -69,6 +69,7 @@ h1.big { margin: 0; font: 600 26px/1.18 var(--f-head); }
 
 .card { background: var(--s1); border: 1px solid var(--bd); border-radius: var(--r); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .card.pad { padding: 16px; }
+.card.row { flex-direction: row; align-items: center; }
 .card.cyan { background: var(--cyan-bg); border-color: var(--cyan-bd); }
 .card.amber { background: var(--amber-bg); border-color: var(--amber-bd); }
 .card.green { background: var(--green-bg); border-color: var(--green-bd); }

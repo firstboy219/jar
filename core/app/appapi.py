@@ -17,6 +17,10 @@ from .location import Location, remember_last
 router = APIRouter()
 API = "/api/v1/app"
 
+from . import features  # noqa: E402  each feature's own endpoints (/api/v1/app/<feature>/…), providers, checks and ticks
+for _r in features.ROUTERS:
+    router.include_router(_r)
+
 
 def jsonable(obj):
     return json.loads(json.dumps(obj, default=str))
@@ -193,7 +197,7 @@ async def app_place_delete(name: str, device: dict = Depends(owner)):
 
 # ---------- settings the screens keep (one JSON per feature) ----------
 
-SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home"}
+SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home", "quran"}
 
 
 @router.get(API + "/settings/{key}")
@@ -208,11 +212,13 @@ async def app_setting(key: str, device: dict = Depends(owner)):
 async def app_setting_put(key: str, body: dict = Body(...), device: dict = Depends(owner)):
     if key not in SETTING_KEYS:
         raise HTTPException(404)
-    from . import appsettings
+    from . import appsettings, hub
     try:
-        return jsonable(await appsettings.put(key, body, actor(device)))
+        out = await appsettings.put(key, body, actor(device))
     except appsettings.SettingError as e:
         raise HTTPException(422, str(e))
+    await hub.broadcast({"type": "settings", "key": key})   # the phone re-reads what it keeps itself (the alarm)
+    return jsonable(out)
 
 
 # ---------- the conversation shown in Obrolan ----------

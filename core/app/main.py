@@ -145,10 +145,12 @@ async def lifespan(app: FastAPI):
                 log.exception("self-improvement loop failed")
             await asyncio.sleep(20)
     improver = asyncio.create_task(self_improvement())
+    from . import appclock
+    app_clock = asyncio.create_task(appclock.run_forever())   # the app v2's recurring work (ADR-087): reminders, brief, syncs, habits
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, error_writer, improver, hands, devteam_watch, project_ticker):
+    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, error_writer, improver, hands, devteam_watch, project_ticker, app_clock):
         t.cancel()
     await db.close()
 

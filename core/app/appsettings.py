@@ -26,6 +26,8 @@ DEFAULTS: dict[str, dict] = {
     "music": {"moods": {"fokus": "lofi fokus kerja", "semangat": "lagu semangat pagi", "olahraga": "musik olahraga energik",
                         "santai": "lagu santai akustik", "tidur": "musik tidur tenang"}},
     "home": {"hidden": []},
+    "quran": {"qari": "05", "target_date": "", "translation": True,
+              "routines": [{"surah": 67, "time": "20:30", "days": [0, 1, 2, 3, 4, 5, 6]}, {"surah": 18, "time": "07:00", "days": [4]}]},
 }
 
 
