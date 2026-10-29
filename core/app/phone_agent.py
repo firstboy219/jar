@@ -17,6 +17,7 @@ import time
 import uuid
 
 from . import audit, db, hub, llm
+from .routines import screen_words
 
 log = logging.getLogger("jarvis-core.phone_agent")
 
@@ -39,6 +40,7 @@ FORBIDDEN = re.compile(r"\b(top ?up|isi saldo|transfer|kirim saldo|tarik tunai|h
                        r"tambah kartu|paylater|pinjam)\b", re.IGNORECASE)
 
 _waiting: dict[str, asyncio.Future] = {}
+_learning: set = set()   # routines being learned in the background (ADR-083)
 _lock = asyncio.Lock()
 
 
@@ -332,16 +334,42 @@ async def _ask_owner(task_id: int, question: str, emit) -> str:
 
 
 async def produce(task_id: int, row: dict, progress, emit) -> str:
-    """The worker branch (workers._run): operate the phone until the model says selesai / gagal. One phone, one run at a time."""
+    """The worker branch (workers._run): a learned routine first (no AI but for the steps that need judgement, ADR-083), else — or from where
+    it stopped — the AI decides every tap. A successful AI run is learned as a routine for next time. One phone, one run at a time."""
+    from . import routines
     run_id, goal = _brief(row)
     run = await _row(run_id)
     if not run:
         raise PhoneError("permintaan operasi HP tidak ditemukan")
     app, a = run["app"], APPS[run["app"]]
+    started = time.monotonic()
     async with _lock:
         await _set(run_id, status="running")
         try:
-            text = await _loop(task_id, run_id, app, a, goal, progress, emit)
+            obs = await _start_app(run_id, app, a, progress)
+            trace: list[dict] = []
+            text, used, todo = None, None, goal
+            try:
+                used = await routines.find(app, goal)
+            except Exception as e:
+                log.warning("routine lookup failed: %s", e)
+            if used:
+                await emit({"type": "thought", "text": f"pakai rutin yang sudah dipelajari: {used['name']} (v{used['version']})"})
+                await progress(15, f"Rutin: {used['name']}")
+                io = _PhoneIO(task_id, app, a, progress, emit, started)
+                res = await routines.execute(used["steps"], await routines.params_for(used, goal), io)
+                await routines.record(used["id"], res["ok"], res["auto"], res["ai"])
+                if res["ok"]:
+                    text = res["result"] + f"\n\n(dikerjakan dengan rutin \"{used['name']}\": {res['auto']} langkah tanpa AI, {res['ai']} langkah dengan AI)"
+                else:
+                    await emit({"type": "thought", "text": f"rutin berhenti di langkah {res['at']} ({res['why'][:120]}) — AI melanjutkan"})
+                    todo = f"{goal}\n(Rutin '{used['name']}' sudah menjalankan sebagian dan berhenti di langkah {res['at']}: {res['why']}. Lanjutkan dari layar sekarang.)"
+                    obs = await op("observe")
+            if text is None:
+                text, obs = await _loop(task_id, app, a, todo, progress, emit, obs, started=started, trace=trace)
+                t = asyncio.create_task(routines.learn(app, a["label"], goal, trace, text, task_id, replaces=used))
+                _learning.add(t)
+                t.add_done_callback(_learning.discard)
         except asyncio.CancelledError:
             await _set(run_id, status="stopped")
             raise
@@ -357,20 +385,70 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
     return text
 
 
-async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
-    started = time.monotonic()
+async def _start_app(run_id: int, app: str, a: dict, progress) -> dict:
     await progress(8, f"Membuka {a['label']} di HP…")
-    obs = await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"])
+    await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"])
     obs = await op("open", package=a["packages"][0])
     for _ in range(3):   # the app is slow to come to the front, or a system overlay (screenshot, permission) is in the way
         if in_app(obs, app):
             break
         await asyncio.sleep(3)
         obs = await op("observe")
+    return obs
+
+
+class _PhoneIO:
+    """What a routine may do on the phone (routines.execute): the same guards as the AI's steps."""
+
+    def __init__(self, task_id, app, a, progress, emit, started):
+        self.task_id, self.app, self.a, self.progress, self.emit, self.started = task_id, app, a, progress, emit, started
+        self.obs: dict = {}
+        self.n = 0
+
+    async def observe(self, pause: float = 0.0) -> dict:
+        if pause:
+            await asyncio.sleep(pause)
+        self.obs = await op("observe")
+        if in_app(self.obs, self.app) and is_secret_screen(self.obs):
+            self.obs = await _wait_for_owner_secret(self.app, self.emit)
+        return self.obs
+
+    async def act(self, kind: str, **args) -> dict:
+        self.n += 1
+        name = {"tap": "ketuk", "type": "ketik", "scroll": "gulir", "back": "kembali", "open": "buka_aplikasi"}[kind]
+        check = {"nomor": args.get("index"), "teks": args.get("text"), "arah": args.get("direction")}
+        if refused := check_action(name, check, self.obs, self.app):
+            raise PhoneError(refused)
+        await self.progress(min(92, 15 + self.n * 3), _label(name, check, self.obs))
+        self.obs = await op(kind, index=args.get("index"), text=args.get("text") or "", submit=bool(args.get("submit")),
+                            direction=args.get("direction") or "bawah", package=self.a["packages"][0])
+        if in_app(self.obs, self.app) and is_secret_screen(self.obs):
+            self.obs = await _wait_for_owner_secret(self.app, self.emit)
+        return self.obs
+
+    async def ai(self, goal: str, max_steps: int) -> str:
+        text, self.obs = await _loop(self.task_id, self.app, self.a, goal, self.progress, self.emit, self.obs or await op("observe"),
+                                     max_steps=max(2, min(15, max_steps)), started=self.started)
+        return text
+
+    async def ask(self, question: str) -> str:
+        return await _ask_owner(self.task_id, question, self.emit)
+
+
+def _desc(n: dict) -> dict:
+    """An element as a routine can find it again."""
+    return {k: n[k] for k in ("id", "t", "d", "h", "c", "e", "k") if n.get(k)}
+
+
+async def _loop(task_id, app, a, goal, progress, emit, obs, *, max_steps: int = MAX_STEPS, started: float | None = None,
+                trace: list | None = None) -> tuple[str, dict]:
+    """The AI decides every step, from `obs`, until selesai / gagal (or `max_steps`). Returns (result, the last screen). Each action is added to
+    `trace` with the element it touched — that is what a routine is learned from."""
+    started = started or time.monotonic()
     history: list[str] = []
     slips = 0
     system = SYSTEM.format(label=a["label"], hint=a["hint"])
-    for step in range(1, MAX_STEPS + 1):
+    for step in range(1, max_steps + 1):
         if time.monotonic() - started > MAX_MINUTES * 60:
             raise PhoneError(f"lebih dari {MAX_MINUTES} menit — dihentikan supaya HP tidak dikendalikan terlalu lama")
         if in_app(obs, app) and is_secret_screen(obs):
@@ -379,7 +457,7 @@ async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
             continue
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"TUGAS DARI PEMILIK: {goal}\n\nLANGKAH SEBELUMNYA:\n" + ("\n".join(history[-10:]) or "(belum ada)")
-                     + f"\n\nLAYAR SAAT INI (langkah {step}/{MAX_STEPS}):\n{screen_text(obs)}\n\nPanggil satu alat."}]
+                     + f"\n\nLAYAR SAAT INI (langkah {step}/{max_steps}):\n{screen_text(obs)}\n\nPanggil satu alat."}]
         call = None
         for attempt in range(2):
             async for ev in llm.stream_chat(messages, tools=TOOLS, category="hp", max_tokens=400, temperature=0.2,
@@ -394,7 +472,7 @@ async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
             raise PhoneError("model tidak memilih langkah")
         name, args = call.name, call.arguments or {}
         if name == "selesai":
-            return str(args.get("hasil") or "Selesai.")
+            return str(args.get("hasil") or "Selesai."), obs
         if name == "gagal":
             raise PhoneError(str(args.get("alasan") or "tidak bisa diselesaikan"))
         label = _label(name, args, obs)
@@ -404,9 +482,16 @@ async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
             continue
         await emit({"type": "tool", "id": f"hp{step}", "name": f"hp_{name}", "label": label, "status": "running"})
         await progress(min(92, 10 + step * 2), label)
+        touched = node(obs, args.get("nomor"))
+        if trace is not None:
+            trace.append({"aksi": name, **({"elemen": _desc(touched)} if touched else {}),
+                          **{k: args[k] for k in ("teks", "kirim", "arah", "pertanyaan", "alasan", "detik") if args.get(k) not in (None, "")},
+                          "layar": screen_words(obs)[:300]})
         if name == "tanya_pemilik":
             answer = await _ask_owner(task_id, str(args.get("pertanyaan") or ""), emit)
             history.append(f"{step}. tanya pemilik: {args.get('pertanyaan')} → jawab: {answer[:300]}")
+            if trace is not None:
+                trace[-1]["jawaban"] = answer[:200]
             obs = await op("observe")
         elif name == "lihat_gambar":
             from . import screen_reader
@@ -430,13 +515,15 @@ async def _loop(task_id, run_id, app, a, goal, progress, emit) -> str:
                 if slips >= 4:
                     raise PhoneError(f"HP menolak 4 kali berturut-turut: {e}") from None
                 history.append(f"{step}. {label} → HP MENOLAK: {e}")
+                if trace is not None:
+                    trace.pop()
                 await emit({"type": "thought", "text": f"HP menolak: {e}"[:200]})
                 await asyncio.sleep(2)
                 obs = await op("observe")
                 continue
             history.append(f"{step}. {label}" + (" (layar tidak berubah)" if screen_text(obs) == before else ""))
         await emit({"type": "tool", "id": f"hp{step}", "name": f"hp_{name}", "label": label, "status": "completed"})
-    raise PhoneError(f"belum selesai setelah {MAX_STEPS} langkah")
+    raise PhoneError(f"belum selesai setelah {max_steps} langkah")
 
 
 def _label(name: str, args: dict, obs: dict) -> str:

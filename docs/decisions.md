@@ -1342,3 +1342,20 @@ JARVIS — music player, web player/browser, video player, projects, …
   (default there, with "▤ Aktivitas" to switch).
 - The pages hold the SAME live cards the canvas shows (moved into the page, moved back — `board.adoptWidget` — when the owner switches to
   ▦ Kanvas), so the player, the takeover, the projects card, the choice popup… all work as before.
+
+## ADR-083 — Routines: Hermes learns how a phone task is done and replays it without AI (Blueprint v4 Fase 12)
+Owner (2026-10-29): remember how every detail was done — as a skill (how) and memory (what the owner needs) — so a repeated activity runs the
+learned way and AI tokens go only to what is dynamic (e.g. Gojek: opening the app, GoRide, the price option, submit are mechanical; the place
+matching, chatting with the driver and judging the pickup time need thought; "pickup ≈ 5 minutes → chat the driver, far → cancel and re-order").
+- **Learning**: every action of an AI-driven phone run is traced with the element it touched (text, description, hint, class, and — from APK
+  0.24 — its resource id). After a successful run, one model call (category `hp`) compiles the trace into a **routine** (`routines`, migration
+  038): a program of `open / tap / type / wait / scroll / back / read / if / goto / ai / ask / done`, its parameters ("{tujuan}", "{asal}"),
+  keywords ("goride") and a parameter-free pattern, and the owner's **needs** ("pickup at home", "the cheaper option", "≤ 5 minutes") — which are
+  also saved as preference memories. A program is validated before it is kept (`routines.validate`).
+- **Replaying**: a new request is matched by keywords (all present), else by meaning of the pattern (≥ 0.6); one small call (`ringan`) fills
+  the parameters from the request and memory; the program runs (`routines.execute`) with the same guards as the AI (only the approved app, no
+  PIN/OTP, no top-ups…). Numeric rules are `read` + `if` (no AI); judgement is an `ai` step — the AI loop for only that sub-goal, a few steps.
+- **When it breaks** (an element missing, the app changed): the AI continues from that screen and what it did becomes the routine's next
+  version; three failures in a row switch it off. Each result says how many steps went without AI and how many with it; the counters are kept.
+- `GET/PATCH/DELETE /api/v1/routines` (list, switch off/on, delete). Web tasks done by Hermes (browser) still learn as skills/episodes
+  (ADR-040/074); replaying web steps without AI is a later step.

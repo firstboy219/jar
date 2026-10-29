@@ -154,6 +154,7 @@ class PhoneAgentService : AccessibilityService() {
             emit(buildJsonObject {
                 put("i", i)
                 put("c", n.className?.toString()?.substringAfterLast('.').orEmpty())
+                n.viewIdResourceName?.substringAfter(":id/")?.takeIf { it.isNotBlank() }?.let { put("id", it.take(80)) }   // ADR-083: routines find it again
                 if (n.isPassword) put("p", 1) else if (text.isNotEmpty()) put("t", text.take(160))
                 if (desc.isNotEmpty() && desc != text) put("d", desc.take(120))
                 if (hint.isNotEmpty() && hint != text) put("h", hint.take(80))

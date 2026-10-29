@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from . import assistant
-from . import devteam, google_auth, lanes, notes, phone_agent, project_flow, projects
+from . import devteam, google_auth, lanes, notes, phone_agent, project_flow, projects, routines
 from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
@@ -1745,6 +1745,35 @@ async def phone_run_reject(run_id: int, device: dict = Depends(owner_device_auth
 
 class SayIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
+
+
+class RoutineIn(BaseModel):
+    status: str
+
+
+@app.get("/api/v1/routines")
+async def routines_list(device: dict = Depends(owner_device_auth)):
+    """What Hermes has learned to do without AI (ADR-083)."""
+    return jsonable(await routines.listing())
+
+
+@app.patch("/api/v1/routines/{routine_id}")
+async def routines_status(routine_id: int, body: RoutineIn, device: dict = Depends(owner_device_auth)):
+    try:
+        if not await routines.set_status(routine_id, body.status):
+            raise HTTPException(404, "rutin tidak ditemukan")
+    except routines.RoutineError as e:
+        raise HTTPException(422, str(e))
+    await audit.record(f"device:{device['name']}", "routine.status", f"routine:{routine_id}", status=body.status)
+    return {"ok": True}
+
+
+@app.delete("/api/v1/routines/{routine_id}")
+async def routines_delete(routine_id: int, device: dict = Depends(owner_device_auth)):
+    if not await routines.delete(routine_id):
+        raise HTTPException(404, "rutin tidak ditemukan")
+    await audit.record(f"device:{device['name']}", "routine.deleted", f"routine:{routine_id}")
+    return {"deleted": True}
 
 
 class LanesIn(BaseModel):
