@@ -1359,3 +1359,20 @@ matching, chatting with the driver and judging the pickup time need thought; "pi
   version; three failures in a row switch it off. Each result says how many steps went without AI and how many with it; the counters are kept.
 - `GET/PATCH/DELETE /api/v1/routines` (list, switch off/on, delete). Web tasks done by Hermes (browser) still learn as skills/episodes
   (ADR-040/074); replaying web steps without AI is a later step.
+
+## ADR-084 — JARVIS as a companion; AI for thinking, skills for what repeats (Blueprint v4 Fase 12)
+Owner (2026-10-29): AI is for analysing context, thinking, calculating, weighing, creativity, initiative, discussion, making sure, review and
+offering decision options; what is static and repeated is done by Hermes' skills. And: make JARVIS a friend to talk with, that reads things
+out, exchanges ideas and understands context.
+- **The division of work is in both briefs**: the main agent's prompt and every worker's brief say what the AI is for and that fixed,
+  repeated steps are skills / routines (`skill_submit` after a sequence that will repeat; ADR-083 for the phone).
+- **Companion**: the reply length fits the turn (a command: 1–2 sentences; a conversation: as long as it needs); when exchanging ideas JARVIS
+  gives its view with reasons, weighs pros and cons, offers 2–3 options, asks one question back, says when it is unsure; with a worry, empathy first.
+- **Discussion turns** (`companion.is_discussion`: an opinion, a "what if", weighing, explaining, a feeling, a long message) go to the new
+  category `diskusi` (default deepseek-v4.1-flash → qwen3.7-flash; the owner picks in Komposisi AI) with room to answer (1000 tokens);
+  commands and small talk stay on `ngobrol`.
+- **Reading aloud** ("bacakan …", answered without the chat model): a web page (link), the news (Google News, directly — no worker any more),
+  a note, a document, the latest report, what is on the shared screen / attached; or something written first (a poem, a story — `diskusi`).
+  Read in pieces of about a minute, sentence by sentence; "lanjut" reads on.
+- **Understanding context**: a long conversation is summarised (`session_summaries`, `ringan`) beyond the 16 turns the model sees word for
+  word and the summary is in front of the model; a new conversation starts with what the previous one (≤ 3 days) was about.

@@ -6,6 +6,7 @@ needed, in parallel), and the conversation simply continues. Worker results come
 main agent knows about, so it can tell whether the owner has acknowledged them.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -15,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from . import attachments as attachments_module
+from . import companion
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
                canvas, chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
                inbox, n8n, watchers, workers, writer)
@@ -26,8 +28,17 @@ Emit = Callable[[dict], Awaitable[None]]
 SYSTEM = """Kamu JARVIS, asisten pribadi pemilikmu. Kamu adalah AGEN UTAMA: tugasmu mengobrol dengan pemilik \
 dan mengatur pekerjaan — bukan mengerjakannya sendiri.
 
-Cara bicara: lewat suara. Jawab singkat (1–2 kalimat), bahasa Indonesia natural dan sopan-santai, \
-tanpa markdown, emoji, atau daftar. Jangan memanggil "Bos".
+Cara bicara: lewat suara, bahasa Indonesia natural dan sopan-santai, tanpa markdown, emoji, atau daftar. Jangan memanggil "Bos". \
+Panjang menyesuaikan: perintah dan pertanyaan ringan → 1–2 kalimat; obrolan, diskusi, curhat, penjelasan → sepanjang yang perlu \
+(biasanya 3–6 kalimat), seperti teman yang berpikir bersama.
+
+Teman ngobrol: kamu juga teman bicara pemilik. Dengarkan maksud dan perasaannya, ingat konteks obrolan (lihat RINGKASAN OBROLAN bila ada), \
+tanggapi isinya — bukan sekadar mengulang. Saat bertukar pikiran: beri pendapatmu dengan alasan, timbang pro-kontra, tawarkan 2–3 opsi \
+bila ia harus memutuskan, tanyakan balik satu hal yang membuat obrolan maju, dan katakan terus terang bila kamu tidak yakin. Saat ia \
+curhat: empati dulu, saran belakangan. Jangan menggurui, jangan berlebihan memuji.
+
+Pembagian kerja: kecerdasanmu untuk memahami konteks, berpikir, menganalisis dan menghitung, menimbang, kreatif, berinisiatif, berdiskusi, \
+memastikan, meninjau, dan memberi opsi keputusan. Yang tetap dan berulang (langkah yang sama setiap kali) dikerjakan skill/rutin Hermes.
 
 Delegasi: apa pun yang butuh mencari info di internet, mengecek data/server/n8n, menghitung, membuat \
 sesuatu, atau lebih dari beberapa detik → panggil spawn_task (satu tugas per pekerjaan; boleh beberapa \
@@ -741,6 +752,8 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
     if pending and time.time() - pending["at"] > DRAFT_QUESTION_TTL_S:
         pending = None
     asked = router.parse_action(text) if _owner_clear(stt) else None
+    if not private:   # the thread of a long conversation, kept in the background (ADR-084)
+        asyncio.create_task(companion.remember_thread(session_id))
     if pending and (asked is None or asked.name == "write_draft"):   # the owner answered Jarvis' question about the draft (ADR-066)
         pasted = len(text) >= 200 or "\n" in text.strip()
         request = pending["request"] + ("" if pasted or text.strip().lower() in ("lanjut", "ya lanjut", "oke", "ok", "cukup") else f"\nJawaban pemilik: {text.strip()}")
@@ -751,6 +764,14 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await send({"type": "say", "text": reply})
         return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
+    if _owner_clear(stt) and (want := companion.read_request(text, companion.reading_left(session_id))):   # "bacakan …" (ADR-084)
+        reply = await companion.read_turn(want, session_id, screen_text or files)
+        if speak_live:
+            for sentence in re.split(r"(?<=[.!?…])\s+", reply):
+                if sentence.strip():
+                    await send({"type": "say", "text": sentence.strip()})
+        return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
+                      route={"provider": "core", "model": "bacakan", "cloud": False, "free": False})
     if asked and asked.name == "draft_status":   # "sudah jadi drafnya?" (ADR-070)
         said = await _draft_status(session_id)
         if said is None:   # never started (a promise the model made and did not keep): start it now, from what was asked before
@@ -800,10 +821,17 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
     compact = False   # the short prompt was for the local CPU model (every token cost time); every model is in the cloud now (ADR-080)
     # Static first (cacheable), then the append-only history, then everything that changes per turn.
+    deep = companion.is_discussion(text) and not (screen or screen_text or files)   # thinking together: the discussion model, room to talk (ADR-084)
+    situation = await _situation(text, location, compact)
+    if not private:
+        history_now = await _history(session_id, limit=16, private=private)
+        if thread := await companion.summary(session_id):
+            situation += f"\n\nRINGKASAN OBROLAN SEBELUMNYA (di luar giliran terakhir):\n{thread}"
+        elif len(history_now) < 4 and (before := await companion.previous(session_id)):
+            situation += f"\n\nOBROLAN TERAKHIR KITA (sesi sebelumnya):\n{before}"
     messages = [{"role": "system", "content": SYSTEM + "\n\nTENTANG DIRIMU:\n" + await self_model.describe()},
                 *await _history(session_id, limit=8 if compact else 16, private=private),
-                {"role": "user", "content": _user_content(
-                    text, screen, image_source, stt, await _situation(text, location, compact), screen_text, files)}]
+                {"role": "user", "content": _user_content(text, screen, image_source, stt, situation, screen_text, files)}]
     spoken, usage_in, usage_out, silent, called = "", 0, 0, False, []
     said_any, buffer, first_token_ms, first_say_ms, route = False, "", None, None, None
 
@@ -819,7 +847,8 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
 
     for round_ in range(3):  # model may call tools, then needs one more turn to speak
         completion = None
-        async for ev in llm.stream_chat(messages, tools=TOOLS if round_ < 2 else None, category="ngobrol",
+        async for ev in llm.stream_chat(messages, tools=TOOLS if round_ < 2 else None, category="diskusi" if deep else "ngobrol",
+                                        max_tokens=1000 if deep else 400, temperature=0.7 if deep else 0.6,
                                         session_id=session_id, private=private):
             if ev["type"] == "delta":
                 if first_token_ms is None:
