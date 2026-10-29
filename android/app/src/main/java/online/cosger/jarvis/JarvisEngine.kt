@@ -532,7 +532,8 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             }
             is ServerEvent.PhoneApproval -> onPhoneApproval(event)
             is ServerEvent.Notify -> online.cosger.jarvis.phone.ApprovalNotice.notice(
-                context, (event.title + event.text).hashCode(), event.title, event.text, urgent = event.kind == "choice" || event.kind == "phone")
+                context, (event.title + event.text).hashCode(), event.title, event.text, urgent = event.kind == "choice" || event.kind == "phone" || event.kind == "urgent",
+                route = event.route)
             is ServerEvent.OwnerChoice -> onOwnerChoice(event)
             is ServerEvent.Transcript -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return

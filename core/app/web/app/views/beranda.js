@@ -4,13 +4,12 @@ import { tone } from '../lib.js';
 
 let timer = null;
 
-function card(c, cls = 'mini') {
+function card(c, wide = false) {
   if (!c) return '';
   const t = tone(c.tone);
-  return html`<a class="card ${t} ${cls}" href="${c.route}">
-    <div class="row top"><span class="ico ${t}">${icon(c.icon || 'grid', 20)}</span>
-      <div class="grow"><div class="ttl">${c.title}</div><div class="sub">${c.sub || ''}</div></div></div>
-  </a>`;
+  return wide
+    ? html`<a class="card ${t}" href="${c.route}"><div class="row"><span class="ico ${t}">${icon(c.icon || 'grid', 20)}</span><div class="grow"><div class="ttl">${c.title}</div><div class="sub">${c.sub || ''}</div></div>${icon('right', 16)}</div></a>`
+    : html`<a class="card mini" href="${c.route}"><span style="color:var(--${t === 'amber' ? 'amber' : t})">${icon(c.icon || 'grid', 20)}</span><div class="ttl">${c.title}</div><div class="small">${c.sub || ''}</div></a>`;
 }
 
 function hero(c) {
@@ -46,7 +45,7 @@ export default {
         <div class="scr">
           <div style="padding:0 4px"><h1 class="big">${d.greeting}</h1><p class="lead">${d.subtitle}</p></div>
           ${d.hero ? hero(d.hero) : empty('Belum ada yang perlu kamu putuskan.', 'Minta apa saja lewat kolom di bawah, atau buka pintasan.')}
-          ${d.cards.length ? html`<div class="g2">${d.cards.map((c) => card(c))}</div>` : ''}
+          ${d.cards.length === 2 ? html`<div class="g2">${d.cards.map((c) => card(c))}</div>` : d.cards.map((c) => card(c, true))}
           ${d.needs > 1 ? html`<a class="card amber row" href="#/butuh"><span class="k amber grow">Butuh kamu · ${d.needs}</span>${icon('right', 16)}</a>` : ''}
           <div class="sec"><span>Pintasan</span><span class="small" style="text-transform:none;letter-spacing:0">urut menurut jam &amp; kebiasaan</span></div>
           <div class="tiles">

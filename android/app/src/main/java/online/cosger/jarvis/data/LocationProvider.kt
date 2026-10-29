@@ -36,6 +36,14 @@ class LocationProvider(context: Context) {
         app.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             app.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    /** The last fix this provider got (or the system's last known one), without waiting — for the page's "tandai di sini". */
+    fun cachedOrNull(): DeviceLocation? {
+        cached?.let { return it }
+        if (!hasPermission()) return null
+        val fix = lastKnown() ?: return null
+        return DeviceLocation(fix.latitude, fix.longitude, if (fix.hasAccuracy()) fix.accuracy.toDouble() else null, 0, null)
+    }
+
     /** Null when permission is missing, location is off, or nothing arrives in time. */
     suspend fun current(timeoutMs: Long = 4_000): DeviceLocation? {
         if (!hasPermission() || !LocationManagerCompat.isLocationEnabled(lm)) return null

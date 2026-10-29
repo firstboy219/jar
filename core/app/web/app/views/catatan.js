@@ -2,8 +2,8 @@
 // The full block editor stays the notes page (/notes/), opened from here.
 import { empty, get, header, html, icon, loading, patch, post, render, toast } from '../core.js';
 
-const VIEWS = [['today', 'Hari ini'], ['week', 'Minggu ini'], ['all', 'Semua'], ['done', 'Selesai']];
-let tab = 'tugas', view = 'today', tasks = [];
+const VIEWS = [['all', 'Semua'], ['today', 'Hari ini'], ['week', 'Minggu ini'], ['done', 'Selesai']];
+let tab = 'tugas', view = 'all', tasks = [];
 
 function due(d) {
   if (!d) return '';

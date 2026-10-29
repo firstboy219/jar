@@ -308,7 +308,7 @@ private fun StripButton(icon: androidx.compose.ui.graphics.vector.ImageVector, l
 
 /** The conversation as a sheet over the canvas — everything the Bicara tab had (readiness, transcript, reports, workers, server, stage), unchanged. */
 @Composable
-private fun DeskTalkSheet(vm: JarvisViewModel, onClose: () -> Unit, onOpenServer: () -> Unit, onOpenBackground: () -> Unit, modifier: Modifier) {
+internal fun DeskTalkSheet(vm: JarvisViewModel, onClose: () -> Unit, onOpenServer: () -> Unit, onOpenBackground: () -> Unit, modifier: Modifier) {
     Column(modifier.fillMaxWidth().fillMaxHeight(0.74f).clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
         .background(JarvisColors.Background.copy(alpha = 0.94f)).border(1.dp, JarvisColors.Border, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))) {
         Row(Modifier.fillMaxWidth().clickable(onClick = onClose).padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center,
