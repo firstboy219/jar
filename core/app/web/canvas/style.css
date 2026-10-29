@@ -563,3 +563,6 @@ body.mode-switch #gesture { display: none !important; }
 #switcher.full .sw-body > .widget .wbody, #switcher.full .sw-body > .widget .sread, #switcher.full .sw-body > .widget .dtjobs { max-height: none; }
 #switcher.full .sw-body > .widget .smap { height: calc(100vh - 200px); }
 #pagesbtn { display: none; font-weight: 700; } body.mode-switch #pagesbtn { display: inline-flex; }
+
+/* ADR-085: 🔤 / 🎧 — an icon only */
+.iconpill { font-size: 16px; padding: 4px 10px; } .iconpill.on { border-color: var(--accent); background: rgba(56, 189, 248, .18); }

@@ -390,6 +390,22 @@ function applyDeskMode() {
 }
 $('#modebtn').addEventListener('click', () => setDeskMode(deskMode === 'geser' ? 'kanvas' : 'geser'));
 $('#pagesbtn').addEventListener('click', () => switcher.toggle());
+
+// 🔤 / 🎧 (ADR-085): what the AI gets of the owner's voice — the transcript only, or the recording too
+let voiceInput = 'stt';
+function showVoiceInput(mode) {
+  voiceInput = mode === 'audio' ? 'audio' : 'stt';
+  const b = $('#voicein');
+  b.textContent = voiceInput === 'audio' ? '🎧' : '🔤';
+  b.classList.toggle('on', voiceInput === 'audio');
+  b.title = voiceInput === 'audio' ? 'AI mendengar rekaman suaramu langsung (nada & nama lebih tepat, sedikit lebih mahal) — ketuk untuk kembali ke teks (STT)'
+    : 'Suaramu dibaca sebagai teks (STT) — ketuk agar AI mendengar rekamannya langsung';
+}
+$('#voicein').addEventListener('click', async () => {
+  const want = voiceInput === 'audio' ? 'stt' : 'audio';
+  try { showVoiceInput((await api.req('PUT', '/api/v1/voice/input', { mode: want })).mode); toast(want === 'audio' ? '🎧 AI mendengar suaramu langsung.' : '🔤 Suaramu dibaca sebagai teks.'); }
+  catch (err) { toast(err.message, true); }
+});
 addEventListener('resize', () => applyDeskMode());
 
 // The areas' sizes and locks (ADR-062) are the owner's, kept on the server so the phone and the browser show the same desk.
@@ -541,6 +557,7 @@ async function pollLive() {
     }
     renderPanels(d);
     lastDesk = d;
+    if ('voice_input' in d) showVoiceInput(d.voice_input);
     applyDeskMode();
     if (switcherOn()) { switcher.update(d, { projects: projectsCard?.active() }); $('#pagesbtn').textContent = `▢ ${switcher.count}`; }
   } catch { /* offline: the next poll tries again */ } finally { pollingLive = false; }

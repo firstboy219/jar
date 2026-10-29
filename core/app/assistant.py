@@ -726,6 +726,25 @@ def _user_content(text: str, image: str | None, image_source: str | None = None,
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}}]
 
 
+def with_audio(content, audio: str | None):
+    """🎧 (ADR-085): the owner's recording next to the words (the transcript stays, marked as automatic). Pure; unit-tested."""
+    if not audio:
+        return content
+    parts = content if isinstance(content, list) else [{"type": "text", "text": content}]
+    parts = [dict(p) for p in parts]
+    parts[0]["text"] = (parts[0]["text"] + "\n\n(Di atas adalah transkrip otomatis — bisa salah dengar. Rekaman suara aslinya terlampir: dengarkan "
+                        "untuk kata yang tepat, nama, nada, dan perasaan pemilik; bila berbeda, ikuti rekamannya.)")
+    return parts + [{"type": "input_audio", "input_audio": {"data": audio, "format": "wav"}}]
+
+
+def without_audio(content):
+    """The same message for a model that cannot hear (pure)."""
+    if not isinstance(content, list):
+        return content
+    kept = [p for p in content if p.get("type") != "input_audio"]
+    return kept[0]["text"] if len(kept) == 1 and kept[0].get("type") == "text" else kept
+
+
 _ABOUT_NOTIFICATIONS = re.compile(r"notif|pesan|chat|whatsapp|\bwa\b|email|surel|yang masuk|siapa yang", re.IGNORECASE)
 # The reply promises work ("aku cek dulu", "akan kucari") — then work must actually start.
 _PROMISE = re.compile(r"\b(aku|saya|ku)\s*(akan |mau |coba |segera )?(cek|cari|carikan|putar|putarkan|tampilkan|siapkan|"
@@ -738,7 +757,7 @@ _SENTENCE_END = re.compile(r"[.!?…]+[\"')\]]*\s+|\n+")
 async def respond(text: str, session_id: str, actor: str, device_id=None, emit: Emit | None = None,
                   location: Location | None = None, screen: str | None = None, image_source: str | None = None,
                   stt: dict | None = None, private: bool = False, speak_live: bool = False,
-                  screen_text: str = "", files: str = "", attachments: list[dict] | None = None) -> Answer:
+                  screen_text: str = "", files: str = "", attachments: list[dict] | None = None, audio: str | None = None) -> Answer:
     """speak_live: the app speaks "say" events sentence by sentence while the answer streams (BR-001),
     instead of waiting for the whole reply."""
     async def send(ev: dict) -> None:
@@ -831,7 +850,8 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             situation += f"\n\nOBROLAN TERAKHIR KITA (sesi sebelumnya):\n{before}"
     messages = [{"role": "system", "content": SYSTEM + "\n\nTENTANG DIRIMU:\n" + await self_model.describe()},
                 *await _history(session_id, limit=8 if compact else 16, private=private),
-                {"role": "user", "content": _user_content(text, screen, image_source, stt, situation, screen_text, files)}]
+                {"role": "user", "content": with_audio(_user_content(text, screen, image_source, stt, situation, screen_text, files), audio)}]
+    hearing = bool(audio)
     spoken, usage_in, usage_out, silent, called = "", 0, 0, False, []
     said_any, buffer, first_token_ms, first_say_ms, route = False, "", None, None, None
 
@@ -847,20 +867,28 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
 
     for round_ in range(3):  # model may call tools, then needs one more turn to speak
         completion = None
-        async for ev in llm.stream_chat(messages, tools=TOOLS if round_ < 2 else None, category="diskusi" if deep else "ngobrol",
-                                        max_tokens=1000 if deep else 400, temperature=0.7 if deep else 0.6,
-                                        session_id=session_id, private=private):
-            if ev["type"] == "delta":
-                if first_token_ms is None:
-                    first_token_ms = int((time.monotonic() - started) * 1000)
-                await send({"type": "delta", "text": ev["text"]})
-                if speak_live:
-                    buffer += ev["text"]
-                    while (m := _SENTENCE_END.search(buffer)) and m.end() >= 12:
-                        await say(buffer[:m.end()])
-                        buffer = buffer[m.end():]
-            else:
-                completion = ev["completion"]
+        try:
+            async for ev in llm.stream_chat(messages, tools=TOOLS if round_ < 2 else None,
+                                            category="dengar" if hearing else "diskusi" if deep else "ngobrol",
+                                            max_tokens=1000 if deep else 400, temperature=0.7 if deep else 0.6,
+                                            session_id=session_id, private=private):
+                if ev["type"] == "delta":
+                    if first_token_ms is None:
+                        first_token_ms = int((time.monotonic() - started) * 1000)
+                    await send({"type": "delta", "text": ev["text"]})
+                    if speak_live:
+                        buffer += ev["text"]
+                        while (m := _SENTENCE_END.search(buffer)) and m.end() >= 12:
+                            await say(buffer[:m.end()])
+                            buffer = buffer[m.end():]
+                else:
+                    completion = ev["completion"]
+        except llm.LLMError:
+            if not hearing or round_:
+                raise
+            hearing = False   # 🎧 but no model could hear it: answer from the transcript as usual (ADR-085)
+            messages[-1]["content"] = without_audio(messages[-1]["content"])
+            continue
         route = completion.route or route
         usage_in += completion.prompt_tokens or 0
         usage_out += completion.completion_tokens or 0
