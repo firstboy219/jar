@@ -4,7 +4,8 @@
   that reasons well — with room to talk (`is_discussion`); quick commands and small talk stay on `ngobrol`. AI is for exactly this: context,
   thinking, weighing, creativity, initiative, discussion, checking and offering options; what is fixed and repeated is a skill / routine (ADR-083).
 - **Reading aloud** ("bacakan …"): a web page, the news, a note, a document, the latest report, what is on the shared screen — or something to
-  write first (a poem, a story). Read in pieces of about a minute; "lanjut" reads on.
+  write first (a poem, a story). The SUMMARY comes first and JARVIS asks before reading the details (owner, 2026-10-29); "ya" reads them in
+  pieces of about a minute, "lanjut" reads on, "tidak" leaves it. Something short, or something written on request, is simply read.
 - **The thread**: a long conversation is summarised (category `ringan`) beyond the last turns the model sees word for word; a new conversation
   starts knowing what the previous one was about.
 """
@@ -18,7 +19,10 @@ log = logging.getLogger("jarvis-core.companion")
 PIECE = 1100             # characters read in one go (≈ a minute of speech)
 SUMMARY_EVERY = 12       # new messages beyond the summary before it is renewed
 KEEP_VERBATIM = 16       # the last turns the model already sees
+SHORT = 450              # shorter than this: read at once, no summary first
+DETAIL_TTL_S = 15 * 60   # how long an offer to read the details stands
 _reading: dict[str, str] = {}   # session → what is left to read
+_offered: dict[str, tuple[float, str]] = {}   # session → (when, the full text) after a summary: waiting for "ya, bacakan detailnya"
 
 _DISCUSS = re.compile(
     r"\b(menurut ?mu|menurutmu|pendapat ?mu|pendapatmu|gimana kalau|bagaimana kalau|bagaimana jika|gimana jika|kenapa|mengapa|kok bisa|"
@@ -38,13 +42,21 @@ def is_discussion(text: str) -> bool:
 
 _READ = re.compile(r"^\s*(?:(?:jarvis|tolong|tlg|coba|bisa)[, ]+)*(?:bacakan|bacain|bacakanlah|baca(?:kan)?\s+(?:dong|ya|keras))\b[\s,:]*(?P<what>.*)$",
                    re.IGNORECASE | re.DOTALL)
+_YES = re.compile(r"^\s*(?:ya+|iya|yes|boleh|mau|oke|ok|silakan|lanjut(?:kan)?|tentu|gas)?[\s,]*(?:(?:tolong\s+)?(?:bacakan|bacain|baca)\s*)?"
+                  r"(?:(?:aja|saja|dong|ya)\s*)?(?:(?:detail|lengkap|semua|selengkapnya|isinya)(?:nya)?)?(?:\s+(?:aja|saja|dong|ya))*\s*[.!]?\s*$", re.IGNORECASE)
+_NO = re.compile(r"^\s*(?:tidak|nggak|ngga|gak|enggak|ga|jangan|cukup|nanti\s+saja|nanti\s+aja|skip|sudah|udah)\b", re.IGNORECASE)
 _GO_ON = re.compile(r"^\s*(?:ya[, ]+)?(?:lanjut(?:kan)?|terus(?:kan)?|teruskan)(?:\s+(?:baca(?:nya)?|membaca|bacaannya|dong|ya))*\s*[.!]?\s*$", re.IGNORECASE)
 _CREATE = re.compile(r"\b(puisi|cerita|dongeng|pantun|doa|sajak|cerpen|kisah|motivasi|renungan|lelucon|humor)\b", re.IGNORECASE)
 
 
-def read_request(text: str, reading_left: bool = False) -> dict | None:
-    """What to read (pure; unit-tested): {kind: url|news|note|doc|report|screen|create|continue, arg}; None when it is not a reading request."""
+def read_request(text: str, reading_left: bool = False, detail_offered: bool = False) -> dict | None:
+    """What to read (pure; unit-tested): {kind: url|news|note|doc|report|screen|create|continue|detail|decline, arg}; None when it is not
+    about reading. `detail_offered`: JARVIS just gave a summary and asked whether to read the details."""
     t = (text or "").strip()
+    if detail_offered and t and _YES.match(t) and not _NO.match(t):
+        return {"kind": "detail", "arg": ""}
+    if detail_offered and _NO.match(t) and len(t.split()) <= 4:
+        return {"kind": "decline", "arg": ""}
     if reading_left and _GO_ON.match(t):
         return {"kind": "continue", "arg": ""}
     m = _READ.match(t)
@@ -137,10 +149,43 @@ async def gather(req: dict, session_id: str, screen_text: str = "") -> tuple[str
     return arg[:60], text
 
 
+async def summarise_for_reading(title: str, text: str) -> str:
+    """Two or three spoken sentences: what it is about (category `ringan`)."""
+    out = await llm.complete([
+        {"role": "system", "content": "Ringkas teks ini untuk DIUCAPKAN ke pemilik: 2–3 kalimat bahasa Indonesia yang natural, inti dan hal "
+                                      "terpentingnya saja (untuk berita: sebut topik-topiknya). Tanpa markdown, tanpa daftar."},
+        {"role": "user", "content": f"{title}\n\n{text[:12000]}"}], category="ringan", max_tokens=260, caller="chat", temperature=0.3)
+    return speakable(out) or text[:300]
+
+
+def detail_offered(session_id: str) -> bool:
+    import time
+    got = _offered.get(session_id)
+    return bool(got) and time.time() - got[0] < DETAIL_TTL_S
+
+
 async def read_turn(req: dict, session_id: str, screen_text: str = "") -> str:
-    """The text read this turn (the rest is kept for "lanjut")."""
+    """What JARVIS says this turn: a summary and the question first; the details (in pieces) once the owner says yes."""
+    import time
+    if req["kind"] == "decline":
+        _offered.pop(session_id, None)
+        return "Oke, cukup ringkasannya saja."
+    if req["kind"] == "detail":
+        got = _offered.pop(session_id, None)
+        text = got[1] if got else ""
+        if not text:
+            return "Detailnya sudah tidak ada — minta bacakan lagi ya."
+        now, rest = pieces(text)
+        if rest:
+            _reading[session_id] = rest
+            return now + " … Mau kulanjutkan?"
+        return now
     title, text = await gather(req, session_id, screen_text)
     text = speakable(text)
+    if text and req["kind"] not in ("continue", "create") and len(text) > SHORT:
+        _reading.pop(session_id, None)
+        _offered[session_id] = (time.time(), text)
+        return f"{await summarise_for_reading(title, text)} Mau kubacakan detailnya?"
     if not text:
         return {"note": "Aku tidak menemukan catatan itu.", "doc": "Aku tidak menemukan dokumen itu.", "url": "Halaman itu tidak bisa kubaca.",
                 "news": "Belum ada berita yang bisa kubacakan.", "report": "Belum ada laporan.", "continue": "Sudah habis — tidak ada lanjutan.",

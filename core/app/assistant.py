@@ -764,7 +764,7 @@ async def respond(text: str, session_id: str, actor: str, device_id=None, emit: 
             await send({"type": "say", "text": reply})
         return Answer(reply, spoken_live=speak_live, first_say_ms=int((time.monotonic() - started) * 1000) if speak_live else None,
                       route={"provider": "core", "model": "aksi-langsung", "cloud": False, "free": False})
-    if _owner_clear(stt) and (want := companion.read_request(text, companion.reading_left(session_id))):   # "bacakan …" (ADR-084)
+    if _owner_clear(stt) and (want := companion.read_request(text, companion.reading_left(session_id), companion.detail_offered(session_id))):   # "bacakan …" (ADR-084)
         reply = await companion.read_turn(want, session_id, screen_text or files)
         if speak_live:
             for sentence in re.split(r"(?<=[.!?…])\s+", reply):
