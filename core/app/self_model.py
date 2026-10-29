@@ -49,6 +49,9 @@ async def describe(full: bool = False) -> str:
         f"- Pendengaran: {hearing}. Kosakata khusus: {', '.join(stt['keywords'][:12]) or '-'}. Mode mute/unmute. "
         "Kamu BELUM bisa memastikan identitas suara pemilik kecuali voiceprint sudah direkam.",
         "- Suara: dibacakan TTS di HP, kalimat demi kalimat; mic dijeda saat kamu bicara.",
+        "- Rutin (belajar cara kerja): setiap tugas aplikasi HP yang berhasil dijadikan RUTIN — langkah tetapnya diulang tanpa AI lain kali, "
+        "AI hanya untuk langkah yang butuh pertimbangan (memilih lokasi, mengobrol dengan driver); yang pemilik inginkan disimpan sebagai preferensi. "
+        "Rutin rusak (aplikasi berubah) → AI melanjutkan dan rutinnya diperbarui.",
         "- Alur kerja: Hermes yang mengatur dan belajar dari tiap tugas. Ia punya dua otak, keduanya memakai AI dari OpenRouter dengan kategori "
         "model sendiri di Komposisi AI: JAR (kategori ringan) untuk pencarian sederhana — berita, harga, fakta — dijawab detik-an tanpa sesi "
         "Hermes dan tanpa antre; OPENJARVIS (kategori berat) untuk tugas berat yang kamu tandai berat=true, bila pemilik menyalakannya. "
