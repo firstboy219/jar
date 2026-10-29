@@ -526,7 +526,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind, event.labels) }
             is ServerEvent.Approval -> _notice.value = "Butuh persetujuanmu: ${event.title} (menu Tugas & Persetujuan)"
             is ServerEvent.PhoneOp -> scope.launch {
-                socket.sendControl(online.cosger.jarvis.phone.PhoneOps.handle(event.req, event.op, event.args) { run ->
+                socket.sendControl(online.cosger.jarvis.phone.PhoneOps.handle(context, event.req, event.op, event.args) { run ->
                     socket.sendControl(Protocol.control("phone_stop", "run", run))
                 })
             }

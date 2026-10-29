@@ -58,6 +58,7 @@ class Job:
     phone: dict | None = None          # {app, goal}: an app on the owner's phone (a routine replays it without AI when one is learned)
     title: str = ""
     private: bool = False
+    no_free: bool = False              # personal content (an email, a chat): never a free endpoint that may log prompts
     max_tokens: int = 1800
     on_done: str | None = None         # "module:function" called with (run_id, result dict) when an asynchronous job ends
     data: dict = field(default_factory=dict)   # kept with the run for on_done
@@ -174,7 +175,13 @@ async def _think(job: Job, lane: str, run_id: int) -> tuple[Any, str | None]:
     body = {"messages": job.messages, "max_tokens": job.max_tokens, "temperature": 0.3}
     if job.json_out:
         body["response_format"] = {"type": "json_object"}
-    data = await gateway.complete(lane, body, caller=f"master:{job.feature}", session_id=f"flow-{run_id}", private=job.private)
+    from . import modelrouter
+    token = modelrouter.NO_FREE.set(True) if job.no_free else None
+    try:
+        data = await gateway.complete(lane, body, caller=f"master:{job.feature}", session_id=f"flow-{run_id}", private=job.private)
+    finally:
+        if token is not None:
+            modelrouter.NO_FREE.reset(token)
     text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     model = (data.get("jarvis_route") or {}).get("model")
     if not text.strip():
@@ -250,6 +257,14 @@ async def run(job: Job) -> dict:
         log.warning("flow %s %s:%s failed: %s", run_id, job.feature, job.action, e)
         await _finish(run_id, "failed", error=str(e))
         return {"run_id": run_id, "status": "failed", "error": str(e)}
+
+
+async def ask(job: Job) -> Any:
+    """For a call site that only needs the answer of a synchronous job: its result, or FlowError when the flow did not finish it."""
+    r = await run(job)
+    if r["status"] != "done":
+        raise FlowError(r.get("error") or "pekerjaan tidak selesai")
+    return r["result"]
 
 
 _pending: dict[int, Job] = {}   # jobs whose worker is still running (for tests and the live view; the row is the source of truth)

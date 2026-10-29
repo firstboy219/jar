@@ -1058,7 +1058,7 @@ async def test_v4_f2_the_openjarvis_gateway_key_reaches_worker_categories_only(p
 
 
 async def _mail_env(pool, monkeypatch, items=None):
-    from app import inbox, llm, memory
+    from app import gateway, inbox, memory, modelrouter
     monkeypatch.setattr(memory, "search", _no_memory)
     posts, llm_calls = [], []
 
@@ -1069,12 +1069,14 @@ async def _mail_env(pool, monkeypatch, items=None):
         return {"sent": True, "id": f"g-{len(posts)}"}
     monkeypatch.setattr(inbox, "_post", post)
 
-    async def complete(messages, category="cepat", **kw):
-        llm_calls.append((category, kw.get("private"), messages[-1]["content"]))
-        if category == "privat":
-            return '[{"importance": "penting", "summary": "Budi minta konfirmasi rapat"}, {"importance": "abaikan", "summary": "Promosi"}]'
-        return "Baik Pak Budi, saya hadir Senin jam 10. Terima kasih."
-    monkeypatch.setattr(llm, "complete", complete)
+    async def complete(lane, body, **kw):   # through the master flow (ADR-087): the job, and whether a free endpoint was excluded
+        messages = body["messages"]
+        sorting = messages[0]["content"].startswith("Kamu menyortir email")
+        llm_calls.append(("privat" if sorting else "balas", modelrouter.NO_FREE.get(), messages[-1]["content"]))
+        if sorting:
+            return {"choices": [{"message": {"content": '[{"importance": "penting", "summary": "Budi minta konfirmasi rapat"}, {"importance": "abaikan", "summary": "Promosi"}]'}}]}
+        return {"choices": [{"message": {"content": "Baik Pak Budi, saya hadir Senin jam 10. Terima kasih."}}]}
+    monkeypatch.setattr(gateway, "complete", complete)
     return posts, llm_calls
 
 
@@ -1087,7 +1089,7 @@ async def test_v4_f6_mail_is_sorted_by_the_local_model_and_a_reply_leaves_only_a
     r = await inbox.check()
     assert r["baru"] == 3 and [m["dari"] for m in r["penting"]] == ["Budi"]
     sorted_by = [c for c in llm_calls if c[0] == "privat"]
-    assert len(sorted_by) == 1 and sorted_by[0][1] is True                       # mail text only ever reached the LOCAL model
+    assert len(sorted_by) == 1 and sorted_by[0][1] is True                       # mail text only ever reached a paid model (never a free endpoint)
     assert "482913" not in sorted_by[0][2] and "482913" not in str(await pool.fetch("SELECT * FROM mail_items"))   # the OTP is not even kept
     assert await pool.fetchval("SELECT count(*) FROM reports WHERE session_id = 'inbox' AND text LIKE '%email penting%'") == 1
     assert (await inbox.check())["baru"] == 0                                    # the same mail is not told twice (ext_id is unique)

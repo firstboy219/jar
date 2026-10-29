@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from . import audit, composition, db, documents, hub, llm, memory, reports, stt, voice_id
+from . import audit, composition, db, documents, hub, memory, reports, stt, voice_id
 from .config import settings
 from .location import WIB
 
@@ -151,6 +151,8 @@ async def add_chunk(meeting_id: str, n: int, data: bytes, ext: str = "ogg") -> d
     path.write_bytes(data)
     count = len(chunk_files(meeting_id))
     await db.pool().execute("UPDATE meetings SET chunks = $2 WHERE id = $1", uuid.UUID(meeting_id), count)
+    from . import meeting_live   # the live transcript and what was decided so far (ADR-087)
+    asyncio.create_task(meeting_live.on_chunk(meeting_id, n, str(path), bool(m["confidential"])))
     return {"chunk": n, "chunks": count}
 
 
@@ -424,16 +426,24 @@ async def _summarize(meeting: dict, transcript: list[dict]) -> dict:
     private = meeting["confidential"]
     if private:
         return {"ringkasan": CONFIDENTIAL_NOTE, "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}
+    # through the master flow (ADR-087): Hermes picks the brain for each part; a meeting is personal content, never a free endpoint
+    from . import master
     notes = []
     system = NOTES_PROMPT.format(context=await context_text(meeting))
     for b in blocks(transcript):
-        notes.append(await llm.complete([{"role": "system", "content": system}, {"role": "user", "content": b}],
-                                        category="rapat", caller="meeting", private=private, max_tokens=700))
+        r = await master.run(master.Job("rapat", "catat-bagian", f"catat bagian rapat {meeting['title']}", trigger="event",
+                                        messages=[{"role": "system", "content": system}, {"role": "user", "content": b}], no_free=True, max_tokens=700))
+        if r["status"] != "done":
+            raise RuntimeError(r.get("error") or "catatan rapat gagal")
+        notes.append(str(r["result"]))
     marks = "; ".join(f"{int(m['t'] // 60):02d}:{int(m['t'] % 60):02d} {m['note']}" for m in meeting["marks"] or []) or "-"
-    raw = await llm.complete([{"role": "system", "content": FINAL_PROMPT.format(title=meeting["title"], marks=marks)
-                                              + "\n\nKONTEKS RAPAT:\n" + await context_text(meeting)},
-                              {"role": "user", "content": "\n\n---\n\n".join(notes)[:60000]}],
-                             category="rapat", caller="meeting", private=private, max_tokens=1500, temperature=0.2)
+    r = await master.run(master.Job("rapat", "notulen", f"susun notulen rapat {meeting['title']}", trigger="event", heavy=True, no_free=True, max_tokens=1500,
+                                    messages=[{"role": "system", "content": FINAL_PROMPT.format(title=meeting["title"], marks=marks)
+                                               + "\n\nKONTEKS RAPAT:\n" + await context_text(meeting)},
+                                              {"role": "user", "content": "\n\n---\n\n".join(notes)[:60000]}]))
+    if r["status"] != "done":
+        raise RuntimeError(r.get("error") or "notulen gagal")
+    raw = str(r["result"])
     summary = _json(raw)
     if not summary.get("ringkasan"):
         summary = {"ringkasan": raw.strip()[:2000], "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}
@@ -545,12 +555,15 @@ async def ask(meeting_id: str, question: str) -> dict:
             "filter": {"must": [{"key": "meeting_id", "match": {"value": meeting_id}}]}})
     hits = r.json().get("result", []) if r.status_code == 200 else []
     context = "\n".join(f"[{int(h['payload']['t'] // 60):02d}:{int(h['payload']['t'] % 60):02d}] {h['payload']['text']}" for h in hits)
-    answer = await llm.complete([
+    from . import master   # through the master flow (ADR-087)
+    r = await master.run(master.Job("rapat", "tanya", f"jawab pertanyaan tentang rapat {meeting['title']}", no_free=True, max_tokens=400, messages=[
         {"role": "system", "content": "Jawab pertanyaan pemilik tentang rapat ini hanya dari kutipan transkrip dan "
                                       "notulen. Sebut menit-nya. Kalau tidak ada, katakan tidak dibahas. Singkat."},
         {"role": "user", "content": f"Notulen: {json.dumps(meeting['summary'], ensure_ascii=False)[:4000]}\n\n"
-                                    f"Kutipan:\n{context}\n\nPertanyaan: {question}"}],
-        category="rapat", caller="meeting", private=meeting["confidential"], max_tokens=400)
+                                    f"Kutipan:\n{context}\n\nPertanyaan: {question}"}]))
+    if r["status"] != "done":
+        raise MeetingError(r.get("error") or "tidak bisa menjawab sekarang")
+    answer = str(r["result"])
     return {"answer": answer, "sources": [{"t": h["payload"]["t"], "text": h["payload"]["text"][:300]} for h in hits]}
 
 

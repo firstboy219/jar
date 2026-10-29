@@ -28,6 +28,21 @@ async def seed() -> str:
     await notes.add_task("Kirim revisi timeline ke Dimas", None, 3)
     await notes.add_task("Lampirkan struk reimburse", None, None)
     await p.execute("INSERT INTO flow_runs (feature, action, goal, lane, status, finished_at) VALUES ('bisnis', 'poll', 'x', 'skill', 'done', now()), ('brief', 'compose', 'x', 'ringan', 'done', now())")
+    # wave 3: one list of email + WhatsApp (the same matter across sources), an errand, the next meeting, a meeting being recorded
+    await p.execute("""INSERT INTO inbox_items (source, ext_id, thread, sender, sender_addr, subject, snippet, received_at, triage, reason, topic, due, replies, task, draft) VALUES
+        ('outlook', 'O1', 'C1', 'Sari Wulandari', 'sari@kantor.co.id', 'Persetujuan laporan Q3', 'Pak, mohon persetujuan laporan Q3 sebelum jam 3 sore ya. Lampiran sudah saya revisi sesuai masukan kemarin.', now() - interval '40 minutes', 'needs', 'Sari menunggu persetujuanmu sebelum 15.00', 'Sari · laporan Q3', '15.00', '[]', '',
+         '{"body": "Halo Mbak Sari,\\n\\nTerima kasih revisinya. Laporan Q3 sudah saya cek dan saya setujui.\\n\\nSalam,\\nIlham", "style": "kamu", "lane": "ringan"}'),
+        ('whatsapp', 'n1', 'wa:sari wulandari', 'Sari Wulandari', '', '', 'Pak, sudah sempat lihat email laporan Q3? 🙏', now() - interval '12 minutes', 'needs', 'Sari menunggu persetujuanmu sebelum 15.00', 'Sari · laporan Q3', '', '["Sudah, saya setujui siang ini", "Saya cek 10 menit lagi"]', '', null),
+        ('whatsapp', 'n2', 'wa:istri', 'Istri', '', '', 'Yah nanti pulang mampir beli susu si Kecil ya, yang biasa', now() - interval '25 minutes', 'needs', 'Titipan untuk perjalanan pulang', 'Istri · titipan', '', '["Siap, nanti Ayah beliin", "Oke"]', 'beli susu si Kecil', null),
+        ('outlook', 'O2', 'C2', 'HR Kantor', 'hr@kantor.co.id', 'Jadwal medical check-up', 'Medical check-up tahunan dijadwalkan Kamis 6 Nov pukul 08.00 di klinik lantai 2.', now() - interval '2 hours', 'fyi', 'Info jadwal MCU Kamis', 'HR · MCU', '', '[]', '', null),
+        ('gmail', 'G1', 'G1', 'Tokopedia', 'promo@tokopedia.com', 'Flash sale 11.11', 'Diskon sampai 90%', now() - interval '3 hours', 'ignore', 'promosi', '', '', '[]', '', null)""")
+    await p.execute("""INSERT INTO settings_kv (key, value) VALUES ('commute:errands', jsonb_build_object('day', to_char(now() AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD'), 'items', '["beli susu si Kecil"]'::jsonb))""")
+    await p.execute("""INSERT INTO calendar_events (source, ext_id, title, start_at, end_at, location, attendees, online) VALUES
+        ('outlook', 'E1', 'Weekly Tim Produk', now() + interval '20 minutes', now() + interval '80 minutes', 'R. Rapat 3', '["Sari", "Dimas", "Ayu"]', false)""")
+    if "rapat" in ROUTES:
+        await p.execute("""INSERT INTO meetings (title, confidential, consent, status, chunks, started_at, live) VALUES ('Weekly Tim Produk', false, true, 'recording', 7, now() - interval '7 minutes 12 seconds',
+            '{"transcript": [{"n": 4, "text": "Oke, untuk rilis versi dua kita sepakat hari Jumat ya, QA selesai Kamis sore."}, {"n": 5, "text": "Mas Ilham tolong kirim timeline revisi ke Dimas besok pagi."}, {"n": 6, "text": "Ayu siapkan materi demo untuk klien minggu depan."}],
+              "keputusan": ["Rilis versi 2 hari Jumat; QA selesai Kamis sore"], "tugas": [{"siapa": "Ilham", "apa": "kirim timeline revisi ke Dimas", "kapan": "besok pagi", "pemilik": true}, {"siapa": "Ayu", "apa": "siapkan materi demo klien", "kapan": "minggu depan", "pemilik": false}], "topik": "rilis v2"}')""")
     await db.close()
     return token
 
