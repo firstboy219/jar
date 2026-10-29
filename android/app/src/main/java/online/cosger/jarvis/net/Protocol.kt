@@ -82,6 +82,8 @@ sealed interface ServerEvent {
                              val expiresInS: Long) : ServerEvent { override val sessionId: String? = null }
     /** ADR-079: a notification for the phone's notification shade (a project's pick is waiting, a run ended …) — never spoken. */
     data class Notify(val title: String, val text: String, val kind: String, val route: String = "") : ServerEvent { override val sessionId: String? = null }
+    /** ADR-087: a feature's settings changed on the server (from the web or the app) — the phone re-reads what it keeps itself (the alarm). */
+    data class SettingsChanged(val key: String) : ServerEvent { override val sessionId: String? = null }
     /** ADR-079: a project asks the owner to pick one option (status "open"), or the pick was settled (answered / expired / cancelled). */
     data class OwnerChoice(val id: Long, val status: String, val title: String, val prompt: String, val options: List<ChoiceOption>,
                            val expiresInS: Long) : ServerEvent { override val sessionId: String? = null }
@@ -192,6 +194,7 @@ object Protocol {
             "phone_approval" -> ServerEvent.PhoneApproval(o.long("id") ?: return null, o.str("status").ifEmpty { "awaiting" }, o.str("label"),
                 o.str("goal"), o.str("requested_by"), o.long("expires_in_s") ?: 900)
             "notify" -> ServerEvent.Notify(o.str("title"), o.str("text"), o.str("kind"), o.str("route"))
+            "settings" -> ServerEvent.SettingsChanged(o.str("key"))
             "owner_choice" -> ServerEvent.OwnerChoice(
                 o.long("id") ?: return null, o.str("status").ifEmpty { "open" }, o.str("title"), o.str("prompt"),
                 o["options"]?.jsonArray?.mapNotNull {

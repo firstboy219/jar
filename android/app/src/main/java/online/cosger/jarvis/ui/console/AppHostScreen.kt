@@ -155,6 +155,10 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
     @JavascriptInterface fun talk() { view.post { actions.talk() } }
     @JavascriptInterface fun open(what: String?) { val w = what.orEmpty().take(80); view.post { actions.open(w) } }
     @JavascriptInterface fun version(): String = BuildConfig.VERSION_NAME
+    /** The alarm settings just saved on the page → the phone's own clock (ADR-087). */
+    @JavascriptInterface fun syncAlarm(json: String?) { online.cosger.jarvis.alarm.AlarmScheduler.save(view.context, json.orEmpty().take(2000)) }
+    @JavascriptInterface fun speak(text: String?) { val t = text.orEmpty().take(6000); view.post { (view.context.applicationContext as JarvisApp).engine.speakText(t) } }
+    @JavascriptInterface fun stopSpeaking() { view.post { (view.context.applicationContext as JarvisApp).engine.stopSpeaking() } }
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */
     @JavascriptInterface fun location(): String {
         val app = view.context.applicationContext as JarvisApp

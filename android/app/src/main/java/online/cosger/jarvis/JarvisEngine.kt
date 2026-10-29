@@ -535,6 +535,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 context, (event.title + event.text).hashCode(), event.title, event.text, urgent = event.kind == "choice" || event.kind == "phone" || event.kind == "urgent",
                 route = event.route)
             is ServerEvent.OwnerChoice -> onOwnerChoice(event)
+            is ServerEvent.SettingsChanged -> if (event.key == "alarm") syncAlarm()
             is ServerEvent.Transcript -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
                 listener.setInterim("")
@@ -578,6 +579,19 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             _choices.update { list -> list.filterNot { it.id == c.id } }
         }
     }
+
+    /** ADR-087: the morning alarm as the server keeps it → the phone's own clock (rings offline too). */
+    fun syncAlarm() {
+        if (!settings.value.isConfigured) return
+        scope.launch {
+            val spec = runCatching { console.get("/api/v1/app/settings/alarm") }.getOrNull() ?: return@launch
+            online.cosger.jarvis.alarm.AlarmScheduler.save(context, spec.toString())
+        }
+    }
+
+    /** The page asked to read something aloud (the brief, a story, a greeting): the same voice JARVIS speaks with. */
+    fun speakText(text: String) = speaker.say(text)
+    fun stopSpeaking() = speaker.stop()
 
     fun refreshChoices() {
         if (!settings.value.isConfigured) return
