@@ -16,6 +16,10 @@ if command -v node >/dev/null && [ -d app/web/notes/tests ]; then   # Catatan's 
   (cd app/web/notes && node --test tests/ >/tmp/jarvis-notes-js.log 2>&1) || { cat /tmp/jarvis-notes-js.log; echo "notes JS tests failed"; exit 1; }
   echo "notes JS: $(grep -E '^# pass' /tmp/jarvis-notes-js.log)"
 fi
+if command -v node >/dev/null && [ -d app/web/app/tests ]; then   # the app v2's pure helpers (ADR-087)
+  (cd app/web/app && node --test tests/ >/tmp/jarvis-app-js.log 2>&1) || { cat /tmp/jarvis-app-js.log; echo "app JS tests failed"; exit 1; }
+  echo "app JS: $(grep -E '^# pass' /tmp/jarvis-app-js.log)"
+fi
 docker build -q --build-arg DEV=1 -t jarvis-core:test . >/dev/null
 docker network create "$NET" >/dev/null
 docker run -d --name "$NET-db" --network "$NET" -e POSTGRES_PASSWORD=test -e POSTGRES_DB=jarvis postgres:16.15-alpine >/dev/null

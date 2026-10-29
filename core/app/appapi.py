@@ -1,0 +1,260 @@
+"""The app's own API (ADR-087): what the screens of the new app need that the older endpoints did not already give.
+
+Everything here is for the owner's device (owner scope). Screens that only show what an older endpoint returns call that endpoint
+directly (/api/v1/notes/…, /api/v1/workers/…, /api/v1/console/… for what the web admin has)."""
+
+import json
+from pathlib import Path
+
+from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse
+from pydantic import BaseModel, Field
+
+from . import db, home, needs, places, workers
+from .appauth import actor, owner, require_password
+from .location import Location, remember_last
+
+router = APIRouter()
+API = "/api/v1/app"
+
+
+def jsonable(obj):
+    return json.loads(json.dumps(obj, default=str))
+
+
+# ---------- the app itself: /app/ (the phone's main screen and a page of its own on the web) ----------
+
+WEB = Path(__file__).parent / "web" / "app"
+CSP = ("default-src 'self'; script-src 'self'; connect-src 'self' wss: ws:; img-src 'self' https: data: blob:; media-src 'self' https: blob:; "
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; frame-src 'self' https://www.youtube-nocookie.com; "
+       "frame-ancestors 'none'")
+
+
+@router.get("/app")
+async def app_root():
+    return RedirectResponse("/app/")
+
+
+@router.get("/app/{path:path}")
+async def app_static(path: str):
+    target = (WEB / (path or "index.html")).resolve()
+    if not str(target).startswith(str(WEB.resolve())) or not target.is_file():
+        raise HTTPException(404)
+    return FileResponse(target, headers={"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache",
+                                         "Permissions-Policy": "camera=(self), microphone=(self), display-capture=(self), geolocation=(self)"})
+
+
+# ---------- front page, catalog, usage ----------
+
+@router.get(API + "/home")
+async def app_home(slot: str | None = None, device: dict = Depends(owner)):
+    return jsonable(await home.feed(slot))
+
+
+class OpenedIn(BaseModel):
+    feature: str = Field(max_length=40)
+
+
+@router.post(API + "/opened")
+async def app_opened(body: OpenedIn, device: dict = Depends(owner)):
+    return {"ok": await home.opened(body.feature)}
+
+
+@router.get(API + "/features")
+async def app_features(device: dict = Depends(owner)):
+    from . import setup_status
+    status = await setup_status.all_status()
+    return jsonable({"groups": home.GROUPS, "features": [{**f, **status.get(f["id"], {})} for f in home.FEATURES]})
+
+
+# ---------- what waits for the owner ----------
+
+@router.get(API + "/needs")
+async def app_needs(device: dict = Depends(owner)):
+    return jsonable({"items": await needs.listing()})
+
+
+class AnswerIn(BaseModel):
+    approve: bool | None = None
+    option: int | None = None
+    text: str = Field(default="", max_length=2000)
+    password: str = Field(default="", max_length=200)
+
+
+@router.post(API + "/needs/{kind}/{item_id}")
+async def app_need_answer(kind: str, item_id: int, body: AnswerIn, device: dict = Depends(owner)):
+    who = actor(device)
+    if kind == "phone" and body.approve:
+        from . import phone_agent
+        await require_password(device, body.password, f"phone_run:{item_id}")
+        try:
+            return jsonable({"ok": True, "run": await phone_agent.approve(item_id, who)})
+        except phone_agent.PhoneError as e:
+            raise HTTPException(409, str(e))
+    try:
+        return jsonable(await needs.answer(kind, item_id, who, approve=body.approve, option=body.option, text=body.text))
+    except needs.NeedError as e:
+        raise HTTPException(409, str(e))
+
+
+# ---------- missions ----------
+
+@router.get(API + "/missions")
+async def app_missions(device: dict = Depends(owner)):
+    rows = await db.pool().fetch(
+        """SELECT id, title, status, kind, category, runtime, model_used, cost_usd::float AS cost, phase, progress, created_at, finished_at,
+                  EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at)))::int AS seconds
+           FROM tasks WHERE company_id IS NULL AND dev_role IS NULL AND kind NOT IN ('flowcheck')
+           ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT 40""")
+    return jsonable({"missions": [dict(r) for r in rows]})
+
+
+@router.get(API + "/missions/{task_id}")
+async def app_mission(task_id: int, device: dict = Depends(owner)):
+    from . import live, results
+    r = await db.pool().fetchrow(
+        """SELECT id, title, instruction, status, kind, category, runtime, runtime_note, model_used, cost_usd::float AS cost,
+                  budget_usd::float AS budget, phase, progress, goal, criteria, plan, result, error, hermes_run, created_at, started_at, finished_at,
+                  EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at)))::int AS seconds
+           FROM tasks WHERE id = $1 AND company_id IS NULL""", task_id)
+    if not r:
+        raise HTTPException(404, "misi tidak ditemukan")
+    t = dict(r)
+    data, text = results.split(t.pop("result") or "")
+    st = live.stations.get(task_id)
+    t["station"] = live.station_view(st) if st else None
+    t["result"] = {"data": data, "text": text}
+    t["can_say"] = t["status"] == "running" and bool(t.pop("hermes_run"))
+    t["can_stop"] = t["status"] in ("queued", "running")
+    t["can_start"] = t["status"] in ("stopped", "failed", "cancelled")
+    ep = await db.pool().fetchrow("SELECT success, approach, lesson, model FROM episodes WHERE task_id = $1 ORDER BY id DESC LIMIT 1", task_id)
+    t["episode"] = dict(ep) if ep else None
+    return jsonable(t)
+
+
+# ---------- what is open on the desk: the "Halaman aktif" ----------
+
+@router.get(API + "/pages")
+async def app_pages(device: dict = Depends(owner)):
+    from . import live, meetings, stage
+    pages = []
+    if p := stage.desk_player():
+        pages.append({"id": "player", "kind": "musik", "title": p.get("title") or "Musik", "sub": p.get("artist") or "Memutar", "route": "#/musik",
+                      "image": p.get("cover_url")})
+    for slot, card in (stage.desk_cards() or {}).items():
+        if not card:
+            continue
+        item = (card.get("items") or [{}])[0]
+        route = {"video": "#/video", "doc": "#/berkas", "draft": "#/inbox", "map": "#/perjalanan"}.get(slot, "#/obrolan")
+        pages.append({"id": f"card:{slot}", "kind": slot, "title": str(item.get("title") or card.get("caption") or slot)[:80],
+                      "sub": live.SLOT_WORD.get(slot, slot), "route": route, "image": item.get("thumbnail_url") or item.get("url") if slot == "image" else item.get("thumbnail_url")})
+    if m := await meetings.desk_card():
+        pages.append({"id": "meeting", "kind": "rapat", "title": m.get("title") or "Rapat", "sub": {"recording": "Merekam", "processing": "Diproses"}.get(m["state"], m["state"]),
+                      "route": "#/rapat"})
+    for s in (await live.snapshot()).get("stations", []):
+        if s["status"] in ("queued", "running"):
+            pages.append({"id": f"task:{s['task_id']}", "kind": "misi", "title": s["title"], "sub": s.get("page_title") or s.get("thought") or "berjalan",
+                          "route": f"#/misi/{s['task_id']}", "frame": s["task_id"] if s.get("has_frame") else None})
+    return jsonable({"pages": pages})
+
+
+# ---------- location in the background, and the owner's places ----------
+
+@router.post(API + "/location")
+async def app_location(loc: Location, device: dict = Depends(owner)):
+    await remember_last(loc)
+    return jsonable({"place": (await places.current()).get("place")})
+
+
+@router.get(API + "/places")
+async def app_places(device: dict = Depends(owner)):
+    return jsonable({"places": await places.listing(), "now": await places.current()})
+
+
+class PlaceIn(BaseModel):
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    label: str = Field(default="", max_length=200)
+    radius_m: int = Field(default=200, ge=50, le=5000)
+
+
+@router.put(API + "/places/{name}")
+async def app_place_set(name: str, body: PlaceIn, device: dict = Depends(owner)):
+    try:
+        return jsonable(await places.set_place(name, body.lat, body.lon, body.label, body.radius_m))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.delete(API + "/places/{name}")
+async def app_place_delete(name: str, device: dict = Depends(owner)):
+    return {"ok": await places.remove(name)}
+
+
+# ---------- settings the screens keep (one JSON per feature) ----------
+
+SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home"}
+
+
+@router.get(API + "/settings/{key}")
+async def app_setting(key: str, device: dict = Depends(owner)):
+    if key not in SETTING_KEYS:
+        raise HTTPException(404)
+    from . import appsettings
+    return jsonable(await appsettings.get(key))
+
+
+@router.put(API + "/settings/{key}")
+async def app_setting_put(key: str, body: dict = Body(...), device: dict = Depends(owner)):
+    if key not in SETTING_KEYS:
+        raise HTTPException(404)
+    from . import appsettings
+    try:
+        return jsonable(await appsettings.put(key, body, actor(device)))
+    except appsettings.SettingError as e:
+        raise HTTPException(422, str(e))
+
+
+# ---------- the conversation shown in Obrolan ----------
+
+@router.get(API + "/chat/history")
+async def app_chat_history(session_id: str, limit: int = 40, device: dict = Depends(owner)):
+    rows = await db.pool().fetch(
+        """SELECT role, content, route, created_at FROM messages WHERE session_id = $1 AND role IN ('user', 'assistant')
+           AND route IS DISTINCT FROM 'silent' ORDER BY id DESC LIMIT $2""", session_id[:128], max(1, min(limit, 100)))
+    return jsonable({"messages": [dict(r) for r in reversed(rows)]})
+
+
+# ---------- Ingatan: what JARVIS learned (skills, phone routines) and knows about the owner ----------
+
+@router.get(API + "/memory")
+async def app_memory(device: dict = Depends(owner)):
+    from . import master, memory, routines, skills_pipeline
+    rts = await routines.listing()
+    skills = await skills_pipeline.listing()
+    mems = [m for m in await memory.list_(limit=400) if not m.get("stale")]
+    prefs = [{"id": str(m["id"]), "text": m["text"], "kind": m.get("kind"), "category": m.get("category")} for m in mems
+             if m.get("category") == "personal"][:60]
+    auto = sum(r["auto_steps"] or 0 for r in rts)
+    ai = sum(r["ai_steps"] or 0 for r in rts)
+    flow = await master.summary(30)
+    from datetime import datetime, timedelta, timezone
+    week = datetime.now(timezone.utc) - timedelta(days=7)
+    new = [{"kind": "rutin", "id": r["id"], "name": r["name"], "app": r["app"], "steps": r["steps"], "params": r["params"]} for r in rts
+           if r["updated_at"] > week and (r["runs"] or 0) <= 3]
+    new += [{"kind": "skill", "id": s["id"], "name": s["name"], "status": s["status"]} for s in skills if s["created_at"] > week]
+    return jsonable({"routines": rts, "skills": skills, "prefs": prefs, "new": new[:6],
+                     "counts": {"skills": len([s for s in skills if s.get("cap_status") == "active" or s["status"] == "published"]) + len([r for r in rts if r["status"] == "active"]),
+                                "memories": len(mems)},
+                     "no_ai_pct": flow.get("no_ai_pct"), "routine_auto_pct": round(100 * auto / (auto + ai)) if auto + ai else None,
+                     "flow": flow})
+
+
+# ---------- Kontrol: health, budget, where the owner is, the brains ----------
+
+@router.get(API + "/control")
+async def app_control(device: dict = Depends(owner)):
+    from . import budget, hub, lanes, master, phone_agent, status
+    return jsonable({"health": await status.check_all(), "budget": await budget.state(), "places": await places.listing(),
+                     "here": await places.current(), "phone_online": phone_agent.phone_online(), "lanes": await lanes.view(),
+                     "flow": await master.summary(7), "devices": [{"device": c.get("device"), "caps": c.get("caps"), "app_version": c.get("app_version")} for c in hub.clients()]})

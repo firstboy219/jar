@@ -123,6 +123,8 @@ async def lifespan(app: FastAPI):
                 if datetime.now(awareness.WIB).hour == 3 and last_maintained != datetime.now(awareness.WIB).date() and (await ops.background_ok())[0]:
                     last_maintained = datetime.now(awareness.WIB).date()  # memory upkeep once a night (ADR-040)
                     log.info("memory upkeep: %s, old failed episodes pruned: %s", await memory.maintain(), await episodes.prune())
+                    from . import places
+                    log.info("places learned: %s", await places.relearn())   # rumah/kantor from the location trail (ADR-087)
                 await dev.poll()
                 await skills_pipeline.poll()  # sandbox results of skills being tested
                 await gm.tick()  # Company Federation: due sends, callback deadlines, rejections to relay (ADR-042)
@@ -152,6 +154,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="JARVIS core", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+from . import appapi  # noqa: E402  the app v2 (ADR-087): /app/ and /api/v1/app/…
+app.include_router(appapi.router)
 
 
 def jsonable(obj):

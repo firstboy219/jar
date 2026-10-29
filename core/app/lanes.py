@@ -22,7 +22,7 @@ def choose(*, kind: str, category: str, instruction: str, image, private: bool, 
            light_on: bool, oj_on: bool, oj_ok: bool, load: dict, hint: dict | None = None) -> tuple[str, str]:
     """(lane, why) for a new task. Pure; unit-tested. Only the owner's ordinary tasks are ever moved off Hermes: no private ones, none with a
     picture, none for a company (they need Hermes' tools, isolation and rules)."""
-    if kind != "owner" or private or image or company_id:
+    if kind not in ("owner", "feature") or private or image or company_id:
         return "hermes", ""
     free_slots = load["slots"] - load["hermes_running"]
     hint = hint or {}
@@ -92,7 +92,7 @@ async def pick(*, kind: str, category: str, instruction: str, image, private: bo
     oj_on = await openjarvis.enabled()
     return choose(kind=kind, category=category, instruction=instruction, image=image, private=private, company_id=company_id, heavy=heavy,
                   light_on=await light_enabled(), oj_on=oj_on, oj_ok=(await _oj_ok()) if oj_on else True, load=await load(),
-                  hint=await advice(instruction) if kind == "owner" and not (private or image or company_id) else None)
+                  hint=await advice(instruction) if kind in ("owner", "feature") and not (private or image or company_id) else None)
 
 
 async def view() -> dict:
