@@ -197,7 +197,7 @@ async def app_place_delete(name: str, device: dict = Depends(owner)):
 
 # ---------- settings the screens keep (one JSON per feature) ----------
 
-SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home", "quran"}
+SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home", "quran", "bisnis"}
 
 
 @router.get(API + "/settings/{key}")

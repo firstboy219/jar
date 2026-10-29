@@ -62,6 +62,12 @@ def hhmm_to(s: str) -> int:
     return int(s[:2]) * 60 + int(s[3:5])
 
 
+def after_ref(s: str, ref: int) -> int:
+    """'00:10' read after a reference minute (with 23:40 as the reference → 1450), so a trip across midnight keeps its order. Pure."""
+    v = hhmm_to(s)
+    return v + 1440 if v < ref - 720 else v
+
+
 def pick_usual(options: list[dict], usual: list[str]) -> int:
     """The option the owner usually takes (the departure time he chose most), else the first that arrives on time. Pure."""
     for u in usual:
@@ -267,11 +273,14 @@ async def watch(now: datetime | None = None) -> list[str]:
         return []
     o, p, m = t["chosen"], t["plan"], krl.now_minutes(now)
     did = []
+    ref = hhmm_to(o.get("leave") or o.get("dep") or o["arrive"])   # every time of the trip is read after its start (a trip may cross midnight)
+    if m < ref - 720:
+        m += 1440
     if o.get("kind") == "car":
-        if m > hhmm_to(o["arrive"]) + 60:
+        if m > after_ref(o["arrive"], ref) + 60:
             await _finish(t["id"], "selesai (waktu)")
         return did
-    leave = hhmm_to(o["leave"])
+    leave = ref
     if leave - 10 <= m < leave and not await _done_today(t["id"], "remind_leave"):
         await _event(t["id"], "remind_leave", "pengingat berangkat")
         await hub.broadcast({"type": "notify", "title": f"Berangkat {o['leave'].replace(':', '.')}", "text": steps(t["direction"], p, o)[0]["text"],
@@ -280,15 +289,15 @@ async def watch(now: datetime | None = None) -> list[str]:
     if t["direction"] == "out" and o.get("ride") and leave - 3 <= m <= leave + 10 and not await _done_today(t["id"], "ride"):
         await order_ride(t["id"])
         did.append("ride_out")
-    if t["direction"] == "back" and o.get("ride") and hhmm_to(o["ride"]["order_at"]) <= m <= hhmm_to(o["arr"]) + 5 and not await _done_today(t["id"], "ride"):
+    if t["direction"] == "back" and o.get("ride") and after_ref(o["ride"]["order_at"], ref) <= m <= after_ref(o["arr"], ref) + 5 and not await _done_today(t["id"], "ride"):
         await order_ride(t["id"])
         did.append("ride_home")
-    dep = hhmm_to(o["dep"])
+    dep = after_ref(o["dep"], ref)
     if dep + 6 <= m <= dep + 30 and not await _done_today(t["id"], "replan"):
         if await _still_near(p["from"]["name"]):
             await _replan(t, now)
             did.append("replan")
-    if m > hhmm_to(o["arrive"]) + 90:
+    if m > after_ref(o["arrive"], ref) + 90:
         await _finish(t["id"], "selesai (waktu)")
     if did:
         await _broadcast_trip(t["id"])

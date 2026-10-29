@@ -1,6 +1,7 @@
 // Every screen of the app, by route name (#/<name>/…). Each module exports {tab?, feature?, render(root, route), actions?}.
 import bangun from './bangun.js';
 import berangkat from './berangkat.js';
+import bisnis from './bisnis.js';
 import beranda from './beranda.js';
 import brief from './brief.js';
 import butuh from './butuh.js';
@@ -16,10 +17,13 @@ import kontrol from './kontrol.js';
 import misi from './misi.js';
 import notfound from './notfound.js';
 import obrolan from './obrolan.js';
+import peluang from './peluang.js';
 import perjalanan from './perjalanan.js';
 import quran from './quran.js';
 import rapat from './rapat.js';
 import rekap from './rekap.js';
 import sholat from './sholat.js';
+import sumber from './sumber.js';
+import tren from './tren.js';
 
-export const VIEWS = { bangun, berangkat, pulang: berangkat, perjalanan, berubah: perjalanan, kebiasaan, rekap, beranda, brief, butuh, catatan, draf, fitur, halaman, hijriah, inbox, ingatan, kontrol, misi, notfound, obrolan, quran, rapat, sholat };
+export const VIEWS = { bangun, berangkat, bisnis, pulang: berangkat, perjalanan, berubah: perjalanan, kebiasaan, rekap, beranda, brief, butuh, catatan, draf, fitur, halaman, hijriah, inbox, ingatan, kontrol, misi, notfound, obrolan, peluang, quran, rapat, sholat, sumber, tren };

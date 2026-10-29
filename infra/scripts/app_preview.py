@@ -43,8 +43,41 @@ async def seed() -> str:
         await p.execute("""INSERT INTO meetings (title, confidential, consent, status, chunks, started_at, live) VALUES ('Weekly Tim Produk', false, true, 'recording', 7, now() - interval '7 minutes 12 seconds',
             '{"transcript": [{"n": 4, "text": "Oke, untuk rilis versi dua kita sepakat hari Jumat ya, QA selesai Kamis sore."}, {"n": 5, "text": "Mas Ilham tolong kirim timeline revisi ke Dimas besok pagi."}, {"n": 6, "text": "Ayu siapkan materi demo untuk klien minggu depan."}],
               "keputusan": ["Rilis versi 2 hari Jumat; QA selesai Kamis sore"], "tugas": [{"siapa": "Ilham", "apa": "kirim timeline revisi ke Dimas", "kapan": "besok pagi", "pemilik": true}, {"siapa": "Ayu", "apa": "siapkan materi demo klien", "kapan": "minggu depan", "pemilik": false}], "topik": "rilis v2"}')""")
+    if {"bisnis", "tren", "peluang", "sumber"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+        await seed_bisnis(p)
     await db.close()
     return token
+
+
+async def seed_bisnis(p):
+    """Two businesses with four months of numbers, today so far, sales per marketplace, an alert, a strategy and a research batch."""
+    import random
+    from datetime import date, timedelta
+    rnd = random.Random(7)
+    eps = '[{"metric": "penjualan", "path": "/v1/orders", "items": "data.orders", "value": "total", "agg": "sum", "mode": "today", "split": "marketplace"}, {"metric": "pesanan", "path": "/v1/orders", "agg": "count", "mode": "today"}, {"metric": "dikemas", "path": "/v1/orders", "filter": "status=packed", "agg": "count", "mode": "today"}, {"metric": "pencairan", "path": "/v1/payouts", "agg": "value", "mode": "today"}]'
+    for b, base, url in (("Renature", 4_200_000, "https://api.renature.id"), ("Autotoko", 11_500_000, "https://api.autotoko.id")):
+        sid = await p.fetchval("INSERT INTO biz_sources (business, name, base_url, auth, endpoints, last_poll, last_ok, backfilled) VALUES ($1, $2, $3, $4, $5, now(), now() - interval '4 minutes', now()) RETURNING id",
+                               b, f"{b} API", url, {"type": "header", "name": "X-API-Key"}, json.loads(eps))
+        today = date.today()
+        for i in range(1, 125):
+            d = today - timedelta(days=i)
+            v = base * (1 + 0.25 * (d.weekday() == 5) - 0.15 * (d.weekday() == 6)) * (0.85 + i / 600) * rnd.uniform(0.8, 1.2)
+            await p.execute("INSERT INTO biz_daily (business, metric, day, value, unit, source_id) VALUES ($1, 'penjualan', $2, $3, 'rp', $4), ($1, 'pesanan', $2, $5, 'n', $4)", b, d, round(v), sid, round(v / 110_000))
+        sales = base * 0.62
+        for m, v, u in (("penjualan", sales, "rp"), ("pesanan", round(sales / 110_000), "n"), ("dikemas", round(sales / 110_000 * 0.74), "n"), ("pencairan", base * 0.5, "rp"),
+                        ("penjualan@Shopee", sales * 0.46, "rp"), ("penjualan@TikTok Shop", sales * 0.31, "rp"), ("penjualan@Tokopedia", sales * 0.18, "rp"), ("penjualan@Website", sales * 0.05, "rp")):
+            await p.execute("INSERT INTO biz_daily (business, metric, day, value, unit, source_id) VALUES ($1, $2, $3, $4, $5, $6)", b, m, today, round(v), u, sid)
+        if b == "Autotoko":
+            await p.execute("INSERT INTO biz_daily (business, metric, day, value, unit, source_id) VALUES ($1, 'mrr', $2, 48500000, 'rp', $3), ($1, 'toko_aktif', $2, 312, 'n', $3)", b, today, sid)
+    await p.execute("""INSERT INTO biz_insights (kind, business, key, data) VALUES ('alert', 'Renature', 'unpacked:Renature:x',
+        '{"tone": "amber", "title": "Renature: 6 pesanan belum dikemas", "text": "18 dari 24 pesanan sudah dikemas. Kejar sebelum kurir pick-up."}')""")
+    await p.execute("""INSERT INTO biz_insights (kind, business, data) VALUES ('strategy', 'Renature', '{"ringkasan": "Penjualan 30 hari naik 6% didorong TikTok Shop, tapi Minggu selalu turun ±15%. Rata-rata pesanan masih Rp110 rb.", "lane": "berat",
+        "minggu_ini": ["Live TikTok Sabtu 19.00 dengan bundling inhaler + mouth spray", "Voucher Minggu khusus pembeli ulang", "Naikkan iklan Shopee untuk inhaler eukaliptus"],
+        "strategi": [{"judul": "Bundling inhaler + mouth spray", "kenapa": "Rata-rata pesanan Rp110 rb; bundling mendorong ke Rp150 rb", "langkah": ["Buat paket 2+1", "Pasang di semua kanal lewat Autotoko"], "dampak": "+8–12% omzet", "usaha": "rendah", "ukur": "AOV ≥ Rp140 rb"}],
+        "risiko": ["Stok mouth spray menipis"]}')""")
+    await p.execute("""INSERT INTO biz_insights (kind, data) VALUES ('opportunity', '{"peluang": [
+        {"judul": "Aromaterapi roll-on untuk pekerja kantor", "ringkasan": "Pencarian roll-on aromaterapi naik 40% dalam 3 bulan; cocok dengan rantai pasok Renature.", "kenapa_sekarang": "Tren self-care & musim hujan", "modal": "Rp15–25 jt", "potensi": "Rp20–40 jt/bln", "cocok": "Bahan & maklon sama dengan inhaler; jual lewat Autotoko", "skor": 8, "langkah_pertama": "Uji 100 pcs di TikTok Shop", "sumber": ["https://trends.google.com/trends/explore?q=roll%20on%20aromaterapi"]},
+        {"judul": "Modul Autotoko untuk reseller herbal", "ringkasan": "Paket SaaS khusus brand herbal kecil: katalog BPOM, stok multi-gudang.", "kenapa_sekarang": "Banyak UMKM herbal pindah ke marketplace", "modal": "Rp5 jt (pengembangan)", "potensi": "30 toko × Rp299 rb", "cocok": "Memakai Autotoko yang sudah ada", "skor": 7, "langkah_pertama": "Wawancara 5 penjual herbal", "sumber": []}]}')""")
 
 
 async def cdp(ws, method, params=None, _id=[0]):

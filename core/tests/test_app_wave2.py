@@ -33,6 +33,12 @@ def test_krl_trips_direct_with_a_change_and_to_a_terminus():
     assert krl.find_station("bogor", st)["id"] == "BOO" and krl.find_station("sudir", st)["id"] == "SUD" and krl.find_station("", st) is None
 
 
+def test_trip_times_across_midnight_keep_their_order():
+    from app import commute
+    assert commute.after_ref("00:10", 23 * 60 + 40) == 1450 and commute.after_ref("23:55", 23 * 60 + 40) == 1435
+    assert commute.after_ref("06:10", 5 * 60 + 50) == 370                                          # an ordinary morning is untouched
+
+
 def test_trip_options_and_the_usual_train():
     from app import commute
     trains = [{"train": "A", "dep": 452, "arr": 518, "legs": 2, "route": "R · ganti di MRI", "change": {"hub": "MRI", "arr": 505, "dep": 510}},

@@ -26,6 +26,10 @@ DEFAULTS: dict[str, dict] = {
     "music": {"moods": {"fokus": "lofi fokus kerja", "semangat": "lagu semangat pagi", "olahraga": "musik olahraga energik",
                         "santai": "lagu santai akustik", "tidur": "musik tidur tenang"}},
     "home": {"hidden": []},
+    "bisnis": {"businesses": ["Autotoko", "Renature"], "alerts": True, "behind_pct": 60, "unpacked_after": "14:00",
+               "profile": "Pemilik Autotoko (SaaS omnichannel marketplace untuk penjual online) dan Renature (jualan online inhaler, mouth spray, produk herbal); "
+                          "juga karyawan kantor di Jakarta, tinggal di Bogor.",
+               "strategy_day": 0, "strategy_at": "07:30", "opportunity_day": 5, "opportunity_at": "09:00"},
     "quran": {"qari": "05", "target_date": "", "translation": True,
               "routines": [{"surah": 67, "time": "20:30", "days": [0, 1, 2, 3, 4, 5, 6]}, {"surah": 18, "time": "07:00", "days": [4]}]},
 }
