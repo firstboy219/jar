@@ -1373,6 +1373,8 @@ out, exchanges ideas and understands context.
   commands and small talk stay on `ngobrol`.
 - **Reading aloud** ("bacakan …", answered without the chat model): a web page (link), the news (Google News, directly — no worker any more),
   a note, a document, the latest report, what is on the shared screen / attached; or something written first (a poem, a story — `diskusi`).
-  Read in pieces of about a minute, sentence by sentence; "lanjut" reads on.
+  The summary comes first (`ringan`, 2–3 sentences) and JARVIS asks "Mau kubacakan detailnya?" (owner, 2026-10-29): "ya / boleh / bacakan
+  detailnya" reads the details in pieces of about a minute, sentence by sentence, "lanjut" reads on, "tidak / cukup" leaves it. Something
+  short (< 450 characters) or written on request (a poem, a story) is simply read.
 - **Understanding context**: a long conversation is summarised (`session_summaries`, `ringan`) beyond the 16 turns the model sees word for
   word and the summary is in front of the model; a new conversation starts with what the previous one (≤ 3 days) was about.

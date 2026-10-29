@@ -43,17 +43,42 @@ def test_long_text_is_read_in_pieces_at_the_end_of_a_sentence():
 
 
 @needs_db
-async def test_reading_goes_on_where_it_stopped(pool, monkeypatch):
-    from app import companion, quick
+async def test_reading_starts_with_a_summary_and_asks_before_the_details(pool, monkeypatch):
+    from app import companion, llm, quick
+
     async def page(url, chars=2500):
-        return "Paragraf. " * 400
+        return "Paragraf panjang tentang ekonomi. " * 120
+
+    async def summary(messages, **k):
+        assert k["category"] == "ringan"
+        return "Artikel ini membahas ekonomi: inflasi turun dan rupiah menguat."
     monkeypatch.setattr(quick, "page_text", page)
+    monkeypatch.setattr(llm, "complete", summary)
     first = await companion.read_turn({"kind": "url", "arg": "https://a.b/c"}, "s-baca")
-    assert first.endswith("Mau kulanjutkan?") and companion.reading_left("s-baca")
+    assert first == "Artikel ini membahas ekonomi: inflasi turun dan rupiah menguat. Mau kubacakan detailnya?"
+    assert companion.detail_offered("s-baca") and not companion.reading_left("s-baca")
+    assert companion.read_request("ya, bacakan detailnya", False, True) == {"kind": "detail", "arg": ""}
+    detail = await companion.read_turn(companion.read_request("ya", False, True), "s-baca")
+    assert detail.startswith("Paragraf panjang") and detail.endswith("Mau kulanjutkan?") and companion.reading_left("s-baca")
     nxt = await companion.read_turn(companion.read_request("lanjutkan", True), "s-baca")
-    assert nxt.startswith("Paragraf.")
+    assert nxt.startswith("Paragraf panjang")
+    await companion.read_turn({"kind": "url", "arg": "https://a.b/c"}, "s-baca")
+    assert companion.read_request("nggak usah", False, True) == {"kind": "decline", "arg": ""}
+    assert await companion.read_turn({"kind": "decline", "arg": ""}, "s-baca") == "Oke, cukup ringkasannya saja."
+    assert not companion.detail_offered("s-baca")
     nothing = await companion.read_turn({"kind": "note", "arg": "tidak ada sama sekali"}, "s-baca")
     assert "tidak menemukan" in nothing
+
+
+def test_yes_and_no_after_a_summary():
+    from app import companion
+    r = companion.read_request
+    for yes in ("ya", "iya", "boleh", "oke", "lanjut", "bacakan detailnya", "ya bacakan semuanya", "baca lengkapnya dong", "mau"):
+        assert r(yes, False, True) == {"kind": "detail", "arg": ""}, yes
+    for no in ("tidak", "nggak usah", "cukup", "nanti saja"):
+        assert r(no, False, True) == {"kind": "decline", "arg": ""}, no
+    assert r("ya", False, False) is None                                    # nothing was offered: just a "ya"
+    assert r("menurutmu inflasinya bagaimana?", False, True) is None        # a question about it goes to the conversation
 
 
 @needs_db
