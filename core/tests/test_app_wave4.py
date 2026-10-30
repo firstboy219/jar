@@ -256,7 +256,12 @@ async def test_wave4_screens_get_real_answers(pool, monkeypatch):
         assert (await c.get("/api/v1/app/bisnis", headers=h)).json()["businesses"] == []
         meta = (await c.get("/api/v1/app/bisnis/sources", headers=h)).json()
         assert meta["sources"] == [] and meta["businesses"] == ["Autotoko", "Renature"] and any(m["metric"] == "dikemas" for m in meta["metrics"])
-        bad = await c.post("/api/v1/app/bisnis/sources", json={**SOURCE, "base_url": "http://api.renature.id"}, headers=h)
+        from app import appauth
+
+        async def check(pw):
+            return 200 if pw == "pw-admin" else 401
+        monkeypatch.setattr(appauth, "_check", check)
+        bad = await c.post("/api/v1/app/bisnis/sources", json={**SOURCE, "base_url": "http://api.renature.id", "admin_password": "pw-admin"}, headers=h)
         assert bad.status_code == 409 and "https" in bad.json()["detail"]
         assert (await c.post("/api/v1/app/bisnis/strategy", json={"business": "Renature"}, headers=h)).status_code == 409
         assert (await c.get("/api/v1/app/bisnis/opportunities", headers=h)).json() == {"batches": [], "running_task": None}

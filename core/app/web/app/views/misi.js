@@ -52,7 +52,7 @@ function resultsView(ms) {
 
 function detailView(t) {
   const lane = LANE_OF_RUNTIME[t.runtime] || t.runtime;
-  const steps = (t.plan?.steps || []);
+  const steps = Array.isArray(t.plan) ? t.plan.map((x) => (typeof x === 'string' ? x : x?.text || x?.step || '')).filter(Boolean) : (t.plan?.steps || []);   // Hermes keeps the plan as a list of steps
   const live = t.station?.steps || [];
   const doneSteps = t.status === 'completed' ? steps.length : Math.min(steps.length, Math.floor((pct(live.length, Math.max(live.length + 2, steps.length * 2)) / 100) * steps.length));
   const left = t.status === 'running' && doneSteps > 0 && steps.length > doneSteps ? Math.round((t.seconds / doneSteps) * (steps.length - doneSteps) / 60) : null;

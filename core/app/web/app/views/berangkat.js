@@ -58,9 +58,9 @@ export default {
     const w = p.weather;
     root.innerHTML = String(html`${header(title, { sub: `${p.from.name} → ${p.to.name} · disusun ${hm(p.made_at.slice(11, 16))}`, right: html`<button class="ib box" data-act="replan" aria-label="Susun ulang">${icon('repeat', 18)}</button>` })}
       <div class="scr">
-        ${w ? html`<span class="ctx">${w.temp}°C ${w.text}${p.rain_note ? ` · ${p.rain_note}` : ''}</span>` : ''}
+        <span class="ctx">${icon('clock', 13)} ${state.dir === 'out' ? `Target tiba di kantor sebelum ${hm(s.arrive_before)}` : `Pulang setelah ${hm(s.leave_after)}`}${w ? ` · ${w.temp}°C ${w.text}${p.rain_note ? ` · ${p.rain_note}` : ''}` : ''}</span>
         ${(p.errands || []).length ? html`<div class="card amber"><span class="k amber">Titipan pulang</span>${p.errands.map((x) => html`<span class="sub">• ${x}</span>`)}<span class="small">Masuk ke langkah perjalananmu.</span></div>` : ''}
-        ${state.dir === 'out' && music ? html`<div class="card violet"><div class="row sb"><span class="k violet">${icon('music', 14)} Musik pagi</span>${music.now ? html`<span class="small">${music.now.title}</span>` : ''}</div>
+        ${state.dir === 'out' && music ? html`<div class="card violet"><div class="row sb"><span class="k violet">${icon('music', 14)} Musik pagi</span>${music.now ? html`<span class="small">${music.now.title}${music.now.playlist ? ` · ${music.now.playlist.index + 1}/${music.now.playlist.total}` : ''}</span>` : ''}</div>
           <div class="chips">${Object.keys(music.moods).map((m) => html`<button class="chip ${m === music.usual.mood ? 'on' : ''}" data-act="mood" data-m="${m}">${m}</button>`)}</div></div>` : ''}
         ${p.no_places?.length ? html`<div class="card amber"><span class="small">Tempat ${p.no_places.join(' & ')} belum diketahui — waktu naik GoRide masih perkiraan. Tandai di Kontrol.</span></div>` : ''}
         ${p.options.length ? p.options.map((o, i) => optionCard(o, i, p.best, state.dir)) : html`<div class="card"><p>Tidak ada KRL yang cocok dari jam ini.</p></div>`}

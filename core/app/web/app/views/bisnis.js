@@ -28,6 +28,7 @@ function business(b) {
     ${b.channels.length ? html`<div class="card"><span class="k">Per kanal</span>${b.channels.map((c) => html`<div class="row" style="font-size:13px">
       <span style="width:96px;color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.name}</span><div class="bar grow" style="height:8px"><i style="width:${Math.round(100 * c.value / chMax)}%"></i></div>
       <span class="mono" style="min-width:64px;text-align:right">${c.metric === 'penjualan' ? rupiah(c.value, true) : Math.round(c.value)}</span></div>`)}</div>` : ''}
+    ${(b.payouts || []).length ? html`<div class="card"><span class="k">Pencairan per kanal</span>${b.payouts.map((c) => html`<div class="row sb" style="font-size:13px"><span style="color:var(--tx2)">${c.name}</span><span class="mono">${rupiah(c.value, true)}</span></div>`)}</div>` : ''}
     ${other.length ? html`<div class="g2">${other.map(kpi)}</div>` : ''}
     ${b.strategy ? html`<a class="card violet" href="#/tren?b=${encodeURIComponent(b.name)}" style="text-decoration:none"><span class="k violet">Strategi minggu ini</span><span class="sub">${b.strategy.ringkasan || ''}</span>
       ${(b.strategy.minggu_ini || []).slice(0, 3).map((x) => html`<span class="small">• ${x}</span>`)}</a>` : ''}

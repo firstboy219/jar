@@ -54,6 +54,27 @@ async def _routine_info(app: str, goal: str) -> dict | None:
     return None
 
 
+def fare_of(goal: str, trip: dict | None) -> int | None:
+    """What a Gojek ride in this run should cost: the price written in the goal, else the trip plan's estimate for the ride/car. Pure."""
+    import re
+    m = re.search(r"Rp\.?\s?([\d.]{4,})", goal or "")
+    if m:
+        return int(m.group(1).replace(".", ""))
+    if not trip:
+        return None
+    chosen, plan = trip.get("chosen") or {}, trip.get("plan") or {}
+    if re.search(r"gocar|go-car|mobil", goal or "", re.I):
+        return (plan.get("car") or {}).get("cost")
+    return ((chosen.get("ride") or {}).get("cost")) if re.search(r"goride|go-ride|ojek|motor", goal or "", re.I) else None
+
+
+async def _fare(app: str, goal: str) -> int | None:
+    if app != "gojek":
+        return None
+    row = await db.pool().fetchrow("SELECT plan, chosen FROM commute_trips WHERE created_at > now() - interval '6 hours' ORDER BY id DESC LIMIT 1")
+    return fare_of(goal, dict(row) if row else None)
+
+
 def recommend(options: list[dict], past: list[dict]) -> int | None:
     """The option he usually picks (the same label, or the same time, most often before). Pure."""
     if not past:
@@ -83,6 +104,7 @@ async def listing() -> list[dict]:
     for r in await phone_agent.pending():
         it = phone_item(r)
         it["routine"] = await _routine_info(r["app"], r["goal"])
+        it["estimate"] = await _fare(r["app"], r["goal"])
         out.append(it)
     for c in await project_flow.open_choices():
         it = choice_item(c)

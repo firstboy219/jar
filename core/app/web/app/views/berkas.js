@@ -1,10 +1,10 @@
 // Berkas & PDF (mockup 6): pick files, pick a tool — merge, take pages, compress, rotate, lock, to pictures / Word / text, pictures or Word
 // to PDF — and download the result; or ask what a document says. Files are kept 30 days; results are in Dokumen.
-import { $, api, get, header, html, icon, loading, post, render, sheet, toast } from '../core.js';
+import { $, api, get, header, html, icon, loading, on, post, render, sheet, toast } from '../core.js';
 import { laneChip } from '../ui.js';
 import { pick, upload } from '../upload.js';
 
-let files = [], tool = null, meta = null, last = null;
+let files = [], tool = null, meta = null, last = null, busy = null;
 const kb = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
 const ACCEPT = { pdf: 'application/pdf,.pdf', image: 'image/*', docx: '.docx' };
 
@@ -38,7 +38,7 @@ export default {
         <div class="g2">${meta.tools.map((x) => html`<button class="card ${x.op === tool ? 'sel' : ''}" data-act="tool" data-op="${x.op}" style="text-align:left;cursor:pointer;padding:10px 12px">
           <span class="ttl" style="font-size:13px">${x.label}</span><span class="small">${x.kinds.join('/')}${x.count === 'many' ? ' · beberapa' : ''}</span></button>`)}</div>
         ${t ? html`<div class="card cyan"><span class="k cyan">${t.label}</span>
-          <div class="list">${files.map((f, i) => html`<div class="li"><span class="ico">${icon(f.kind === 'image' ? 'camera' : 'file', 16)}</span><div class="grow"><div style="font-size:14px">${f.name}</div><div class="small">${kb(f.size)} · ${f.kind}</div></div>
+          <div class="list">${files.map((f, i) => html`<div class="li"><span class="ico">${icon(f.kind === 'image' ? 'camera' : 'file', 16)}</span><div class="grow"><div style="font-size:14px">${f.name}</div><div class="small">${kb(f.size)} · ${f.kind}${f.pages ? ` · ${f.pages} halaman` : ''}${f.scanned ? html` · <span class="t-amber2">hasil scan — teks dibaca mata JARVIS</span>` : ''}${f.encrypted ? ' · terkunci password' : ''}</div></div>
             <button class="ib sm" data-act="rm" data-i="${i}" aria-label="Buang">${icon('close', 14)}</button></div>`)}</div>
           <button class="btn" data-act="add">${icon('upload', 16)} ${files.length ? 'Tambah berkas' : 'Pilih berkas'}</button>
           ${['pisah', 'putar'].includes(t.op) ? html`<label class="field">Halaman (mis. 1-3, 5)<input id="pages" placeholder="${t.op === 'putar' ? 'semua' : '1-3'}"></label>` : ''}
@@ -49,6 +49,8 @@ export default {
           ${t.op === 'cek_klausul' ? html`<span class="small">Dibaca otak berat (model berbayar): klausul berisiko, kewajibanmu, tanggal penting, dan yang perlu ditanyakan dulu.</span>` : ''}
           ${t.op === 'kunci' ? html`<label class="field">Password untuk membuka PDF<input id="pw" type="password" minlength="4" autocomplete="new-password"></label>` : ''}
           <button class="btn primary lg" data-act="run" ${files.length ? '' : 'disabled'}>Kerjakan</button></div>` : html`<p class="small" style="padding:0 4px">Pilih alat di atas.</p>`}
+        ${busy ? html`<div class="card violet"><div class="row sb"><span class="k violet">Sedang dikerjakan</span><span class="dot violet live"></span></div><span class="small" id="busytxt">${busy.text}</span>
+          ${busy.total ? html`<div class="bar"><i style="width:${Math.round((100 * busy.done) / busy.total)}%"></i></div>` : ''}</div>` : ''}
         ${last?.analysis ? clauseCard(last.analysis) : ''}
         ${files.length === 1 && ['pdf', 'docx', 'text', 'xlsx', 'pptx'].includes(files[0].kind) ? html`<div class="card"><span class="k">Tentang ${files[0].name}</span>
           <div class="btns"><button class="btn" data-act="summary">${icon('bolt', 16)} Ringkas</button><button class="btn" data-act="ask">Tanya isinya</button></div><div id="fout"></div></div>` : ''}
@@ -57,6 +59,7 @@ export default {
           ${r.document_id ? html`<button class="ib sm" data-act="dl" data-id="${r.document_id}" data-n="${(r.title || 'berkas')}.${r.format}" aria-label="Unduh">${icon('down', 16)}</button>` : ''}</div>`)}</div>` : ''}
         <p class="small" style="padding:0 4px">Diproses di server JARVIS (tanpa AI, lewat alur master); ringkasan & tanya jawab memakai otak ringan dan tidak ke model gratis.</p>
       </div>`);
+    return on('files', (e) => { if (!busy) return; busy = e; const t = $('#busytxt'); if (t) render(); });
   },
   actions: {
     tool(b) { tool = b.dataset.op; files = files.filter((f) => meta.tools.find((x) => x.op === tool).kinds.includes(f.kind)); render(); },
@@ -67,14 +70,17 @@ export default {
       if (!picked.length) return;
       toast(`Mengunggah ${picked.length} berkas…`);
       const got = await upload(picked);
+      await Promise.all(got.map(async (f) => { try { Object.assign(f, await get(`/api/v1/app/files/${f.id}/info`)); } catch { /* info is a nicety */ } }));
       files = t.count === 'one' ? got.slice(-1) : [...files, ...got];
       render();
     },
     async run() {
       const ordered = tool === 'tanda_tangan' ? [...files.filter((f) => f.kind === 'pdf'), ...files.filter((f) => f.kind === 'image')] : files;
       const body = { op: tool, ids: ordered.map((f) => f.id), pages: $('#pages')?.value || '', degrees: Number($('#deg')?.value || 90), password: $('#pw')?.value || '', lang: $('#lang')?.value || 'id' };
-      toast(['terjemah', 'cek_klausul'].includes(tool) ? 'Dibaca otak JARVIS… bisa semenit' : 'Mengerjakan…');
-      const r = last = await post('/api/v1/app/files/run', body);
+      busy = { text: ['terjemah', 'cek_klausul'].includes(tool) ? 'Dibaca otak JARVIS… bisa semenit' : 'Mengerjakan…', done: 0, total: 0 };
+      render();
+      let r;
+      try { r = last = await post('/api/v1/app/files/run', body); } finally { busy = null; }
       toast(`${r.label} selesai · ${kb(r.before)} → ${kb(r.after)}`);
       if (!r.analysis) await download(r.document.id, r.document.download_name);
       files = []; render();

@@ -313,16 +313,38 @@ class ModeIn(BaseModel):
 
 class HabitIn(BaseModel):
     title: str = Field(min_length=3, max_length=120)
-    at: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    type: str = Field(default="time", pattern="^(time|arrive|leave|calendar)$")
+    at: str = Field(default="", pattern=r"^(([01]\d|2[0-3]):[0-5]\d)?$")
+    place: str = Field(default="", max_length=40)
+    after: str = Field(default="", pattern=r"^(([01]\d|2[0-3]):[0-5]\d)?$")
+    before_min: int = Field(default=5, ge=1, le=120)
     days: list[int] = Field(default_factory=lambda: WORKDAYS)
     action: str = Field(max_length=60)
     mode: str = Field(default="ask", pattern="^(auto|ask|off)$")
 
 
+def trigger_of(body: HabitIn) -> dict:
+    """The trigger he described: a time on some days, arriving at / leaving a place (after a time), or a calendar event about to start. Pure."""
+    days = sorted({d for d in body.days if 0 <= d <= 6})
+    if body.type == "time":
+        if not body.at:
+            raise ValueError("isi jamnya")
+        return {"type": "time", "at": body.at, "days": days}
+    if body.type == "calendar":
+        return {"type": "calendar", "before": body.before_min, **({"place": body.place} if body.place else {})}
+    if not body.place:
+        raise ValueError("pilih tempatnya")
+    return {"type": body.type, "place": body.place, "days": days, **({"after": body.after} if body.after else {})}
+
+
 @router.get(API)
 async def api_list(device: dict = Depends(owner)):
     from . import places
-    return {"habits": await listing(), "places": await places.listing(), "actions": {k: v[0] for k, v in ACTIONS.items() if not k.startswith("open:")}}
+    fired = {r["action"]: r["n"] for r in await db.pool().fetch(
+        """SELECT action, count(DISTINCT (started_at AT TIME ZONE 'Asia/Jakarta')::date) AS n FROM flow_runs
+           WHERE feature = 'kebiasaan' AND started_at > now() - interval '15 days' GROUP BY action""")}
+    return {"habits": [{**h, "fired_days": fired.get(h["action"], 0)} for h in await listing()], "places": await places.listing(),
+            "actions": {k: v[0] for k, v in ACTIONS.items() if not k.startswith("open:")}}
 
 
 @router.put(API + "/{habit_id}/mode")
@@ -347,8 +369,11 @@ async def api_decide(habit_id: int, decision: str, device: dict = Depends(owner)
 async def api_add(body: HabitIn, device: dict = Depends(owner)):
     if body.action not in ACTIONS:
         raise HTTPException(422, "aksi tidak dikenal")
-    days = sorted({d for d in body.days if 0 <= d <= 6})
+    try:
+        trig = trigger_of(body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
     row = await db.pool().fetchrow(
         """INSERT INTO habits (key, title, trigger, action, mode, source) VALUES ($1, $2, $3, $4, $5, 'owner') RETURNING *""",
-        f"owner:{datetime.now(WIB).timestamp():.0f}", body.title, {"type": "time", "at": body.at, "days": days}, body.action, body.mode)
+        f"owner:{datetime.now(WIB).timestamp():.0f}", body.title, trig, body.action, body.mode)
     return dict(row)

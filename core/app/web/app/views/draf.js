@@ -40,7 +40,10 @@ export default {
         <label class="field">Mau bilang apa? (opsional)<input id="ins" placeholder="mis. setuju, tapi minta mundur ke Jumat" maxlength="600"></label>
         <button class="btn" data-act="write">${icon('bolt', 16)} ${it.draft?.body ? 'Tulis ulang' : 'Tulis draf'}</button>
         <label class="field">Draf<textarea id="body" style="min-height:260px" placeholder="Draf akan muncul di sini…">${it.draft?.body || ''}</textarea></label>
-        ${cur.lane ? html`<span class="small">Ditulis oleh ${laneChip(cur.lane)} lewat alur master${it.draft?.context ? ` · konteks: email ini${it.draft.context.samples ? `, ${it.draft.context.samples} contoh gayamu` : ''}${it.draft.context.facts ? `, ${it.draft.context.facts} fakta tentangmu` : ''}${it.draft.context.instruction ? ', arahanmu' : ''}` : ''}</span>` : ''}
+        ${cur.lane ? html`<span class="small">Ditulis oleh ${laneChip(cur.lane)} lewat alur master${it.draft?.context ? ` · konteks: email ini${it.draft.context.samples ? `, ${it.draft.context.samples} contoh gayamu` : ''}${it.draft.context.instruction ? ', arahanmu' : ''}` : ''}</span>
+          ${(it.draft?.context?.earlier || []).length || (it.draft?.context?.fact_list || []).length ? html`<details><summary class="small">Yang dipakai</summary>
+            ${(it.draft.context.earlier || []).map((x) => html`<span class="small">✉ email sebelumnya: ${x}</span>`)}${(it.draft.context.fact_list || []).map((x) => html`<span class="small">• ${x}</span>`)}</details>` : ''}` : ''}
+        ${it.draft?.needs_attachment && !(cur.files || []).length ? html`<div class="card amber"><span class="small">Emailnya menyebut “${it.draft.needs_attachment}” — sepertinya balasan perlu lampiran.</span><button class="btn sm" data-act="attach">${icon('upload', 14)} Lampirkan berkas</button></div>` : ''}
         ${it.source === 'outlook' ? html`<div class="row" style="gap:6px;flex-wrap:wrap">${(cur.files || []).map((f, i) => html`<span class="chip">📎 ${f.name}<button class="ib sm" data-act="unattach" data-i="${i}" aria-label="Buang">${icon('close', 12)}</button></span>`)}
           <button class="chip" data-act="attach">${icon('upload', 13)} Lampirkan</button></div>` : ''}
         ${sent ? html`<div class="card green"><span class="k green">Terkirim</span></div>` : html`<div class="btns">

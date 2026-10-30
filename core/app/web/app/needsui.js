@@ -24,6 +24,7 @@ export function itemCard(it, compact = false) {
       <div class="grow"><div class="ttl">${it.title}</div><div class="sub">${it.sub}</div></div>
       ${it.expires_in_s ? html`<span class="mono small">${Math.ceil(it.expires_in_s / 60)} mnt</span>` : ''}</div>
     ${it.kind === 'phone' && (r.dari || r.ke) ? html`<div class="row" style="gap:8px;font-size:13px">${icon('pin', 14)}<span>${r.dari || '?'}</span>${icon('right', 12)}<span>${r.ke || '?'}</span></div>` : ''}
+    ${it.kind === 'phone' && it.estimate ? html`<span class="small">${icon('wallet', 12)} perkiraan tarif ±Rp${Number(it.estimate).toLocaleString('id-ID')} — dibatalkan bila jauh berbeda</span>` : ''}
     ${it.kind === 'phone' && it.routine ? html`<span class="small" style="color:var(--green-t)">${icon('repeat', 12)} rutin "${it.routine.name}" · ${it.routine.steps} langkah · berhasil ${it.routine.ok}/${it.routine.runs}× — diputar tanpa AI</span>` : ''}
     ${it.kind === 'phone' && !compact ? html`<div class="card" style="background:var(--bg2)">${(it.rules || ['Hanya aplikasi itu · tanpa top-up/transfer · berhenti di layar PIN/OTP']).map((x) => html`<span class="small">${icon('shield', 12, 'var(--green)')} ${x}</span>`)}</div>` : ''}
     ${actions}

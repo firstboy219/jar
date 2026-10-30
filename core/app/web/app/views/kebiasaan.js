@@ -30,7 +30,7 @@ export default {
         <div class="chips"><button class="chip ${tab === 'kerja' ? 'on' : ''}" data-act="tab" data-k="kerja">Hari kerja</button><button class="chip ${tab === 'libur' ? 'on' : ''}" data-act="tab" data-k="libur">Akhir pekan</button></div>
         <div class="list">${act.map((h) => { const w = when(h.trigger); const m = MODES[h.mode]; return html`<div class="li">
           <div style="width:58px;display:flex;flex-direction:column"><span class="mono" style="font-size:13px">${w.top}</span><span style="font-size:10px;letter-spacing:.08em;color:var(--mu)">${w.sub}</span></div>
-          <div class="grow"><div class="ttl" style="font-weight:500;font-size:13px">${h.title}</div><div class="small">${h.seen ? `${h.seen} dari ${h.of_days} hari` : (h.source === 'builtin' ? 'bawaan' : h.source)}${h.last_fired ? ` · terakhir ${new Date(h.last_fired).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}` : ''}</div></div>
+          <div class="grow"><div class="ttl" style="font-weight:500;font-size:13px">${h.title}</div><div class="small">${h.seen ? `${h.seen} dari ${h.of_days} hari` : h.fired_days ? `jalan ${h.fired_days} dari 15 hari terakhir` : (h.source === 'builtin' ? 'bawaan · belum jalan 15 hari ini' : 'baru')}${h.last_fired ? ` · terakhir ${new Date(h.last_fired).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}` : ''}</div></div>
           <button class="chip" style="color:var(--${m[1] === 'muted' ? 'mu' : m[1]})" data-act="mode" data-id="${h.id}" data-next="${NEXT[h.mode]}">${m[0]}</button></div>`; })}</div>
         <div class="card"><span class="k muted">Tempatmu</span>${data.places.length ? data.places.map((p) => html`<span class="small">${p.name} · ${p.source === 'owner' ? 'diatur kamu' : 'dipelajari dari lokasi'}</span>`) : html`<span class="small">Belum ada. Rumah &amp; kantor dipelajari dari lokasi HP (izinkan lokasi), atau tandai di Kontrol.</span>`}
           <a class="small t-cyan" href="#/kontrol">Atur tempat →</a></div>
@@ -46,13 +46,16 @@ export default {
       const opts = Object.entries(data.actions).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
       const r = await sheet(`<form style="display:flex;flex-direction:column;gap:12px"><span class="k cyan">Ajari kebiasaan baru</span>
         <label class="field">Nama<input name="title" required placeholder="mis. Rencana pulang lebih awal tiap Jumat"></label>
-        <label class="field">Jam<input name="at" type="time" required value="16:30"></label>
-        <label class="field">Hari (0=Sen … 6=Min, pisah koma)<input name="days" value="4"></label>
+        <label class="field">Kapan<select name="type"><option value="time">Jam tertentu</option><option value="arrive">Saat sampai di tempat</option><option value="leave">Saat keluar dari tempat</option><option value="calendar">Sebelum rapat di kalender</option></select></label>
+        <div class="g2"><label class="field">Jam (untuk "jam tertentu")<input name="at" type="time" value="16:30"></label><label class="field">Tempat<select name="place"><option value="">—</option>${data.places.map((p) => `<option>${p.name}</option>`).join('')}</select></label></div>
+        <div class="g2"><label class="field">Hanya setelah jam (opsional)<input name="after" type="time"></label><label class="field">Menit sebelum rapat<input name="before_min" type="number" min="1" max="120" value="5"></label></div>
+        <label class="field">Hari (0=Sen … 6=Min, pisah koma)<input name="days" value="0,1,2,3,4"></label>
         <label class="field">Yang dikerjakan<select name="action">${opts}</select></label>
         <label class="field">Mode<select name="mode"><option value="ask">Tanya dulu</option><option value="auto">Otomatis</option></select></label>
         <button class="btn primary">Simpan</button></form>`);
       if (!r?.title) return;
-      await post('/api/v1/app/habits', { title: r.title, at: r.at, days: r.days.split(',').map((x) => Number(x.trim())).filter((x) => x >= 0 && x <= 6), action: r.action, mode: r.mode });
+      await post('/api/v1/app/habits', { title: r.title, type: r.type, at: r.type === 'time' ? r.at : '', place: r.place || '', after: r.after || '', before_min: Number(r.before_min) || 5,
+        days: r.days.split(',').map((x) => Number(x.trim())).filter((x) => x >= 0 && x <= 6), action: r.action, mode: r.mode });
       toast('Kebiasaan ditambahkan.'); render();
     },
   },

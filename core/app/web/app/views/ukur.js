@@ -5,7 +5,7 @@ import { laneChip } from '../ui.js';
 import { pick, upload } from '../upload.js';
 
 let look = null, paint = null;
-const MODES = [['ukur', 'Ukur'], ['kenali', 'Kenali'], ['baca', 'Baca teks'], ['terjemah', 'Terjemahkan'], ['cat', 'Hitung cat']];
+const MODES = [['ukur', 'Ukur'], ['kenali', 'Kenali'], ['baca', 'Baca teks'], ['terjemah', 'Terjemahkan'], ['tanya', 'Tanya'], ['cat', 'Hitung cat']];
 const m2 = (v) => `${String(v).replace('.', ',')} m`;
 const range = (r) => (r.min !== r.max ? `${m2(r.perkiraan)} (${String(r.min).replace('.', ',')}–${String(r.max).replace('.', ',')})` : m2(r.perkiraan));
 
@@ -13,7 +13,7 @@ const range = (r) => (r.min !== r.max ? `${m2(r.perkiraan)} (${String(r.min).rep
 function wallOf(m) {
   if (m.kind === 'ar') return m.data.tinggi ? [m.data.total, m.data.tinggi] : m.data.segmen.length === 2 ? m.data.segmen : null;
   const u = m.data.ukuran || {};
-  return u.lebar && u.tinggi ? [u.lebar.perkiraan, u.tinggi.perkiraan] : null;
+  return u.lebar && u.tinggi ? [u.lebar.perkiraan, u.tinggi.perkiraan, m.data.bukaan_m2 || 0] : null;
 }
 const paintCard = (p) => html`<div class="card amber"><span class="k amber">Kebutuhan cat</span><span class="mono" style="font-size:20px">${String(p.liter).replace('.', ',')} liter</span>
   <span class="small">dinding ${String(p.luas_m2).replace('.', ',')} m² · ${p.lapis} lapis · ±10 m²/liter/lapis</span><span class="small">≈ ${p.kaleng_5l} kaleng 5 L atau ${p.kaleng_2_5l} kaleng 2,5 L</span>
@@ -41,9 +41,10 @@ export default {
           <div class="row sb"><span class="ttl">${m.label}</span><span class="tag ${m.kind === 'ar' ? 'cyan' : 'violet'}">${m.kind === 'ar' ? 'AR' : `foto · yakin ${m.data.yakin}`}</span></div>
           ${m.kind === 'ar' ? html`<span class="mono" style="font-size:20px">${m2(m.data.total)}</span>${m.data.segmen.length > 1 ? html`<span class="small">${m.data.segmen.map(m2).join(' + ')}</span>` : ''}${m.data.luas ? html`<span class="small">luas ${String(m.data.luas).replace('.', ',')} m²</span>` : ''}${m.data.tinggi ? html`<span class="small">tinggi ${m2(m.data.tinggi)}</span>` : ''}`
             : html`${Object.entries(m.data.ukuran).map(([k, r]) => html`<div class="row sb"><span class="small">${k}</span><span class="mono">${range(r)}</span></div>`)}
+              ${m.data.luas_m2 ? html`<div class="row sb"><span class="small">luas bidang</span><span class="mono">${String(m.data.luas_m2).replace('.', ',')} m²${m.data.bukaan_m2 ? ` (pintu/jendela ${String(m.data.bukaan_m2).replace('.', ',')} m²)` : ''}</span></div>` : ''}
               ${m.data.acuan?.length ? html`<span class="small">acuan: ${m.data.acuan.join(', ')}</span>` : ''}${m.data.catatan ? html`<span class="small">${m.data.catatan}</span>` : ''}`}
           <div class="row sb"><span class="small">${new Date(m.created_at).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
-            ${wallOf(m) ? html`<button class="btn sm" data-act="paintOf" data-w="${wallOf(m)[0]}" data-h="${wallOf(m)[1]}">${icon('brush', 14)} Butuh cat berapa?</button>` : ''}</div></div>`)}`
+            ${wallOf(m) ? html`<button class="btn sm" data-act="paintOf" data-w="${wallOf(m)[0]}" data-h="${wallOf(m)[1]}" data-o="${wallOf(m)[2] || 0}">${icon('brush', 14)} Butuh cat berapa?</button>` : ''}</div></div>`)}`
           : html`<div class="card"><p class="sub">Belum ada hasil ukur.</p></div>`}
         <p class="small" style="padding:0 4px">Perkiraan dari foto memakai model penglihatan lewat alur master; selalu berupa rentang — untuk ukuran pasti, pakai AR atau meteran.</p>
       </div>`);
@@ -54,10 +55,15 @@ export default {
       const mode = b?.dataset.mode || 'ukur';
       const [f] = await pick({ accept: 'image/*', capture: true });
       if (!f) return;
-      if (['kenali', 'baca', 'terjemah'].includes(mode)) {
+      if (['kenali', 'baca', 'terjemah', 'tanya'].includes(mode)) {
+        let q = '';
+        if (mode === 'tanya') {
+          const v = await sheet(String(html`<form><label class="field">Tanya tentang foto ini<input name="q" required minlength="3" placeholder="mis. ini tanaman apa, perlu disiram berapa kali?"></label><div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Tanya</button></div></form>`));
+          if (!v?.q) return; q = v.q;
+        }
         toast('Mengunggah & membaca foto…');
         const [a] = await upload([f]);
-        look = await post('/api/v1/app/measure/photo', { attachment_id: a.id, mode });
+        look = await post('/api/v1/app/measure/photo', { attachment_id: a.id, mode, target: q });
         return render();
       }
       if (mode === 'cat') {
@@ -76,7 +82,7 @@ export default {
       toast(`${r.label}: ${Object.entries(r.ukuran).map(([k, x]) => `${k} ${range(x)}`).join(', ')}`);
       render();
     },
-    async paintOf(b) { paint = await post(`/api/v1/app/measure/paint?width=${b.dataset.w}&height=${b.dataset.h}`); render(); },
+    async paintOf(b) { paint = await post(`/api/v1/app/measure/paint?width=${b.dataset.w}&height=${b.dataset.h}&openings=${b.dataset.o || 0}`); render(); },
     async paintForm(b, e) {
       e?.preventDefault();
       const f = document.getElementById('pf'); if (!f.reportValidity()) return;

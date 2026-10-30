@@ -554,6 +554,7 @@ async def state() -> dict:
            ORDER BY r.id DESC LIMIT 20""")]
     week = await db.pool().fetchval("SELECT count(*) FROM job_applications WHERE applied_at > now() - interval '7 days'")
     counts = {k: sum(1 for a in apps if a["status"] == k) for k in ("applied", "viewed", "interview", "offer", "rejected", "applying", "failed")}
+    counts["seen"] = sum(counts[k] for k in ("viewed", "interview", "offer", "rejected"))   # HR opened it (whatever came after)
     return {"settings": s, "good": good, "applications": apps, "replies": replies, "week": week, "counts": counts,
             "ready": {"roles": bool(s["roles"]), "cv": bool(s["cv_attachment"] or s["profile"])},
             "last_round": await db.pool().fetchval("SELECT max(started_at) FROM flow_runs WHERE feature = 'karier' AND action = 'cari'")}

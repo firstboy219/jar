@@ -145,6 +145,43 @@ async def record(amount: float, merchant: str, ref: str, category: str | None = 
     return tid
 
 
+RECEIPT = re.compile(r"\b(struk|e-?receipt|receipt|invoice|tagihan anda|pembayaran (berhasil|diterima|sukses)|terima kasih (atas|telah) (pesanan|pembelian|berbelanja)|"
+                     r"pesanan (anda|kamu) (telah|sudah)|order (confirmed|completed)|bukti (pembayaran|transaksi))\b", re.I)
+TOTAL = re.compile(r"\b(?:total(?: pembayaran| tagihan| belanja| bayar)?|jumlah(?: dibayar| pembayaran)?|grand total|amount paid)\b\s*:?\s*(?:Rp\.?|IDR)\s*([\d.,]+)", re.I)
+
+
+def parse_receipt(sender: str, subject: str, text: str) -> dict | None:
+    """A purchase receipt in his email → {amount, merchant} (None when it is not one, or has no total). Pure."""
+    blob = f"{subject or ''}. {text or ''}"
+    if not RECEIPT.search(blob) or re.search(r"\b(top ?up|isi saldo|refund|pengembalian)\b", blob, re.I):
+        return None
+    m = TOTAL.search(blob)
+    amount = to_number(m.group(1)) if m else None
+    if not amount or amount <= 0:
+        return None
+    merchant = re.sub(r"\s*<.*", "", sender or "").strip() or "Email"
+    return {"amount": amount, "merchant": merchant[:60]}
+
+
+async def ingest_mail() -> int:
+    """Receipts in Outlook/Gmail → spending, unless the same amount was already recorded around then (a GoPay/bank notification)."""
+    last = (await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'money:last_mail'") or {}).get("id", 0)
+    rows = await db.pool().fetch("SELECT id, sender, subject, snippet, received_at FROM inbox_items WHERE id > $1 AND source IN ('outlook', 'gmail') ORDER BY id LIMIT 300", last)
+    new = 0
+    for r in rows:
+        rc = parse_receipt(r["sender"], r["subject"], r["snippet"])
+        if not rc:
+            continue
+        twin = await db.pool().fetchval("SELECT 1 FROM money_tx WHERE direction = 'out' AND amount = $1 AND at BETWEEN $2::timestamptz - interval '1 day' AND $2::timestamptz + interval '1 day' LIMIT 1",
+                                        rc["amount"], r["received_at"])
+        if not twin and await _insert(r["received_at"], rc["amount"], "out", rc["merchant"], "email", "Email", f"mail:{r['id']}", (r["subject"] or "")[:200]):
+            new += 1
+    top = max([r["id"] for r in rows], default=last)
+    if top != last:
+        await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ('money:last_mail', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", {"id": top})
+    return new
+
+
 async def ingest() -> dict:
     """New money notifications → transactions (a fixed procedure). The last notification looked at is remembered."""
     last = (await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'money:last_notif'") or {}).get("id", 0)
@@ -158,6 +195,7 @@ async def ingest() -> dict:
     top = max([r["id"] for r in rows], default=last)
     if top != last:
         await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ('money:last_notif', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", {"id": top})
+    new += await ingest_mail()
     alerts = await check_pots() if new else []
     return {"new": new, "seen": len(rows), "alerts": len(alerts)}
 
@@ -165,9 +203,11 @@ async def ingest() -> dict:
 @appclock.every(120, "money.ingest")
 async def tick() -> dict | None:
     last = (await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'money:last_notif'") or {}).get("id", 0)
-    if not await db.pool().fetchval("SELECT 1 FROM notifications WHERE id > $1 AND package = ANY($2) AND NOT sensitive LIMIT 1", last, list(MONEY_APPS)):
-        return None   # nothing new from a money app: no work to run
-    r = await master.run(master.Job("uang", "catat", "catat transaksi dari notifikasi GoPay/bank", trigger="event", skill=ingest))
+    last_mail = (await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'money:last_mail'") or {}).get("id", 0)
+    if not await db.pool().fetchval("SELECT 1 FROM notifications WHERE id > $1 AND package = ANY($2) AND NOT sensitive LIMIT 1", last, list(MONEY_APPS)) \
+            and not await db.pool().fetchval("SELECT 1 FROM inbox_items WHERE id > $1 AND source IN ('outlook', 'gmail') LIMIT 1", last_mail):
+        return None   # nothing new from a money app or the mail: no work to run
+    r = await master.run(master.Job("uang", "catat", "catat transaksi dari notifikasi GoPay/bank & struk email", trigger="event", skill=ingest))
     return r.get("result")
 
 

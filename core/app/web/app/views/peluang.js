@@ -26,7 +26,7 @@ export default {
     root.innerHTML = String(html`${header('Peluang baru')}<div class="scr">${loading()}</div>`);
     const d = await get('/api/v1/app/bisnis/opportunities');
     const [cur, ...old] = d.batches;
-    root.innerHTML = String(html`${header('Peluang baru', { sub: cur ? `riset ${new Date(cur.created_at).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' })}` : '' })}
+    root.innerHTML = String(html`${header('Peluang baru', { sub: cur ? `riset ${new Date(cur.created_at).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short' })}${cur.disaring ? ` · ${cur.disaring} ide disaring → ${cur.peluang.length}` : ''}` : '' })}
       <div class="scr">
         ${d.running_task ? html`<a class="card violet" href="#/misi/${d.running_task}" style="text-decoration:none"><div class="row sb"><span class="k violet">Hermes sedang riset</span><span class="dot violet live"></span></div>
           <span class="small">Membuka Google Trends, marketplace, dan berita industri… ketuk untuk lihat langsung.</span></a>`
@@ -36,7 +36,8 @@ export default {
           <span class="sub">${p.ringkasan}</span>
           ${p.kenapa_sekarang ? html`<span class="small"><b>Kenapa sekarang:</b> ${p.kenapa_sekarang}</span>` : ''}
           ${p.cocok ? html`<span class="small"><b>Cocok karena:</b> ${p.cocok}</span>` : ''}
-          <div class="row" style="gap:6px;flex-wrap:wrap">${p.modal ? html`<span class="tag">modal ${p.modal}</span>` : ''}${p.potensi ? html`<span class="tag green">potensi ${p.potensi}</span>` : ''}</div>
+          <div class="row" style="gap:6px;flex-wrap:wrap">${p.modal ? html`<span class="tag">modal ${p.modal}</span>` : ''}${p.potensi ? html`<span class="tag green">potensi ${p.potensi}</span>` : ''}
+            ${p.usaha ? html`<span class="tag ${p.usaha === 'rendah' ? 'green' : p.usaha === 'tinggi' ? 'red' : 'amber'}">usaha ${p.usaha}</span>` : ''}${p.balik_modal ? html`<span class="tag">balik modal ${p.balik_modal}</span>` : ''}</div>
           ${p.langkah_pertama ? html`<span class="small t-amber2">Langkah pertama: ${p.langkah_pertama}</span>` : ''}
           <div class="row" style="gap:8px;flex-wrap:wrap">${(p.sumber || []).map((u) => html`<a class="small" href="${u}" target="_blank" rel="noopener">${host(u)}</a>`)}</div>
           ${deep(p.riset)}

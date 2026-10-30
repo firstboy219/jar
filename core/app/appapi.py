@@ -167,7 +167,14 @@ async def _open_pages() -> list[dict]:
                       "sub": live.SLOT_WORD.get(slot, slot), "route": route, "image": item.get("thumbnail_url") or item.get("url") if slot == "image" else item.get("thumbnail_url")})
     if m := await meetings.desk_card():
         pages.append({"id": "meeting", "kind": "rapat", "title": m.get("title") or "Rapat", "sub": {"recording": "Merekam", "processing": "Diproses"}.get(m["state"], m["state"]),
-                      "route": "#/rapat"})
+                      "route": "#/rapat", **({"since": m["started_at"]} if m["state"] == "recording" and m.get("started_at") else {})})
+    from . import commute
+    if t := await commute.active():
+        chosen = t["chosen"] or {}
+        drv = next((e.get("data") for e in reversed(t["events"] or []) if e.get("kind") == "driver"), None) or {}
+        pages.append({"id": f"trip:{t['id']}", "kind": "perjalanan", "title": "Berangkat ke kantor" if t["direction"] == "out" else "Pulang ke rumah",
+                      "sub": (f"{drv.get('driver') or 'Driver'} {drv.get('plate') or ''} · {drv['eta_min']} mnt" if drv.get("eta_min") is not None
+                              else f"tiba ±{chosen.get('arrive', '')}" if chosen.get("arrive") else "berjalan").strip(), "route": "#/perjalanan"})
     for s in (await live.snapshot()).get("stations", []):
         if s["status"] in ("queued", "running"):
             pages.append({"id": f"task:{s['task_id']}", "kind": "misi", "title": s["title"], "sub": s.get("page_title") or s.get("thought") or "berjalan",

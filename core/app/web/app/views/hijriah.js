@@ -1,10 +1,10 @@
 // Kalender Islam (mockup 46): today's Hijri date, sunnah fasting, bekam days and feasts ahead (the Kemenag date; feasts await the isbat).
-import { get, header, html, loading, put, render, toast } from '../core.js';
+import { get, header, html, icon, loading, post, put, render, toast } from '../core.js';
 import { toggle } from '../ui.js';
 
 const DAY = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-let settings = null, monthOff = 0, showMonth = false;
+let settings = null, monthOff = 0, showMonth = false, bekamAsk = false;
 
 async function monthGrid() {
   const m = await get(`/api/v1/app/ibadah/month?offset=${monthOff}`);
@@ -21,6 +21,7 @@ export default {
   tab: 'beranda',
   async render(root, route) {
     if (route?.query?.bulan) showMonth = true;
+    bekamAsk = !!route?.query?.bekam;
     root.innerHTML = String(html`${header('Kalender Islam')}<div class="scr">${loading()}</div>`);
     const [c, s] = await Promise.all([get('/api/v1/app/ibadah/calendar?days=220'), get('/api/v1/app/settings/ibadah')]);
     settings = s;
@@ -41,10 +42,13 @@ export default {
         ${e.isbat ? html`<span class="tag">tunggu isbat</span>` : ''}</div>`; })}</div>
       <div class="card"><span class="k muted">Pengingat</span>
         <div class="row sb"><span style="font-size:13px">Puasa sunnah: bangunkan sahur ${settings.sahur_time}</span>${toggle(settings.sahur_reminder, 'toggle', 'data-k="sahur_reminder"')}</div>
-        <div class="row sb"><span style="font-size:13px">Hari bekam: ingatkan H-1 (19.00)</span>${toggle(settings.bekam_reminder, 'toggle', 'data-k="bekam_reminder"')}</div></div>
+        <div class="row sb"><span style="font-size:13px">Hari bekam: ingatkan H-1 (19.00)</span>${toggle(settings.bekam_reminder, 'toggle', 'data-k="bekam_reminder"')}</div>
+        <button class="btn ${bekamAsk ? 'primary' : ''}" data-act="bekam">${icon('search', 16)} Carikan klinik bekam terdekat</button>
+        <span class="small">Hermes mencari alamat, kontak, jam buka & harga; kamu yang menghubungi klinik.</span></div>
       <p class="small" style="padding:0 4px">Tanggal Hijriah mengikuti kalender Kemenag. Awal Ramadan, Syawal &amp; Dzulhijjah menunggu sidang isbat.</p></div>`);
   },
   actions: {
+    async bekam() { const r = await post('/api/v1/app/ibadah/bekam/find'); toast(r.task_id ? `Hermes mencari klinik (misi #${r.task_id})` : 'Pencarian dimulai'); },
     day(b) { toast(`${b.dataset.d}: ${b.dataset.ev}`); },
     month() { showMonth = !showMonth; monthOff = 0; render(); },
     prev() { monthOff -= 1; render(); },

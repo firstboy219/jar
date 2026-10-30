@@ -77,9 +77,12 @@ class AlarmActivity : ComponentActivity() {
         startRinging()
         setContent {
             var greeting by remember { mutableStateOf("") }
+            var prayer by remember { mutableStateOf("") }
             var loud by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) {
-                greeting = fetchGreeting() ?: "Selamat pagi. Waktunya bangun."
+                val w = fetchGreeting()
+                greeting = w?.optString("text")?.ifBlank { null } ?: "Selamat pagi. Waktunya bangun."
+                prayer = w?.let { prayerLine(it) }.orEmpty()
                 if (spec?.greeting != false) speak(greeting)
             }
             LaunchedEffect(Unit) {
@@ -87,7 +90,7 @@ class AlarmActivity : ComponentActivity() {
                 loud = true
                 escalate()
             }
-            AlarmFace(greeting, loud, spec?.snoozeMin ?: 5, onSnooze = { snooze(spec?.snoozeMin ?: 5) }, onAwake = { awake() })
+            AlarmFace(greeting, prayer, loud, spec?.snoozeMin ?: 5, onSnooze = { snooze(spec?.snoozeMin ?: 5) }, onAwake = { awake() })
         }
     }
 
@@ -118,13 +121,13 @@ class AlarmActivity : ComponentActivity() {
         runCatching { vibrator?.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 800, 400), 0)) }
     }
 
-    private suspend fun fetchGreeting(): String? = withContext(Dispatchers.IO) {
+    private suspend fun fetchGreeting(): JSONObject? = withContext(Dispatchers.IO) {
         val s = (application as JarvisApp).settings.state.value
         if (!s.isConfigured) return@withContext null
         runCatching {
             val client = OkHttpClient.Builder().callTimeout(8, TimeUnit.SECONDS).build()
             val req = Request.Builder().url(s.serverUrl.trimEnd('/') + "/api/v1/app/ibadah/wake").header("Authorization", "Bearer ${s.deviceToken}").build()
-            client.newCall(req).execute().use { r -> if (r.isSuccessful) JSONObject(r.body?.string().orEmpty()).optString("text").ifBlank { null } else null }
+            client.newCall(req).execute().use { r -> if (r.isSuccessful) JSONObject(r.body?.string().orEmpty()) else null }
         }.getOrNull()
     }
 
@@ -172,7 +175,7 @@ class AlarmActivity : ComponentActivity() {
 }
 
 @androidx.compose.runtime.Composable
-private fun AlarmFace(greeting: String, loud: Boolean, snoozeMin: Int, onSnooze: () -> Unit, onAwake: () -> Unit) {
+private fun AlarmFace(greeting: String, prayer: String, loud: Boolean, snoozeMin: Int, onSnooze: () -> Unit, onAwake: () -> Unit) {
     val now = remember { SimpleDateFormat("HH.mm", Locale.forLanguageTag("id-ID")).format(Date()) }
     val day = remember { SimpleDateFormat("EEEE, d MMMM", Locale.forLanguageTag("id-ID")).format(Date()) }
     val amber = Color(0xFFFFB547)
@@ -184,6 +187,7 @@ private fun AlarmFace(greeting: String, loud: Boolean, snoozeMin: Int, onSnooze:
             }
             Text(now, color = Color(0xFFF2EADF), fontSize = 84.sp, fontWeight = FontWeight.Light, modifier = Modifier.padding(top = 24.dp))
             Text(day, color = Color(0xFFD9CBB8), fontSize = 16.sp)
+            if (prayer.isNotBlank()) Text(prayer, color = amber, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 10.dp))
             if (greeting.isNotBlank()) {
                 Box(Modifier.padding(top = 28.dp).fillMaxWidth().background(Color(0xFF15110C), RoundedCornerShape(20.dp))
                     .border(1.dp, Color(0xFF3A2A1C), RoundedCornerShape(20.dp)).padding(16.dp)) {
@@ -204,4 +208,14 @@ private fun AlarmFace(greeting: String, loud: Boolean, snoozeMin: Int, onSnooze:
             }
         }
     }
+}
+
+
+/** "Subuh 04.13 · 13 menit lagi" from the wake answer ({next: {name, time, in_min}}), or "" when the next prayer is not subuh. */
+internal fun prayerLine(w: JSONObject): String {
+    val n = w.optJSONObject("next") ?: return ""
+    if (n.optString("name") != "subuh") return ""
+    val t = n.optString("time").replace(':', '.')
+    val m = n.optInt("in_min", -1)
+    return if (m >= 0) "Subuh $t · $m menit lagi" else "Subuh $t"
 }

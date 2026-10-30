@@ -39,8 +39,10 @@ def clean_estimate(d: dict) -> dict:
         elif num(v):
             out[k] = {"perkiraan": num(v), "min": num(v), "max": num(v)}
     yakin = str((d or {}).get("yakin") or "rendah").lower()
+    lw, th = (out.get("lebar") or {}).get("perkiraan"), (out.get("tinggi") or {}).get("perkiraan")
     return {"ukuran": out, "acuan": [str(x)[:100] for x in (d or {}).get("acuan") or []][:5], "yakin": yakin if yakin in ("rendah", "sedang", "tinggi") else "rendah",
-            "catatan": str((d or {}).get("catatan") or "")[:300], "objek": str((d or {}).get("objek") or "")[:80]}
+            "catatan": str((d or {}).get("catatan") or "")[:300], "objek": str((d or {}).get("objek") or "")[:80],
+            "bukaan_m2": num((d or {}).get("bukaan_m2")) or 0, "luas_m2": round(lw * th, 1) if lw and th else None}
 
 
 async def from_photo(attachment_id: str, target: str, reference: str = "") -> dict:
@@ -52,7 +54,8 @@ async def from_photo(attachment_id: str, target: str, reference: str = "") -> di
         "Kamu mata JARVIS yang memperkirakan UKURAN benda di foto dalam meter, memakai benda acuan yang ukurannya umum diketahui (pintu ≈ 2,0–2,1 m tinggi, "
         "orang dewasa ≈ 1,6–1,75 m, mobil ≈ 4,3–4,7 m panjang, motor ≈ 1,9 m, lantai rumah ≈ 3 m, bata ≈ 20 cm, ubin 40/60 cm). Beri RENTANG yang jujur "
         "dan seberapa yakin; jangan pura-pura presisi. JSON: {\"objek\": \"…\", \"lebar\": {\"perkiraan\": 0, \"min\": 0, \"max\": 0}, \"tinggi\": {…}, "
-        "\"panjang\": {…} (bila terlihat), \"acuan\": [\"benda yang dipakai sebagai acuan\"], \"yakin\": \"rendah|sedang|tinggi\", \"catatan\": \"…\"}")},
+        "\"panjang\": {…} (bila terlihat), \"bukaan_m2\": luas pintu+jendela di bidang itu (m², 0 bila tidak ada), \"acuan\": [\"benda yang dipakai sebagai acuan\"], "
+        "\"yakin\": \"rendah|sedang|tinggi\", \"catatan\": \"…\"}")},
         {"role": "user", "content": [{"type": "text", "text": f"Ukur: {target or 'benda utama di foto'}." + (f" Acuan dari pemilik: {reference}." if reference else "")},
                                      {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]
     r = await master.run(master.Job("kamera", "ukur-foto", f"perkirakan ukuran {target or 'benda'} dari foto", messages=msgs, json_out=True, vision=True,
@@ -71,6 +74,7 @@ MODES = {
     "kenali": "Kenali benda/tempat utama di foto: apa itu, ciri pentingnya, dan hal berguna untuk pemilik (harga kira-kira, cara pakai, peringatan). Singkat.",
     "baca": "Salin semua teks yang terlihat di foto apa adanya (dokumen, papan, label), rapikan per baris. Tanpa komentar.",
     "terjemah": "Baca teks di foto lalu terjemahkan ke bahasa Indonesia. Tampilkan: teks asli singkat, lalu terjemahannya.",
+    "tanya": "Jawab pertanyaan pemilik tentang foto ini dengan jelas dan praktis; bila tidak bisa dipastikan dari foto, katakan.",
 }
 COVERAGE_M2_PER_L = 10.0   # typical wall paint, one coat
 
@@ -105,9 +109,9 @@ class ArIn(BaseModel):
 
 class PhotoIn(BaseModel):
     attachment_id: str = Field(min_length=8, max_length=64)
-    target: str = Field(default="", max_length=120)
+    target: str = Field(default="", max_length=300)
     reference: str = Field(default="", max_length=200)
-    mode: str = Field(default="ukur", pattern="^(ukur|kenali|baca|terjemah|cat)$")
+    mode: str = Field(default="ukur", pattern="^(ukur|kenali|baca|terjemah|tanya|cat)$")
     coats: int = Field(default=2, ge=1, le=4)
 
 
@@ -138,7 +142,7 @@ async def api_photo(body: PhotoIn, device: dict = Depends(owner)):
         if body.mode == "cat":
             w, h = (r["ukuran"].get("lebar") or {}).get("perkiraan"), (r["ukuran"].get("tinggi") or {}).get("perkiraan")
             if w and h:
-                r["cat"] = paint_estimate(w, h, body.coats)
+                r["cat"] = paint_estimate(w, h, body.coats, min(r.get("bukaan_m2") or 0, w * h * 0.8))   # doors and windows are not painted
         return r
     except (MeasureError, attachments.AttachmentError) as e:
         raise HTTPException(409, str(e))

@@ -1,6 +1,6 @@
 // Investasi (mockup 39): what JARVIS read from Pluang (total, cash, each asset, the mix against his targets), the heavy brain's view of the
 // market, three options (one is always "hold") — his pick, with the admin password, is carried out in Pluang by JARVIS (he types the PIN).
-import { $, get, header, html, icon, loading, on, post, put, render, toast } from '../core.js';
+import { $, discuss, get, header, html, icon, loading, on, post, put, render, toast } from '../core.js';
 import { withPassword } from '../needsui.js';
 import { rupiah } from '../lib.js';
 import { laneChip } from '../ui.js';
@@ -58,6 +58,7 @@ export default {
             ${o.aksi.map((a) => html`<span class="small">${a.jenis === 'beli' ? 'Beli' : 'Jual'} ${a.aset} ${rupiah(a.nominal)}</span>`)}
             <span class="sub">${o.alasan}</span>${o.risiko ? html`<span class="small t-amber2">Risiko: ${o.risiko}</span>` : ''}${o.disarankan ? html`<span class="small t-green2">Disarankan JARVIS</span>` : ''}
             <button class="btn ${o.aksi.length ? 'primary' : ''}" data-act="choose" data-o="${o.id}">${o.aksi.length ? `Pilih ${o.id} — JARVIS kerjakan di Pluang` : 'Pilih: tahan dulu'}</button></div>`)}
+          <button class="btn" data-act="discuss">${icon('chat', 16)} Diskusi dulu</button>
           <span class="small" style="padding:0 4px">${icon('lock', 12)} Butuh password admin. Batas Rp${(s.settings.limit || 0).toLocaleString('id-ID')} per opsi; dibatalkan bila harga bergeser > ${String(s.settings.price_guard_pct).replace('.', ',')}% dari saat dibaca. PIN Pluang kamu yang ketik.</span>`
           : p ? html`<div class="card ${p.status === 'done' ? 'green' : p.status === 'failed' ? 'red' : ''}"><span class="k">Terakhir: ${{ done: 'selesai', failed: 'gagal', running: 'berjalan', expired: 'kedaluwarsa', new: 'kedaluwarsa' }[p.status] || p.status}</span>
             <span class="small">${p.chosen ? `Pilihan ${p.chosen}` : ''}${p.result?.tahan ? ' · ditahan' : ''}</span>
@@ -79,6 +80,10 @@ export default {
         { kicker: 'Investasi', button: o.aksi.length ? 'Kerjakan di Pluang' : 'Tahan', note: what || 'Tanpa transaksi.' });
       if (!r) return;
       toast(r.hold ? 'Oke, ditahan dulu' : 'JARVIS membuka Pluang — ketik PIN saat diminta'); render();
+    },
+    discuss() {
+      const p = cur.proposal.data;
+      discuss(`Soal pilihan investasi minggu ini (${p.ringkasan}) — opsi: ${p.opsi.map((o) => `${o.id}. ${o.judul}`).join('; ')}. Aku mau diskusi dulu sebelum memilih: mana yang paling cocok untukku dan kenapa?`);
     },
     async saveSettings(b, e) {
       e?.preventDefault();

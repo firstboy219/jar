@@ -1,6 +1,6 @@
 // Kopi (mockup 40): "Mau kopi?" — the promos JARVIS found in Kopi Kenangan and Qpon (his usual first, within his price limit); one tap and
 // JARVIS orders it in the app and pays with GoPay (he types the PIN); this month's coffee spending.
-import { $, get, header, html, icon, loading, on, post, put, render, toast } from '../core.js';
+import { $, get, header, html, icon, loading, on, post, put, render, sheet, toast } from '../core.js';
 import { rupiah } from '../lib.js';
 
 let cur = null;
@@ -23,10 +23,11 @@ export default {
               <div style="text-align:right"><div class="mono">${rupiah(p.harga, true)}</div>${p.hemat_pct ? html`<div class="small" style="text-decoration:line-through">${rupiah(p.harga_normal, true)}</div>` : ''}</div>
               <button class="btn sm primary" data-act="order" data-i="${i}">Pesan</button></div>`) : html`<span class="small">Tidak ada promo di bawah ${rupiah(st.max_price, true)} hari ini.</span>`}
             ${st.usual ? html`<button class="btn" data-act="usual">${icon('coffee', 16)} ${st.usual} seperti biasa${st.usual_learned ? ' (dipelajari)' : ''}</button>` : ''}
-            <button class="btn ghost sm" data-act="decline">Tidak dulu</button></div>` : ''}
+            <div class="btns"><button class="btn sm" data-act="custom">${icon('coffee', 14)} Ganti menu</button><button class="btn ghost sm" data-act="decline">Tidak dulu</button></div></div>` : ''}
         ${live && o.status === 'ordering' ? html`<div class="card cyan"><span class="k cyan">Memesan ${o.choice?.menu || ''}</span><span class="small">JARVIS sedang memesan di ${o.choice?.label || 'aplikasi'}. Ketik PIN GoPay sendiri saat diminta.</span></div>` : ''}
         ${o && o.status === 'ordered' ? html`<div class="card green"><span class="k green">Dipesan</span><span class="sub">${o.result?.order?.pesanan || o.choice?.menu}</span>
-          <span class="small">${[o.result?.order?.outlet, o.result?.order?.kode && `#${o.result.order.kode}`, o.result?.order?.siap].filter(Boolean).join(' · ')}</span></div>` : ''}
+          <span class="small">${[o.result?.order?.outlet, o.result?.order?.kode && `#${o.result.order.kode}`, o.result?.order?.siap && `siap ${o.result.order.siap}`].filter(Boolean).join(' · ')}</span>
+          ${o.result?.order?.total ? html`<span class="small">Total ${rupiah(Number(o.result.order.total))}${o.result?.order?.ongkir ? ` · ongkir ${rupiah(Number(o.result.order.ongkir))}` : st.pickup ? ' · ambil sendiri' : ''}</span>` : ''}</div>` : ''}
         ${o && o.status === 'failed' && live ? html`<div class="card red"><span class="small">${(o.result?.errors || []).join('; ') || o.result?.order?.catatan || 'Gagal'}</span></div>` : ''}
         ${!live || ['declined', 'ordered', 'failed', 'expired'].includes(o.status) ? html`<button class="btn primary block" data-act="check">${icon('search', 16)} Cek promo kopi sekarang</button>` : ''}
         <form class="card" id="cf"><span class="k">Kopiku</span>
@@ -47,6 +48,12 @@ export default {
     async check() { await post('/api/v1/app/coffee/check'); toast('JARVIS mengecek promo di HP…'); render(); },
     async order(b) { await post(`/api/v1/app/coffee/${cur.offer.id}/order`, { index: Number(b.dataset.i) }); toast('Memesan… ketik PIN GoPay saat diminta'); render(); },
     async usual() { await post(`/api/v1/app/coffee/${cur.offer.id}/order`, { custom: cur.settings.usual }); toast('Memesan yang biasa…'); render(); },
+    async custom() {
+      const v = await sheet(String(html`<form><span class="ttl">Mau kopi apa?</span><label class="field">Menu<input name="menu" required maxlength="80" placeholder="mis. Americano less sugar"></label>
+        <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Pesan</button></div></form>`));
+      if (!v?.menu) return;
+      await post(`/api/v1/app/coffee/${cur.offer.id}/order`, { custom: v.menu }); toast(`Memesan ${v.menu}… ketik PIN GoPay saat diminta`); render();
+    },
     async decline() { await post(`/api/v1/app/coffee/${cur.offer.id}/decline`); render(); },
     async save() {
       const v = Object.fromEntries(new FormData($('#cf')).entries());

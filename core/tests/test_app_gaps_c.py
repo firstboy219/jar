@@ -76,7 +76,8 @@ async def test_snooze_family_draft_context_attachments_and_task_links(pool, monk
         return reply("Halo Sari, sudah saya cek.")
     monkeypatch.setattr(gateway, "complete", fake)
     d = await attention.draft(a, "kamu", "setujui")
-    assert d["context"] == {"samples": 1, "facts": 0, "instruction": True, "chars": len("Mohon cek laporan Q3.")}
+    assert d["context"] == {"samples": 1, "facts": 0, "instruction": True, "chars": len("Mohon cek laporan Q3."), "fact_list": [], "earlier": []}
+    assert d["needs_attachment"] == ""
     f = await attachments.save("struk.txt", "text/plain", base64.b64encode(b"Struk GoFood Rp45.000").decode())
     s = await attention.save_draft(a, d["body"], [f["id"], "0" * 32])
     assert s["attachments"] == [f["id"]] and ("attach", "D1", "struk.txt", len(b"Struk GoFood Rp45.000")) in calls

@@ -132,6 +132,9 @@ const views = new Map();
 let current = null, cleanup = null;
 export function view(name, mod) { views.set(name, mod); }
 export function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
+
+/** Talk it over with JARVIS: Obrolan opens and the question (with what it is about) is sent. */
+export function discuss(text) { sessionStorage.setItem('jarvis_app_pending', text); go('#/obrolan'); }
 export function back() { if (history.length > 1) history.back(); else go('#/'); }
 
 export async function render() {

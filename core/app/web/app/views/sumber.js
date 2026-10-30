@@ -1,6 +1,7 @@
 // Sumber API (mockup 36): where the business numbers come from — per source the address, the key (kept encrypted, never shown again), and
 // per number where it is in the API's answer; pasted API documentation fills the form in; "Uji" reads it once and shows what came back.
 import { $, $$, del, get, go, header, html, icon, loading, post, put, render, sheet, toast } from '../core.js';
+import { withPassword } from '../needsui.js';
 import { val } from './bisnis.js';
 
 const AUTH = [['none', 'Tanpa kunci'], ['bearer', 'Bearer token'], ['header', 'Header (mis. X-API-Key)'], ['query', 'Parameter URL'], ['basic', 'Basic (user:password)']];
@@ -52,6 +53,7 @@ function editor(f) {
           <label class="field">Alamat dasar API<input name="base_url" value="${f.base_url}" required placeholder="https://api.autotoko.id"></label>
           <div class="g2"><label class="field">Kunci<select name="auth_type">${opt(AUTH, f.auth.type)}</select></label>
             <label class="field">Nama header/parameter<input name="auth_name" value="${f.auth.name || ''}" placeholder="X-API-Key"></label></div>
+          <label class="field">Kunci berlaku sampai (opsional)<input name="key_expires" type="date" value="${f.auth.expires || ''}"></label>
           <label class="field">Kunci API / token ${f.key_hint ? html`<span class="mono">(tersimpan ${f.key_hint} — kosongkan bila tidak diganti)</span>` : ''}<input name="key" type="password" autocomplete="off" placeholder="${f.key_hint ? '••••••••' : 'tempel kunci API'}"></label>
           <details><summary class="small">Header tambahan (opsional)</summary><label class="field">Satu per baris: Nama: nilai<textarea name="headers" class="inp" style="min-height:70px" placeholder="X-Tenant-Id: renature&#10;Accept: application/json">${Object.entries(f.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}</textarea></label></details>
           <div class="g2"><label class="field">Baca tiap (menit)<input name="poll_min" type="number" min="5" max="1440" value="${f.poll_min}"></label>
@@ -71,7 +73,7 @@ function collect() {
   const f = $('#srcf');
   if (!f) return form;
   const g = (n) => f.elements[n]?.value ?? '';
-  form = { ...form, business: g('business').trim(), name: g('name').trim(), base_url: g('base_url').trim(), auth: { type: g('auth_type'), name: g('auth_name').trim() },
+  form = { ...form, business: g('business').trim(), name: g('name').trim(), base_url: g('base_url').trim(), auth: { type: g('auth_type'), name: g('auth_name').trim(), ...(g('key_expires') ? { expires: g('key_expires') } : {}) },
     key: g('key'), poll_min: Number(g('poll_min')) || 15, paused: g('paused') === '1', headers: parseHeaders(g('headers')) };
   form.endpoints = $$('[data-ep]', f).map((b) => {
     const q = (n) => b.querySelector(`[name=${n}]`)?.value ?? '';
@@ -108,6 +110,7 @@ export default {
         ${meta.sources.length ? meta.sources.map((s) => html`<div class="card ${s.fails >= 3 ? 'red' : ''}">
           <div class="row sb"><span class="ttl">${s.name}</span><span class="tag ${s.status === 'paused' ? '' : s.last_error ? 'amber' : 'green'}">${s.status === 'paused' ? 'dijeda' : s.last_error ? 'bermasalah' : 'aktif'}</span></div>
           <span class="small">${s.business} · ${s.base_url} · ${s.endpoints.length} angka · tiap ${s.poll_min} mnt · kunci ${s.key_hint || 'tidak ada'}</span>
+          ${s.key_days_left != null && s.key_days_left <= 14 ? html`<span class="small ${s.key_days_left <= 7 ? 't-amber2' : ''}">${icon('lock', 12)} ${s.key_days_left < 0 ? 'Kunci sudah habis — perbarui' : `Kunci habis ${s.key_days_left} hari lagi`}</span>` : ''}
           <span class="small">Terakhir berhasil: ${ago(s.last_ok)}${s.backfilled ? ` · riwayat terisi ${ago(s.backfilled)}` : ''}</span>
           ${s.last_error ? html`<span class="small t-amber2">${s.last_error}</span>` : ''}
           <div class="chips"><button class="chip" data-act="sync" data-id="${s.id}">${icon('repeat', 13)} Baca sekarang</button>
@@ -140,7 +143,9 @@ export default {
     async save() {
       const f = collect();
       if (!$('#srcf').reportValidity()) return;
-      const s = f.id ? await put(`/api/v1/app/bisnis/sources/${f.id}`, payload(f)) : await post('/api/v1/app/bisnis/sources', payload(f));
+      const send = (admin_password = '') => (f.id ? put(`/api/v1/app/bisnis/sources/${f.id}`, { ...payload(f), admin_password }) : post('/api/v1/app/bisnis/sources', { ...payload(f), admin_password }));
+      const s = f.key ? await withPassword(`Simpan kunci API ${f.name}`, send, { kicker: 'Kunci data bisnis', button: 'Simpan', note: 'Kunci disimpan terenkripsi di brankas JARVIS.' }) : await send();
+      if (!s) return;
       toast(f.id ? 'Tersimpan' : 'Tersimpan — membaca angka pertama…');
       form = null; go(`#/bisnis?b=${encodeURIComponent(s.business)}`);
     },

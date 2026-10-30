@@ -385,9 +385,37 @@ async def tick(now: datetime | None = None) -> list[str]:
         done.append("sahur")
     if s.get("bekam_reminder") and any(e["kind"] == "bekam" for e in ev_tomorrow) and now.hour >= 19 and not await _sent("bekam"):
         await master.run(master.Job("hijriah", "bekam", "ingatkan hari bekam besok", trigger="schedule",
-                                    skill=lambda: _notify("Besok hari bekam sunnah", "Mau aku carikan klinik bekam & buatkan janji?", "#/hijriah")))
+                                    skill=lambda: _notify("Besok hari bekam sunnah", "Mau aku carikan klinik bekam terdekat? Ketuk untuk mencari.", "#/hijriah?bekam=1")))
         done.append("bekam")
     return done
+
+
+async def find_bekam(trigger: str = "owner") -> dict:
+    """The bekam reminder's offer: Hermes looks up bekam (hijamah) clinics near home with the browser — address, contact, hours, price,
+    whether they take bookings — and suggests a time on the next bekam day. He contacts the clinic; JARVIS sends nothing."""
+    from . import places
+    _, city_name, _ = await city()
+    home_place = next((p for p in await places.listing() if p.get("name") == "rumah"), None)
+    off = await hijri_offset()
+    today = datetime.now(WIB).date()
+    nxt = next((d for d in (today + timedelta(days=i) for i in range(0, 40)) if any(e["kind"] == "bekam" for e in events_for(d, hijri_of(d, off)))), None)
+    instruction = (f"Carikan 3–5 klinik/rumah bekam (hijamah) terdekat dari rumah pemilik di {city_name or 'Bogor'}"
+                   + (f" (titik rumah {home_place['lat']:.4f},{home_place['lon']:.4f}{' — ' + home_place['label'] if home_place.get('label') else ''})" if home_place else "")
+                   + ", pakai browser (Google Maps, situs/Instagram klinik). Untuk tiap klinik: nama, alamat, jarak/area, nomor telepon/WhatsApp, jam buka, "
+                   "kisaran harga, terima janji temu atau tidak, ulasan singkat. "
+                   + (f"Hari bekam sunnah berikutnya {nxt:%A %d %B %Y}; usulkan jam yang cocok (pagi, sebelum makan). " if nxt else "")
+                   + "JANGAN menghubungi klinik atau membuat janji — hasilnya daftar untuk pemilik.")
+    r = await master.run(master.Job("hijriah", "cari-bekam", "carikan klinik bekam terdekat", trigger=trigger, tools=True, no_free=True,
+                                    instruction=instruction, title="Klinik bekam terdekat"))
+    return {"status": r["status"], "task_id": r.get("task_id"), "lane": r.get("lane"), "next": nxt.isoformat() if nxt else None}
+
+
+@router.post(API + "/bekam/find")
+async def api_find_bekam(device: dict = Depends(owner)):
+    r = await find_bekam()
+    if r["status"] == "failed":
+        raise HTTPException(409, "pencarian tidak bisa dimulai")
+    return r
 
 
 async def _notify(title: str, text: str, route: str) -> dict:

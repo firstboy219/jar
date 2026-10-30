@@ -3,7 +3,8 @@
 import { $, get, header, html, icon, loading, post, put, render, speak, stopSpeaking, toast } from '../core.js';
 import { laneChip } from '../ui.js';
 
-let cur = null, story = null;
+let cur = null, story = null, size = 19;
+try { size = Number(localStorage.getItem('jarvis_story_size')) || 19; } catch { /* no storage */ }
 
 export default {
   tab: 'beranda',
@@ -17,7 +18,8 @@ export default {
     document.body.classList.toggle('warm', !!story);
     root.innerHTML = String(html`${header(story ? story.title : 'Dongeng', { sub: story ? `${story.theme} · ±${story.data.menit} menit` : '' })}
       <div class="scr">
-        ${story ? html`<article class="reading" style="font-family:Literata,serif;font-size:19px;line-height:1.75;display:flex;flex-direction:column;gap:14px">
+        ${story ? html`<div class="row sb"><span class="small">${story.data.paragraf.length} bagian</span><div class="row" style="gap:6px"><button class="chip" data-act="size" data-d="-2" aria-label="Huruf lebih kecil">A−</button><button class="chip" data-act="size" data-d="2" aria-label="Huruf lebih besar">A+</button></div></div>
+          <article class="reading" id="story" style="font-family:Literata,serif;font-size:${size}px;line-height:1.75;display:flex;flex-direction:column;gap:14px">
             ${story.data.paragraf.map((p) => html`<p style="margin:0">${p}</p>`)}</article>
           ${story.data.pesan ? html`<div class="card"><span class="small">Pesan: ${story.data.pesan}</span></div>` : ''}
           <div class="btns"><button class="btn lg" data-act="read">${icon('speaker', 18)} Bacakan</button><button class="btn lg" data-act="stop">${icon('stop', 18)}</button>
@@ -36,6 +38,11 @@ export default {
     return () => document.body.classList.remove('warm');
   },
   actions: {
+    size(b) {   // in place, so reading aloud is not interrupted
+      size = Math.max(15, Math.min(30, size + Number(b.dataset.d)));
+      const a = $('#story'); if (a) a.style.fontSize = `${size}px`;
+      try { localStorage.setItem('jarvis_story_size', String(size)); } catch { /* no storage */ }
+    },
     read() { if (story) speak(`${story.title}. ${story.data.paragraf.join(' ')}`); },
     stop() { stopSpeaking(); },
     async liked(b) { await post(`/api/v1/app/story/${b.dataset.id}/mark`, { status: 'liked' }); toast('Disimpan sebagai favorit'); },

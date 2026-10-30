@@ -73,7 +73,7 @@ def order_goal(choice: dict, s: dict) -> str:
                 "Di 'selesai' tulis JSON: {\"pesanan\": \"\", \"total\": 0, \"outlet\": \"\", \"kode\": \"kode kupon/nomor\", \"siap\": \"\"}")
     return (f"Di Kopi Kenangan, pesan 1 {choice['menu']} ({s['sugar']}), {where}{voucher}; bayar dengan GoPay. Bila total lebih dari "
             f"Rp{int(s['max_price']):,}".replace(",", ".") + " berhenti dan tanya pemilik. PIN GoPay diketik pemilik. Di 'selesai' tulis JSON: "
-            "{\"pesanan\": \"\", \"total\": 0, \"outlet\": \"\", \"kode\": \"nomor pesanan\", \"siap\": \"perkiraan siap/tiba\"}")
+            "{\"pesanan\": \"\", \"total\": 0, \"ongkir\": 0, \"outlet\": \"\", \"kode\": \"nomor pesanan\", \"siap\": \"jam siap diambil / perkiraan tiba\"}")
 
 
 # ---------- checking promos ----------

@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import appclock, appsettings, audit, brief, db, home, hub, master, notes, recap, setup_status, vault
-from .appauth import actor, owner
+from .appauth import actor, owner, require_password
 from .location import WIB
 
 log = logging.getLogger("jarvis-core")
@@ -38,6 +38,7 @@ METRICS = {   # the numbers the screens know by name; anything else is shown wit
     "penjualan": ("Penjualan", "rp"), "pesanan": ("Pesanan", "n"), "dikemas": ("Sudah dikemas", "n"), "dikirim": ("Dikirim", "n"),
     "pencairan": ("Pencairan", "rp"), "retur": ("Retur", "n"), "pengunjung": ("Pengunjung", "n"), "gmv": ("GMV", "rp"),
     "mrr": ("MRR", "rp"), "pelanggan": ("Pelanggan aktif", "n"), "toko_aktif": ("Toko aktif", "n"), "stok_menipis": ("Stok menipis", "n"),
+    "stok_habis": ("Stok habis", "n"),
 }
 AGGS = ("sum", "count", "value", "avg", "max", "min")
 POLL_WINDOW_DAYS = 3        # a series endpoint is re-read for the last days each poll (late orders, cancellations)
@@ -290,6 +291,12 @@ def judge(business: str, now: datetime, today_vals: dict, same_time: dict, max60
         if left >= max(5, 0.2 * today_vals["pesanan"]):
             out.append({"key": f"unpacked:{business}:{day}", "tone": "amber", "title": f"{business}: {round(left)} pesanan belum dikemas",
                         "text": f"{round(today_vals['dikemas'])} dari {round(today_vals['pesanan'])} pesanan sudah dikemas. Kejar sebelum kurir pick-up."})
+    low, out_ = today_vals.get("stok_menipis") or 0, today_vals.get("stok_habis") or 0
+    if low > 0 or out_ > 0:
+        out.append({"key": f"stock:{business}:{day}", "tone": "red" if out_ else "amber",
+                    "title": f"{business}: " + (f"{round(out_)} produk stok habis" if out_ else f"{round(low)} produk stok menipis"),
+                    "text": "Isi ulang atau matikan listing-nya sebelum pesanan masuk dan dibatalkan (skor toko turun)."
+                    + (f" {round(low)} lainnya menipis." if out_ and low else "")})
     cutoff = s.get("cutoff") or ""
     if re.fullmatch(r"\d{2}:\d{2}", cutoff) and today_vals.get("pesanan") and today_vals.get("dikemas") is not None:
         left = round(today_vals["pesanan"] - today_vals["dikemas"])
@@ -350,6 +357,14 @@ def clean_endpoint(ep: dict) -> dict:
                      "size_param": str(page.get("size_param") or "")[:40], "size": max(1, min(int(page.get("size", 100)), 1000))} if page else None}
 
 
+def key_days_left(auth: dict | None, today: date) -> int | None:
+    """Days until the source's key/token expires (he types the date); None when it does not expire. Pure."""
+    try:
+        return (date.fromisoformat((auth or {}).get("expires") or "") - today).days
+    except ValueError:
+        return None
+
+
 def public(row) -> dict:
     """A source as the screens see it: never the key — only that one is kept, and its last 4 characters."""
     r = dict(row)
@@ -361,6 +376,7 @@ def public(row) -> dict:
         except Exception:
             hint = "••••"
     r["key_hint"] = hint
+    r["key_days_left"] = key_days_left(r.get("auth"), datetime.now(WIB).date())
     return r
 
 
@@ -379,7 +395,8 @@ async def save_source(src_id: int | None, data: dict, who: str) -> dict:
         raise BisnisError("jenis autentikasi tidak dikenal")
     if auth["type"] in ("header", "query") and not re.fullmatch(r"[\w-]{1,60}", str(auth.get("name") or "")):
         raise BisnisError("isi nama header/parameter untuk kunci API (mis. X-API-Key)")
-    auth = {"type": auth["type"], "name": str(auth.get("name") or "")[:60]}
+    expires = str(auth.get("expires") or "")[:10]
+    auth = {"type": auth["type"], "name": str(auth.get("name") or "")[:60], **({"expires": expires} if re.fullmatch(r"\d{4}-\d{2}-\d{2}", expires) else {})}
     eps = [clean_endpoint(e) for e in (data.get("endpoints") or [])][:30]
     if not eps:
         raise BisnisError("tambahkan minimal satu angka (endpoint)")
@@ -593,6 +610,11 @@ async def alerts(business: str, now: datetime | None = None) -> list[dict]:
     max60 = await db.pool().fetchval("SELECT max(value)::float FROM biz_daily WHERE business = $1 AND metric = 'penjualan' AND day >= $2 AND day < $3",
                                      business, now.date() - timedelta(days=60), now.date())
     found = judge(business, now, today_vals, same, max60 if (await _days(business, "penjualan")) >= 14 else None, s)
+    for src in await db.pool().fetch("SELECT id, name, auth FROM biz_sources WHERE business = $1 AND status = 'active'", business):
+        if (left := key_days_left(src["auth"], now.date())) is not None and left <= 7:
+            found.append({"key": f"expiry:{src['id']}:{now.date()}", "tone": "red" if left <= 1 else "amber",
+                          "title": f"Kunci API {src['name']} " + ("sudah habis" if left < 0 else f"habis {left} hari lagi"),
+                          "text": "Perbarui kuncinya di Sumber API supaya angka tetap terbaca."})
     fails = await db.pool().fetch("SELECT id, name, last_error FROM biz_sources WHERE business = $1 AND fails >= $2", business, FAIL_ALERT)
     for f in fails:
         found.append({"key": f"fail:{f['id']}:{now.date()}", "tone": "red", "title": f"Sumber {f['name']} gagal dibaca", "text": (f["last_error"] or "")[:200]})
@@ -620,9 +642,12 @@ async def today_view(now: datetime | None = None) -> dict:
         usual = {r["metric"]: r["v"] for r in await db.pool().fetch(
             "SELECT metric, avg(value)::float AS v FROM biz_daily WHERE business = $1 AND day = ANY($2::date[]) GROUP BY metric", b, [d - timedelta(days=7 * w) for w in range(1, 5)])}
         eps = {e["metric"]: e for s in await db.pool().fetch("SELECT endpoints FROM biz_sources WHERE business = $1", b) for e in s["endpoints"]}
-        kpis, channels = [], []
+        kpis, channels, payouts = [], [], []
         for r in rows:
             base, _, ch = r["metric"].partition("@")
+            if ch and base == "pencairan":
+                payouts.append({"name": ch, "value": r["value"]})
+                continue
             if ch:
                 if base == "penjualan" or (base == "pesanan" and not any(x["metric"].startswith("penjualan@") for x in rows)):
                     channels.append({"name": ch, "value": r["value"], "metric": base})
@@ -642,7 +667,7 @@ async def today_view(now: datetime | None = None) -> dict:
         al = await db.pool().fetch("SELECT id, data, created_at FROM biz_insights WHERE kind = 'alert' AND business = $1 AND created_at >= $2 ORDER BY id DESC",
                                    b, datetime(d.year, d.month, d.day, tzinfo=WIB))
         src = await db.pool().fetch("SELECT id, name, last_ok, last_error, fails, status FROM biz_sources WHERE business = $1", b)
-        out.append({"name": b, "kpis": kpis, "channels": sorted(channels, key=lambda c: -c["value"])[:8], "packed": packed,
+        out.append({"name": b, "kpis": kpis, "channels": sorted(channels, key=lambda c: -c["value"])[:8], "payouts": sorted(payouts, key=lambda c: -c["value"])[:8], "packed": packed,
                     "alerts": [{"id": a["id"], **a["data"]} for a in al], "synced_at": max((s["last_ok"] for s in src if s["last_ok"]), default=None),
                     "sources": [dict(s) for s in src]})
     return {"businesses": out, "now": now.isoformat()}
@@ -724,7 +749,8 @@ async def _weekly_strategy() -> None:
 
 OPP_FORMAT = ("{\"peluang\": [{\"judul\": \"…\", \"ringkasan\": \"2 kalimat\", \"kenapa_sekarang\": \"tren/data pendukung\", \"modal\": \"perkiraan Rp\", "
               "\"potensi\": \"perkiraan omzet/bulan\", \"cocok\": \"kenapa cocok dengan bisnis yang ada (Autotoko/Renature/kanal)\", \"skor\": 1-10, "
-              "\"langkah_pertama\": \"yang bisa dicoba minggu ini\", \"sumber\": [\"url\"]}]}")
+              "\"usaha\": \"rendah|sedang|tinggi\", \"balik_modal\": \"perkiraan berapa bulan\", \"langkah_pertama\": \"yang bisa dicoba minggu ini\", \"sumber\": [\"url\"]}], "
+              "\"disaring\": jumlah ide yang kamu pertimbangkan sebelum memilih ini}")
 
 
 async def find_opportunities(trigger: str = "owner") -> dict:
@@ -771,7 +797,8 @@ def clean_opportunities(data) -> list[dict]:
             skor = 5
         out.append({"judul": str(p["judul"])[:120], "ringkasan": str(p.get("ringkasan") or "")[:500], "kenapa_sekarang": str(p.get("kenapa_sekarang") or "")[:400],
                     "modal": str(p.get("modal") or "")[:80], "potensi": str(p.get("potensi") or "")[:80], "cocok": str(p.get("cocok") or "")[:300], "skor": skor,
-                    "langkah_pertama": str(p.get("langkah_pertama") or "")[:300],
+                    "langkah_pertama": str(p.get("langkah_pertama") or "")[:300], "balik_modal": str(p.get("balik_modal") or "")[:60],
+                    "usaha": p.get("usaha") if p.get("usaha") in ("rendah", "sedang", "tinggi") else "",
                     "sumber": [str(u)[:300] for u in (p.get("sumber") or []) if str(u).startswith("http")][:4]})
     return sorted(out, key=lambda x: -x["skor"])[:8]
 
@@ -782,8 +809,11 @@ async def _opportunities_done(run_id: int, result: dict) -> None:
         await hub.broadcast({"type": "notify", "title": "Riset peluang gagal", "text": "Coba lagi dari layar Peluang.", "kind": "info", "route": "#/peluang"})
         return
     text = result.get("text") or ""
+    considered = 0
     try:
-        items = clean_opportunities(master.parse_json(text))
+        parsed = master.parse_json(text)
+        items = clean_opportunities(parsed)
+        considered = int(to_number((parsed or {}).get("disaring")) or 0) if isinstance(parsed, dict) else 0
     except ValueError:
         items = []
     if not items and text.strip():
@@ -793,7 +823,8 @@ async def _opportunities_done(run_id: int, result: dict) -> None:
         items = clean_opportunities(r.get("result") if r["status"] == "done" else {})
     if not items:
         return
-    await db.pool().execute("INSERT INTO biz_insights (kind, data, run_id) VALUES ('opportunity', $1, $2)", {"peluang": items, "task_id": result.get("task_id")}, run_id)
+    await db.pool().execute("INSERT INTO biz_insights (kind, data, run_id) VALUES ('opportunity', $1, $2)",
+                            {"peluang": items, "task_id": result.get("task_id"), "disaring": max(considered, len(items))}, run_id)
     await hub.broadcast({"type": "notify", "title": f"{len(items)} peluang bisnis baru", "text": items[0]["judul"], "kind": "info", "route": "#/peluang"})
 
 
@@ -971,6 +1002,7 @@ class SourceIn(BaseModel):
     endpoints: list[dict] = Field(default_factory=list, max_length=30)
     poll_min: int = Field(default=15, ge=5, le=1440)
     paused: bool = False
+    admin_password: str = Field(default="", max_length=200)
 
 
 class TestIn(BaseModel):
@@ -1004,9 +1036,19 @@ async def api_today(device: dict = Depends(owner)):
     return v
 
 
+async def channel_share(business: str, metric: str, days: int = 30) -> list[dict]:
+    """Each marketplace's share of a number over the last `days` (from the per-channel series)."""
+    rows = await db.pool().fetch(
+        """SELECT split_part(metric, '@', 2) AS name, sum(value)::float AS v FROM biz_daily WHERE business = $1 AND metric LIKE $2 || '@%' AND day > $3
+           GROUP BY 1 ORDER BY 2 DESC""", business, metric, datetime.now(WIB).date() - timedelta(days=days))
+    total = sum(r["v"] for r in rows) or 0
+    return [{"name": r["name"], "value": r["v"], "pct": round(100 * r["v"] / total, 1)} for r in rows] if total else []
+
+
 @router.get(API + "/trend")
-async def api_trend(business: str, metric: str = "penjualan", days: int = 120, device: dict = Depends(owner)):
-    return {**await history(business, metric, days), "strategy": await latest_strategy(business)}
+async def api_trend(business: str, metric: str = "penjualan", days: int = 180, device: dict = Depends(owner)):
+    return {**await history(business, metric, days), "strategy": await latest_strategy(business), "businesses": await businesses(),
+            "share": await channel_share(business, metric.split("@")[0])}
 
 
 @router.post(API + "/strategy")
@@ -1060,6 +1102,38 @@ async def api_opp_deep(batch_id: int, index: int, device: dict = Depends(owner))
         _err(e)
 
 
+class StrategyMissionIn(BaseModel):
+    business: str = Field(min_length=1, max_length=60)
+    index: int = Field(ge=0, le=20)
+
+
+async def strategy_mission(business: str, index: int, trigger: str = "owner") -> dict:
+    """One strategy handed to Hermes as a mission: prepare everything to carry it out (drafts, copy, prices, a schedule) — it changes
+    nothing in his shops; he decides what to publish."""
+    st = await latest_strategy(business)
+    items = (st or {}).get("strategi") or []
+    if not 0 <= index < len(items):
+        raise BisnisError("strategi tidak ada")
+    x = items[index]
+    instruction = (f"Bantu pemilik menjalankan strategi bisnis {business}: \"{x.get('judul')}\". Kenapa: {x.get('kenapa', '')}. Langkah: {'; '.join(x.get('langkah') or [])}. "
+                   f"Ukuran berhasil: {x.get('ukur', '')}. Siapkan bahan yang siap dipakai (draf judul & deskripsi produk/listing, teks promosi/caption, usulan harga "
+                   "bundling dengan hitungan margin, jadwal pelaksanaan seminggu, cek pesaing di marketplace bila perlu). JANGAN mengubah, memposting, atau membeli "
+                   "apa pun di toko/marketplace — hasilnya laporan untuk pemilik.")
+    r = await master.run(master.Job("bisnis", "strategi-misi", f"siapkan strategi: {x.get('judul')}", trigger=trigger, tools=True, heavy=True, no_free=True,
+                                    instruction=instruction, title=f"Strategi: {x.get('judul')}"[:80]))
+    if r["status"] == "failed":
+        raise BisnisError(r.get("error") or "misi tidak bisa dimulai")
+    return {"status": r["status"], "task_id": r.get("task_id"), "lane": r.get("lane")}
+
+
+@router.post(API + "/strategy/mission")
+async def api_strategy_mission(body: StrategyMissionIn, device: dict = Depends(owner)):
+    try:
+        return await strategy_mission(body.business, body.index)
+    except BisnisError as e:
+        _err(e)
+
+
 @router.post(API + "/strategy/tasks")
 async def api_strategy_tasks(body: BizIn, device: dict = Depends(owner)):
     try:
@@ -1082,6 +1156,8 @@ async def api_sources(device: dict = Depends(owner)):
 
 @router.post(API + "/sources")
 async def api_source_new(body: SourceIn, device: dict = Depends(owner)):
+    if body.key:
+        await require_password(device, body.admin_password, "biz_source:new")   # a key to his business data is kept only with his password
     try:
         src = await save_source(None, body.model_dump(), actor(device))
     except (BisnisError, vault.VaultError) as e:
@@ -1093,6 +1169,8 @@ async def api_source_new(body: SourceIn, device: dict = Depends(owner)):
 
 @router.put(API + "/sources/{src_id}")
 async def api_source_edit(src_id: int, body: SourceIn, device: dict = Depends(owner)):
+    if body.key:
+        await require_password(device, body.admin_password, f"biz_source:{src_id}")
     try:
         return await save_source(src_id, body.model_dump(), actor(device))
     except (BisnisError, vault.VaultError) as e:

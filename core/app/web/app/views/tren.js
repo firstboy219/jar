@@ -1,11 +1,11 @@
 // Tren & strategi (mockup 34): months of a number (sales by default) — per month, per weekday, the 7-day line, last 30 days against the
 // 30 before — and the heavy brain's strategy from those numbers: what is happening, what to do this week, how to measure it.
-import { get, header, html, icon, loading, post, render, speak, toast } from '../core.js';
+import { discuss, get, header, html, icon, loading, post, render, speak, toast } from '../core.js';
 import { rupiah } from '../lib.js';
 import { columns, laneChip } from '../ui.js';
 import { val } from './bisnis.js';
 
-let st = { b: '', m: 'penjualan', days: 120 }, cur = null;
+let st = { b: '', m: 'penjualan', days: 180 }, cur = null;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const WD = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 const LABEL = { penjualan: 'Penjualan', pesanan: 'Pesanan', dikemas: 'Dikemas', dikirim: 'Dikirim', pencairan: 'Pencairan', retur: 'Retur', mrr: 'MRR', gmv: 'GMV', pelanggan: 'Pelanggan', toko_aktif: 'Toko aktif' };
@@ -32,7 +32,9 @@ export default {
     const base = d.metrics.filter((m) => !m.includes('@'));
     root.innerHTML = String(html`${header('Tren & strategi', { sub: st.b })}
       <div class="scr">
+        ${d.businesses.length > 1 ? html`<div class="chips">${d.businesses.map((b) => html`<button class="chip ${b === st.b ? 'on' : ''}" data-act="biz" data-b="${b}">${b}</button>`)}</div>` : ''}
         <div class="chips">${base.map((m) => html`<button class="chip ${m === st.m ? 'on' : ''}" data-act="metric" data-m="${m}">${LABEL[m] || m.replace(/_/g, ' ')}</button>`)}</div>
+        <div class="chips">${[[90, '3 bln'], [180, '6 bln'], [365, '12 bln']].map(([n, l]) => html`<button class="chip ${n === st.days ? 'on' : ''}" data-act="days" data-n="${n}">${l}</button>`)}</div>
         ${t.days_with_data < 7 ? html`<div class="card amber"><span class="small">Baru ${t.days_with_data} hari data. Tren lebih bermakna setelah beberapa minggu — atau isi riwayat dari Sumber API (endpoint mode "series").</span></div>` : ''}
         <div class="g2"><div class="kpi"><span>30 hari terakhir</span><b>${val(t.last30, u)}</b><span style="color:var(--${(t.change30 ?? 0) >= 0 ? 'green' : 'amber'}-t)">${t.change30 == null ? '—' : `${t.change30 >= 0 ? '▲' : '▼'} ${String(Math.abs(t.change30)).replace('.', ',')}% vs 30 hari sebelumnya`}</span></div>
           <div class="kpi"><span>Arah 4 minggu</span><b>${t.direction == null ? '—' : `${t.direction >= 0 ? '+' : ''}${String(t.direction).replace('.', ',')}%`}</b><span>${t.best_weekday != null ? `hari terbaik: ${WD[t.best_weekday]}` : ''}</span></div></div>
@@ -41,12 +43,15 @@ export default {
         ${t.daily.length ? html`<div class="card"><span class="k">90 hari</span>${line(t.daily, u)}</div>` : ''}
         ${Object.keys(t.per_weekday).length ? html`<div class="card"><span class="k">Rata-rata per hari (8 minggu)</span>${columns(WD, WD.map((_, i) => (u === 'rp' ? Math.round((t.per_weekday[i] || 0) / 1e3) : t.per_weekday[i] || 0)), '', false)}
           ${u === 'rp' ? html`<span class="small">dalam ribu rupiah</span>` : ''}</div>` : ''}
+        ${(d.share || []).length ? html`<div class="card"><span class="k">Andil kanal · 30 hari</span>${d.share.map((c) => html`<div class="row" style="font-size:13px"><span style="width:96px;color:var(--tx2)">${c.name}</span>
+          <div class="bar grow" style="height:8px"><i style="width:${c.pct}%"></i></div><span class="mono" style="min-width:52px;text-align:right">${String(c.pct).replace('.', ',')}%</span></div>`)}</div>` : ''}
         ${d.channels.length ? html`<div class="chips">${d.channels.map((c) => html`<button class="chip" data-act="metric" data-m="${c}">${c.split('@')[1]}</button>`)}</div>` : ''}
         <div class="card violet"><div class="row sb"><span class="k violet">Strategi</span>${s ? html`<span class="small">${new Date(s.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} ${laneChip(s.lane)}</span>` : ''}</div>
           ${s ? html`<p class="sub">${s.ringkasan}</p>
             ${(s.minggu_ini || []).length ? html`<span class="ttl">Minggu ini</span>${s.minggu_ini.map((x) => html`<span class="small">• ${x}</span>`)}` : ''}
-            ${(s.strategi || []).map((x) => html`<details class="card" style="background:var(--bg)"><summary class="ttl" style="cursor:pointer">${x.judul} <span class="tag ${x.usaha === 'rendah' ? 'green' : x.usaha === 'tinggi' ? 'red' : 'amber'}">usaha ${x.usaha || '?'}</span></summary>
-              <span class="small">${x.kenapa}</span>${(x.langkah || []).map((l, i) => html`<span class="sub">${i + 1}. ${l}</span>`)}<span class="small">Dampak: ${x.dampak} · Ukur: ${x.ukur}</span></details>`)}
+            ${(s.strategi || []).map((x, si) => html`<details class="card" style="background:var(--bg)"><summary class="ttl" style="cursor:pointer">${x.judul} <span class="tag ${x.usaha === 'rendah' ? 'green' : x.usaha === 'tinggi' ? 'red' : 'amber'}">usaha ${x.usaha || '?'}</span></summary>
+              <span class="small">${x.kenapa}</span>${(x.langkah || []).map((l, i) => html`<span class="sub">${i + 1}. ${l}</span>`)}<span class="small">Dampak: ${x.dampak} · Ukur: ${x.ukur}</span>
+              <div class="btns"><button class="btn sm" data-act="mission" data-i="${si}">${icon('layers', 14)} Jadikan misi</button><button class="btn sm" data-act="talk" data-i="${si}">${icon('chat', 14)} Diskusikan</button></div></details>`)}
             ${(s.risiko || []).length ? html`<span class="small t-amber2">Risiko: ${s.risiko.join('; ')}</span>` : ''}`
           : html`<p class="sub">Belum ada strategi. Otak berat menyusunnya dari angka 4 bulan (otomatis tiap Senin pagi).</p>`}
           ${s ? html`<div class="btns"><button class="btn" data-act="read">${icon('speaker', 16)} Bacakan</button>${(s.minggu_ini || []).length ? html`<button class="btn" data-act="tasks">${icon('list', 16)} Jadikan tugas</button>` : ''}</div>` : ''}
@@ -55,6 +60,10 @@ export default {
   },
   actions: {
     metric(b) { st.m = b.dataset.m; render(); },
+    biz(b) { st.b = b.dataset.b; st.m = 'penjualan'; render(); },
+    days(b) { st.days = Number(b.dataset.n); render(); },
+    async mission(b) { const r = await post('/api/v1/app/bisnis/strategy/mission', { business: st.b, index: Number(b.dataset.i) }); toast(r.task_id ? `Hermes menyiapkan strategi (misi #${r.task_id})` : 'Misi dimulai'); },
+    talk(b) { const x = cur.strategi[Number(b.dataset.i)]; discuss(`Soal strategi ${st.b} "${x.judul}" (${x.kenapa}; langkah: ${(x.langkah || []).join('; ')}). Aku mau diskusi: realistis tidak untukku, apa risikonya, dan mulai dari mana?`); },
     read() { speak([`Strategi ${st.b}.`, cur.ringkasan, ...(cur.minggu_ini || []).length ? ['Minggu ini:', ...cur.minggu_ini] : []].join(' ')); },
     async tasks() { const r = await post('/api/v1/app/bisnis/strategy/tasks', { business: st.b }); toast(r.tasks.length ? `${r.tasks.length} tugas masuk Catatan` : 'Sudah ada di Catatan'); },
     async strategy() { toast('Otak berat menganalisa… (±1 menit)'); await post('/api/v1/app/bisnis/strategy', { business: st.b }); render(); },

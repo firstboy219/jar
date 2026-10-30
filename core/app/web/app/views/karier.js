@@ -89,7 +89,7 @@ export default {
     root.innerHTML = String(html`${header('Karier JobStreet')}<div class="scr">${loading()}</div>`);
     const d = cur = await get('/api/v1/app/jobs');
     const body = { cocok, lamaran, undangan, atur }[tab](d);
-    root.innerHTML = String(html`${header('Karier JobStreet', { sub: `${d.week} lamaran minggu ini · ${d.counts.interview} wawancara${d.counts.offer ? ` · ${d.counts.offer} penawaran` : ''}`,
+    root.innerHTML = String(html`${header('Karier JobStreet', { sub: `${d.week} lamaran minggu ini · ${d.counts.seen} dilihat HR · ${d.counts.interview} wawancara${d.counts.offer ? ` · ${d.counts.offer} penawaran` : ''}`,
       right: html`<button class="ib box" data-act="round" aria-label="Cari sekarang">${icon('search', 18)}</button>` })}
       <div class="scr">
         ${!d.ready.roles || !d.ready.cv ? html`<div class="card amber"><span class="small">Lengkapi ${[!d.ready.roles && 'peran yang dicari', !d.ready.cv && 'CV'].filter(Boolean).join(' dan ')} di tab Atur agar JARVIS bisa mencari & menilai.</span></div>` : ''}

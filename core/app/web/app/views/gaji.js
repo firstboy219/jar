@@ -6,7 +6,7 @@ import { laneChip } from '../ui.js';
 
 let cur = null;
 const d = (s) => new Date(`${String(s).slice(0, 10)}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-const SRC = { notif: 'notifikasi', manual: 'manual', jarvis: 'JARVIS' };
+const SRC = { notif: 'notifikasi', manual: 'manual', jarvis: 'JARVIS', email: 'struk email' };
 
 function setup(s) {
   return html`<form class="card cyan" id="setf"><span class="k cyan">Atur gaji</span>
