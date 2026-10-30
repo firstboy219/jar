@@ -2,7 +2,7 @@
 actions and API router — the API (appapi) and the clock (appclock) both import it, so nothing is registered twice or forgotten."""
 
 from . import (alur, attention, bengkel, berkas, bimbing, bioskop, bisnis, brief, coffee, commute, dongeng, habits, ibadah, invest, karier, meeting_live, money,  # noqa: F401
-               musik, outlook, quran, recap, ukur, video, weather)
+               musik, outlook, quran, recap, ukur, video, weather, webagent)
 
 ROUTERS = [m.router for m in (ibadah, quran, brief, habits, commute, recap, attention, meeting_live, bisnis, money, invest, coffee,
-                                 musik, video, berkas, bioskop, dongeng, ukur, bimbing, alur, bengkel, karier) if hasattr(m, "router")]
+                                 musik, video, berkas, bioskop, dongeng, ukur, bimbing, alur, bengkel, karier, webagent) if hasattr(m, "router")]

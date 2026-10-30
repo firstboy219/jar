@@ -11,7 +11,7 @@ import json
 import logging
 import re
 
-from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, lanes, memory, modelrouter, openjarvis, phone_agent, quick, reports, writer
+from . import approvals, audit, capabilities, db, episodes, gateway, hermes, hub, lanes, memory, modelrouter, openjarvis, phone_agent, quick, reports, webagent, writer
 from .config import settings
 from .location import Location, context_prefix
 
@@ -196,6 +196,12 @@ async def _run(task_id: int, context: str) -> None:
                                      "event": {"type": "thought", "text": "menulis draf"}})
                 result = hermes.HermesReply(await writer.produce(
                     task_id, row["instruction"], row["private"], lambda pct, text, extra=None: _tell_progress(row, task_id, pct, text, extra)), None, None, 0)
+            elif row["instruction"].startswith(webagent.MARK):   # a website worked on step by step by the web agent (ADR-087 batch I)
+                async def web_event(e: dict) -> None:
+                    await hub.broadcast({"type": "task_event", "task_id": task_id, "event": e})
+                    _note(task_id, e)
+                result = hermes.HermesReply(await webagent.produce(
+                    task_id, row, lambda pct, text, extra=None: _tell_progress(row, task_id, pct, text, extra), web_event), None, None, 0)
             elif row["instruction"].startswith(phone_agent.MARK):   # an app on the owner's phone (ADR-077): core drives it, not Hermes
                 async def phone_event(e: dict) -> None:
                     await hub.broadcast({"type": "task_event", "task_id": task_id, "event": e})
@@ -430,7 +436,7 @@ async def _auto_recover(task_id: int, row, error: Exception, context: str) -> bo
     text = str(error)
     if "saldo OpenRouter habis" in text or "tidak dapat dihubungi" in text:
         return False
-    if row["instruction"].startswith(phone_agent.MARK):   # never operate the owner's phone again unasked (an order may be half done)
+    if row["instruction"].startswith((phone_agent.MARK, webagent.MARK)):   # never operate the phone / a website again unasked (an order may be half done)
         return False
     from . import modelinsight
     cause = modelinsight.classify_error(text)

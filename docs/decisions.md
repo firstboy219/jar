@@ -1474,6 +1474,21 @@ menentukan berat/ringan/non-AI)".
   picks film, time and seats and stops at sign-in/payment, which the owner does himself; KCI's own disruption notes read every 10 minutes
   during a trip; business numbers read off a seller dashboard with no API — the owner signs in ONCE in the app's own browser
   (`WebLoginActivity`, its cookies stay in the app) and JARVIS never types a password.
+- **The web agent, for every site** (batch I; owner 2026-10-30: "skill ini bikin untuk semua web … pesan tiket hotel atau pesawat dll"):
+  a task on any https site (not bank / e-wallet / pay-later / crypto sites) runs as a worker through the master flow, in a browser session
+  that lives on the owner's phone (a hidden WebView kept between steps; the server's Chromium when the phone is away and the site allows
+  it). Core sends the scripts that read the page as numbered fields and buttons and act on it; each step is one light-brain decision
+  (fill the whole form at once, click, open, scroll, ask, done), retried once by the heavy brain. Personal data never reaches the model:
+  it writes {profil.nama} etc. and core fills the values from the form profile (ID numbers vault-encrypted, shown masked). The owner is
+  asked on "Butuh kamu" — a pick card for choices, an answer, a review of the filled form before anything that books/sends (with the admin
+  password when the task came from the chat) — and for sign-in, robot checks, codes and payment the session's own page (with what was
+  filled) is shown to him; "Selesai" hands it back and the task carries on. Unstuck: dialogs captured, links to new tabs opened in the
+  same tab, buttons labelled with their card's title, cookie banners/pop-ups closed, a page unchanged after two actions → another way,
+  after four → "macet" for the owner; an empty page or the site's own error page is reported as the site's problem. A finished task is
+  learned per site as a routine (fields by label, values from the profile / fixed / the goal) and replayed without the model next time
+  (one call fills the goal's values), the model taking over where the page differs; commits are always reviewed. From the app (#/web),
+  the chat (tool kerjakan_di_web) and features (cinema booking). A live run on public practice sites found the four robustness issues fixed
+  here (empty/error pages, dialogs, new-tab links, identical buttons); a full real booking is left to the owner's own test.
 - **Not built**: casting to a TV or picking a speaker, video speed/subtitle/PiP controls, highlighting the target on the guided screen,
   receipts from the phone's gallery, a desktop three-pane cockpit, and a full router/model editor (models are chosen in Komposisi AI on the
   admin site; Bengkel shows them and how each did). Crowding/platform appear only when KCI's page says so; there is still no live train feed.

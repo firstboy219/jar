@@ -56,6 +56,7 @@ class Job:
     tools: bool = False                # needs Hermes' tools: a worker task (asynchronous; see on_done)
     instruction: str = ""              # for a tools job: what the worker does
     phone: dict | None = None          # {app, goal}: an app on the owner's phone (a routine replays it without AI when one is learned)
+    web: dict | None = None            # {goal, url, origin}: a website worked on by the web agent (ADR-087 batch I; Hermes lane)
     title: str = ""
     private: bool = False
     no_free: bool = False              # personal content (an email, a chat): never a free endpoint that may log prompts
@@ -308,7 +309,7 @@ async def run(job: Job) -> dict:
         await db.pool().execute("UPDATE flow_runs SET status = 'waiting', task_id = $2, on_done = $3, data = $4 WHERE id = $1",
                                 run_id, task_id, job.on_done, _jsonish(job.data) or {})
         _pending[run_id] = job
-        await _step(run_id, "lane", f"misi #{task_id} dimulai", extra={"tool": "hp" if job.phone else "browser", "lane": "hermes"})
+        await _step(run_id, "lane", f"misi #{task_id} dimulai", extra={"tool": "hp" if job.phone else ("web" if job.web else "browser"), "lane": "hermes"})
         return {"run_id": run_id, "status": "waiting", "lane": lane, "why": why, "task_id": task_id}
     except Exception as e:
         log.warning("flow %s %s:%s failed: %s", run_id, job.feature, job.action, e)
@@ -329,6 +330,14 @@ _pending: dict[int, Job] = {}   # jobs whose worker is still running (for tests 
 
 async def _spawn(job: Job, run_id: int, lane: str) -> int:
     from . import phone_agent, workers
+    if job.web:   # the web agent: a session on the phone (or the server's browser), every step through this flow
+        from . import webagent
+        try:
+            w = await webagent.request(job.web.get("goal") or job.goal, job.web.get("url") or "", f"master:{job.feature}",
+                                       job.web.get("origin") or ("app" if job.trigger == "owner" else "schedule"), job.feature, job.title)
+        except webagent.WebError as e:
+            raise FlowError(str(e)) from None
+        return int(w["task_id"])
     if job.phone:
         # the owner's own tap in the app (with the admin password checked there), a habit he set or a schedule: no second approval
         row = await phone_agent.request(job.phone["goal"], job.phone["app"], actor=f"master:{job.feature}", scheduled=True, by="jadwal")

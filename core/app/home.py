@@ -33,6 +33,7 @@ FEATURES: list[dict] = [
     {"id": "kamera", "label": "Kamera ukur", "icon": "camera", "group": "Sehari-hari", "route": "#/ukur", "slots": []},
     {"id": "berkas", "label": "Berkas & PDF", "icon": "file", "group": "Sehari-hari", "route": "#/berkas", "slots": ["kerja", "siang"]},
     {"id": "bimbing", "label": "Bimbing layar", "icon": "screen", "group": "Sehari-hari", "route": "#/bimbing", "slots": []},
+    {"id": "web", "label": "Kerjakan di web", "icon": "search", "group": "Sehari-hari", "route": "#/web", "slots": []},
     {"id": "halaman", "label": "Halaman aktif", "icon": "pages", "group": "Sehari-hari", "route": "#/halaman", "slots": []},
     {"id": "berangkat", "label": "Berangkat", "icon": "train", "group": "Perjalanan", "route": "#/berangkat", "slots": ["pagi"]},
     {"id": "pulang", "label": "Pulang", "icon": "car", "group": "Perjalanan", "route": "#/pulang", "slots": ["sore"]},

@@ -9,7 +9,7 @@ async function catalog() {
 }
 
 const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^\w ]/g, '');
-const ALIASES = { kopi: ['ngopi', 'coffee'], sholat: ['salat', 'shalat', 'adzan', 'azan'], quran: ['alquran', 'ngaji', 'mengaji'], bioskop: ['film', 'nonton'],
+const ALIASES = { web: ['situs', 'website', 'hotel', 'pesawat', 'tiket', 'booking', 'formulir'], kopi: ['ngopi', 'coffee'], sholat: ['salat', 'shalat', 'adzan', 'azan'], quran: ['alquran', 'ngaji', 'mengaji'], bioskop: ['film', 'nonton'],
   inbox: ['email', 'whatsapp', 'wa', 'outlook', 'pesan'], bisnis: ['penjualan', 'pencairan', 'packing', 'renature', 'autotoko'], invest: ['pluang', 'saham', 'emas'],
   karier: ['jobstreet', 'lamar', 'lowongan', 'kerja baru'], berkas: ['pdf', 'word', 'excel', 'konversi'], kamera: ['ukur', 'meteran'], dongeng: ['cerita', 'anak'],
   bangun: ['alarm', 'bangunin'], berangkat: ['krl', 'kereta', 'goride', 'ojek'], pulang: ['krl pulang'], gaji: ['alokasi', 'budget'], hijriah: ['puasa', 'bekam', 'hijriyah'] };

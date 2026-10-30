@@ -30,6 +30,8 @@ DEFAULTS: dict[str, dict] = {
     "home": {"hidden": [], "pinned": []},
     "cinema": {"city": "", "cinemas": [], "max": 4, "office_city": "Jakarta", "office_cinemas": [], "seats": 2, "seat_pref": "tengah, baris agak belakang"},
     "inbox": {"family": []},
+    "webprofile": {"nama": "", "email": "", "hp": "", "tgl_lahir": "", "jenis_kelamin": "", "gelar": "", "alamat": "", "kota": "", "kode_pos": "",
+                   "kewarganegaraan": "Indonesia"},
     "bisnis": {"businesses": ["Autotoko", "Renature"], "alerts": True, "behind_pct": 60, "unpacked_after": "14:00", "cutoff": "15:00", "cutoff_warn_min": 60,
                "profile": "Pemilik Autotoko (SaaS omnichannel marketplace untuk penjual online) dan Renature (jualan online inhaler, mouth spray, produk herbal); "
                           "juga karyawan kantor di Jakarta, tinggal di Bogor.",

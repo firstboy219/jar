@@ -129,15 +129,17 @@ async def test_cinema_other_day_booking_kci_and_web_dashboard(pool, monkeypatch)
     assert not v.get("loading") and v["films"][0]["title"] == "Film Besok" and {a["cinema"] for a in v["films"][0]["at"]} == {"Bogor XXI", "CGV BTM"}
     assert {s[1] for s in seen} == {"21cineplex.com", "cgv.id"} and all("tanggal" in s[2] and "Bogor" in s[2] for s in seen)
 
+    from app import webagent
     jobs = []
 
-    async def request(goal, app, actor, session_id=None, scheduled=False, project=None, by="jadwal"):
-        t = await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, status) VALUES ('phone', $1, $2, 'owner', 'running') RETURNING id", app, goal)
-        jobs.append((app, goal))
-        return {"id": len(jobs), "task_id": t, "status": "approved"}
-    monkeypatch.setattr(phone_agent, "request", request)
+    async def request(goal, start_url="", who="owner", origin="app", feature="web", title=""):
+        t = await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, status) VALUES ('web', $1, $2, 'feature', 'running') RETURNING id", title, goal)
+        jobs.append((start_url, goal, origin, feature))
+        return {"id": len(jobs), "task_id": t}
+    monkeypatch.setattr(webagent, "request", request)
     b = await bioskop.book("Film Besok", "CGV BTM", "2026-11-01", "19:00", 3)
-    assert b["site"] == "cgv.id" and jobs[-1][0] == "web" and "3 tiket" in jobs[-1][1] and "BERHENTI" in jobs[-1][1] and "jangan bayar" in jobs[-1][1]
+    assert b["site"] == "cgv.id" and jobs[-1][0] == "https://www.cgv.id/" and "3 tiket" in jobs[-1][1] and "pemilik yang melakukannya" in jobs[-1][1]
+    assert jobs[-1][2:] == ("app", "bioskop")
 
     tid = await pool.fetchval("INSERT INTO commute_trips (direction, status, plan, chosen) VALUES ('out', 'active', $1, $2) RETURNING id",
                               {"from": {"name": "Bogor"}, "to": {"name": "Sudirman"}}, {"leave": "07:00", "dep": "07:15", "arr": "08:10", "arrive": "08:30"})

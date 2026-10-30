@@ -31,6 +31,18 @@ object PhoneOps {
                 }
                 return buildJsonObject { put("type", "phone_result"); put("req", req); got.forEach { (k, v) -> put(k, v) } }.toString()
             }
+            if (op.startsWith("web_") && op != "web_read") {   // ADR-087 batch I: a web session nobody sees (any site but money sites)
+                val id = a.s("session").take(40)
+                val out = when (op) {
+                    "web_open" -> online.cosger.jarvis.web.WebSessions.open(context, id, a.s("url"), ((a.i("wait_s") ?: 25).coerceIn(5, 45)) * 1000L)
+                    "web_eval" -> online.cosger.jarvis.web.WebSessions.eval(id, a.s("js"), (a.i("settle_ms") ?: 0).toLong().coerceIn(0, 20_000))
+                    "web_show" -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { online.cosger.jarvis.web.WebSessions.show(context, id, a.s("reason")) }
+                    "web_status" -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { online.cosger.jarvis.web.WebSessions.statusOf(id) }
+                    "web_close" -> kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { online.cosger.jarvis.web.WebSessions.close(id); buildJsonObject { put("ok", true) } }
+                    else -> buildJsonObject { put("error", "perintah web tidak dikenal: $op") }
+                }
+                return buildJsonObject { put("type", "phone_result"); put("req", req); out.forEach { (k, v) -> put(k, v) } }.toString()
+            }
             if (op == "web_read") {   // ADR-087 (batch H): a page read by the phone itself, in a WebView nobody sees
                 val domains = a["domains"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
                 val page = online.cosger.jarvis.web.WebReader.read(context, a.s("url"), domains, ((a.i("wait_s") ?: 25).coerceIn(5, 45)) * 1000L)

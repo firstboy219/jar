@@ -25,4 +25,11 @@ class WebRulesTest {
         assertTrue(WebRules.challenged("CGV", "Access Restricted. We were unable to process your request"))
         assertFalse(WebRules.challenged("CINEMA 21", "Jadwal film hari ini"))
     }
+
+    @Test fun moneySitesAreNeverOpenedBySessions() {
+        assertTrue(WebRules.financial("https://ibank.klikbca.com/"))
+        assertTrue(WebRules.financial("https://www.indodax.com/market"))
+        assertFalse(WebRules.financial("https://www.traveloka.com/id-id/hotel"))
+        assertFalse(WebRules.financial("https://www.tiket.com/pesawat"))
+    }
 }

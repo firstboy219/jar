@@ -300,11 +300,11 @@ async def book(film: str, cinema: str, day: str, time_: str, seats: int | None =
     s = await appsettings.get("cinema")
     dom, home_url = CHAIN_SITE[chain_of(cinema)]
     n = max(1, min(int(seats or s["seats"]), 8))
-    goal = (f"Di situs {dom} ({home_url}), pesan {n} tiket film \"{film}\" di {cinema} tanggal {day} jam {time_}. Pilih {n} kursi berdampingan "
-            f"({s['seat_pref']}). Lanjutkan sampai halaman masuk akun atau pembayaran, lalu BERHENTI di situ (jangan masuk akun, jangan bayar) dan tulis "
-            "ringkasan: film, bioskop, jam, kursi, total harga.")
-    r = await master.run(master.Job("bioskop", "pesan-tiket", f"siapkan tiket {film} {time_}", trigger="owner", phone={"app": "web", "goal": goal},
-                                    title=f"Tiket {film} {time_}"[:80], no_free=True))
+    goal = (f"Di situs {dom}, pesan {n} tiket film \"{film}\" di {cinema} tanggal {day} jam {time_}. Pilih {n} kursi berdampingan "
+            f"({s['seat_pref']}). Bila diminta masuk akun atau membayar, pemilik yang melakukannya. Akhiri dengan ringkasan: film, bioskop, jam, kursi, "
+            "total harga, kode pemesanan bila ada.")
+    r = await master.run(master.Job("bioskop", "pesan-tiket", f"pesan tiket {film} {time_}", trigger="owner", tools=True,
+                                    web={"goal": goal, "url": home_url, "origin": "app"}, title=f"Tiket {film} {time_}"[:80]))
     if r["status"] == "failed":
         raise CinemaError(r.get("error") or "browser HP tidak bisa dibuka")
     return {"status": r["status"], "task_id": r.get("task_id"), "site": dom}

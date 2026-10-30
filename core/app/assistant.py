@@ -398,6 +398,14 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "aplikasi": {"type": "string", "enum": ["gojek"]}, "tujuan": {"type": "string"}}, "required": ["aplikasi", "tujuan"]}}},
     {"type": "function", "function": {
+        "name": "kerjakan_di_web",
+        "description": "Kerjakan sesuatu di SITUS WEB mana pun untuk pemilik (pesan hotel/pesawat/kereta/tiket, isi formulir, cek & pesan di toko online): "
+                       "JARVIS membuka situsnya dari HP pemilik, mengisi formulir dengan profil pemilik, bertanya bila ada pilihan, meminta pemilik masuk akun/"
+                       "verifikasi/bayar sendiri, dan pemilik meninjau sebelum apa pun dikirim. Tulis tujuan selengkap kata-kata pemilik (tanggal, kota, "
+                       "jumlah orang, budget, preferensi). Bukan untuk sekadar mencari info (pakai pencarian biasa).",
+        "parameters": {"type": "object", "properties": {"tujuan": {"type": "string"}, "situs": {"type": "string", "description": "alamat https bila pemilik menyebut situsnya"}},
+                       "required": ["tujuan"]}}},
+    {"type": "function", "function": {
         "name": "proyek",
         "description": "Proyek pemilik (tim pekerja berperan + jadwal, mis. bantu lamar kerja tiap pagi): list = semua proyek; status = keadaan satu "
                        "proyek dan pekerja run terakhirnya; run = jalankan sekarang; pause/resume = jeda/lanjutkan jadwalnya; create = buat proyek baru "
@@ -602,6 +610,8 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps(await _project_tool(a, actor), ensure_ascii=False, default=str)
             case "operasi_hp":
                 return json.dumps(await _phone_tool(a, actor, session_id), ensure_ascii=False, default=str)
+            case "kerjakan_di_web":
+                return json.dumps(await _web_tool(a), ensure_ascii=False, default=str)
             case "memory_correct":
                 if (refused := await chat_settings.guard("memory_correct", device_id, stt, bool(screen_text or attachments))):
                     return json.dumps({"error": refused})
@@ -1190,6 +1200,19 @@ async def _phone_tool(a: dict, actor: str, session_id: str) -> dict:
     return {"phone_run": run["id"], "status": "menunggu persetujuan",
             "say": f"Siap. Sebelum aku buka {label}, setujui dulu di aplikasi JARVIS di HP: periksa permintaannya, masukkan password admin, "
                    f"lalu Setujui (berlaku {phone_agent.APPROVAL_MINUTES} menit){away}. PIN dan OTP tetap kamu yang ketik."}
+
+
+async def _web_tool(a: dict) -> dict:
+    """A website task from the chat (ADR-087 batch I): through the master flow; what it sends is reviewed with the admin password."""
+    from . import master
+    goal = str(a.get("tujuan") or "").strip()
+    r = await master.run(master.Job("web", "kerjakan", goal, tools=True, web={"goal": goal, "url": str(a.get("situs") or ""), "origin": "chat"},
+                                    title=f"Web: {goal}"[:80]))
+    if r["status"] == "failed":
+        return {"error": r.get("error") or "tidak bisa dimulai"}
+    return {"task_id": r.get("task_id"), "status": "berjalan",
+            "say": "Siap, aku kerjakan di situsnya lewat HP-mu. Kalau situsnya minta kamu masuk akun, verifikasi, atau bayar — atau sebelum ada yang "
+                   "dikirim — aku minta kamu di Butuh kamu (yang dikirim perlu password admin)."}
 
 
 async def _project_tool(a: dict, actor: str) -> dict:

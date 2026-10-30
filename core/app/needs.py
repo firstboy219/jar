@@ -97,6 +97,21 @@ def choice_item(c: dict) -> dict:
             "password": False, "options": c["options"], "expires_in_s": c["expires_in_s"]}
 
 
+WEB_LABEL = {"masuk": ("Masuk akun di situs", "lock", "Buka di HP"), "verifikasi": ("Verifikasi di situs", "shield", "Buka di HP"),
+             "bayar": ("Bayar sendiri", "wallet", "Buka di HP"), "macet": ("JARVIS macet", "alert", "Bantu di HP"),
+             "pilih": ("Pilih", "list", "Pilih"), "tanya": ("Pertanyaan", "chat", "Jawab"), "tinjau": ("Periksa sebelum dikirim", "check", "Kirim")}
+
+
+def web_item(w: dict) -> dict:
+    """A web task waiting for the owner (ADR-087 batch I): sign in / verify / pay / help on the page, pick, answer, or review before sending."""
+    label, ic, cta = WEB_LABEL[w["kind"]]
+    d = w.get("detail") or {}
+    return {"kind": "web", "id": w["id"], "wait": w["kind"], "title": w["title"], "sub": f"{label} · {w.get('site') or ''} · {(w.get('goal') or '')[:90]}",
+            "icon": ic, "cta": cta, "password": w["kind"] == "tinjau" and bool(d.get("password")), "session": d.get("session") if w["kind"] in ("masuk", "verifikasi", "bayar", "macet") else None,
+            "options": [{"label": o} for o in d.get("options") or []], "rows": d.get("rows") or [], "summary": d.get("summary") or d.get("why") or "",
+            "button": d.get("button") or "", "missing": d.get("missing") or [], "url": d.get("url") or "", "at": w.get("created_at")}
+
+
 def question_item(q: dict) -> dict:
     return {"kind": "question", "id": q["id"], "title": q["question"][:140], "sub": f"Ditanya oleh misi: {q.get('title') or '#' + str(q.get('task_id'))}",
             "icon": "chat", "cta": "Jawab", "password": False, "task_id": q.get("task_id")}
@@ -116,6 +131,8 @@ async def listing() -> list[dict]:
         it["recommended"] = recommend(it["options"], [a if isinstance(a, dict) else {} for a in past])
         out.append(it)
     out += [question_item(q) for q in await questions.open_questions()]
+    from . import webagent
+    out += [web_item(w) for w in await webagent.open_waits()]
     out += [approval_item(a) for a in await approvals.list_("awaiting_approval")]
     return out
 
@@ -148,4 +165,10 @@ async def answer(kind: str, item_id: int, actor: str, approve: bool | None = Non
         if not text.strip():
             raise NeedError("jawabannya kosong")
         return {"ok": await questions.answer(item_id, text, actor)}
+    if kind == "web":
+        from . import webagent
+        try:
+            return await webagent.answer_wait(item_id, actor, approve=approve, option=option, text=text)
+        except webagent.WebError as e:
+            raise NeedError(str(e))
     raise NeedError(f"jenis tidak dikenal: {kind}")

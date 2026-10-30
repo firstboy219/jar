@@ -186,6 +186,13 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
         view.post { online.cosger.jarvis.web.WebLoginActivity.open(view.context, u) }
         return true
     }
+    /** The owner's tap on "Buka di HP" on a web task that needs him: the session's own page is shown (ADR-087 batch I). */
+    @JavascriptInterface fun showWeb(session: String?, reason: String?): Boolean {
+        val id = session.orEmpty().take(40)
+        if (online.cosger.jarvis.web.WebSessions.get(id) == null) return false
+        view.post { online.cosger.jarvis.web.WebSessions.show(view.context, id, reason.orEmpty()) }
+        return true
+    }
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */
     @JavascriptInterface fun location(): String {
         val app = view.context.applicationContext as JarvisApp

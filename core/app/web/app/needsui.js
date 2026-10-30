@@ -10,6 +10,7 @@ export function remember(items) { byKey = new Map(items.map((it) => [key(it.kind
 export function itemCard(it, compact = false) {
   byKey.set(key(it.kind, it.id), it);
   const tone = it.kind === 'phone' ? 'amber' : it.kind === 'choice' ? 'cyan' : it.kind === 'question' ? 'violet' : 'amber';
+  if (it.kind === 'web') return webCard(it, compact);
   const actions = it.kind === 'choice'
     ? html`<div style="display:flex;flex-direction:column;gap:8px">${it.options.map((o) => html`<button class="btn ${o.i === it.recommended ? 'primary' : ''}" data-act="needPick" data-id="${it.id}" data-opt="${o.i}" style="justify-content:space-between">
         <span>${o.i === it.recommended ? '★ ' : ''}${o.label || o.title || `Opsi ${o.i + 1}`}</span>${o.waktu ? html`<span class="mono small">${o.waktu}</span>` : ''}</button>`)}
@@ -29,6 +30,29 @@ export function itemCard(it, compact = false) {
     ${it.kind === 'phone' && !compact ? html`<div class="card" style="background:var(--bg2)">${(it.rules || ['Hanya aplikasi itu · tanpa top-up/transfer · berhenti di layar PIN/OTP']).map((x) => html`<span class="small">${icon('shield', 12, 'var(--green)')} ${x}</span>`)}</div>` : ''}
     ${actions}
   </div>`;
+}
+
+// a web task waiting for him (ADR-087 batch I): the page itself on his phone, a pick, an answer, or the filled form to review
+function webCard(it, compact) {
+  const tone = it.wait === 'tinjau' || it.wait === 'bayar' ? 'amber' : it.wait === 'pilih' || it.wait === 'tanya' ? 'violet' : 'cyan';
+  let actions;
+  if (it.session) {
+    actions = html`<div class="btns"><button class="btn ${tone}" data-act="webShow" data-id="${it.id}">${icon('right', 16)} ${it.cta}</button>
+      <button class="btn" data-act="webDone" data-id="${it.id}" style="flex:0 0 96px">Sudah</button><button class="btn ghost" data-act="needReject" data-kind="web" data-id="${it.id}" style="flex:0 0 80px">Batal</button></div>
+      <span class="small">${it.wait === 'bayar' ? 'Halaman pembayarannya terbuka di HP — kamu yang bayar, lalu tekan Selesai.' : 'Halamannya terbuka di HP persis seperti yang JARVIS lihat. Selesaikan sendiri (JARVIS tidak membaca sandimu), lalu Selesai.'}</span>`;
+  } else if (it.wait === 'pilih') {
+    actions = html`<div style="display:flex;flex-direction:column;gap:8px">${it.options.map((o, i) => html`<button class="btn" data-act="webPick" data-id="${it.id}" data-opt="${i}" style="justify-content:flex-start;text-align:left">${o.label}</button>`)}</div>`;
+  } else if (it.wait === 'tanya') {
+    actions = html`<button class="btn block" data-act="webAnswer" data-id="${it.id}">Jawab</button>${(it.missing || []).length ? html`<a class="small" href="#/web?tab=profil">atau isi profil web (${it.missing.join(', ')})</a>` : ''}`;
+  } else {
+    actions = html`<div class="btns"><button class="btn amber" data-act="needApprove" data-kind="web" data-id="${it.id}">${it.password ? icon('lock', 14) : ''} Kirim "${(it.button || 'lanjut').slice(0, 24)}"</button>
+      <button class="btn" data-act="needReject" data-kind="web" data-id="${it.id}" style="flex:0 0 96px">Jangan</button></div>`;
+  }
+  return html`<div class="card ${tone}">
+    <div class="row top"><span class="ico ${tone}">${icon(it.icon || 'pages', 20)}</span><div class="grow"><div class="ttl">${it.title}</div><div class="sub">${it.sub}</div></div></div>
+    ${it.summary ? html`<span class="small">${it.summary}</span>` : ''}
+    ${(it.rows || []).length && !compact ? html`<div class="card" style="background:var(--bg2)">${it.rows.map((r) => html`<div class="row sb" style="font-size:13px;gap:8px"><span class="small">${r.label}</span><span class="mono" style="text-align:right">${r.value}</span></div>`)}</div>` : ''}
+    ${actions}</div>`;
 }
 
 const host = () => window.JarvisHost;
@@ -66,6 +90,21 @@ export async function withPassword(title, fn, opts = {}) {
 
 /** The actions every screen showing these cards adds to its own. */
 export const needActions = {
+  async webShow(b) {
+    const it = byKey.get(key('web', b.dataset.id));
+    if (host()?.showWeb?.(it?.session || '', it?.title || '')) return toast('Halamannya terbuka di HP — tekan Selesai bila sudah.');
+    toast('Buka aplikasi JARVIS di HP untuk menyelesaikan langkah ini.', true);
+  },
+  async webDone(b) { await post(`/api/v1/app/needs/web/${b.dataset.id}`, { approve: true }); toast('JARVIS melanjutkan.'); render(); },
+  async webPick(b) { await post(`/api/v1/app/needs/web/${b.dataset.id}`, { option: Number(b.dataset.opt) }); toast('Pilihanmu dicatat — JARVIS melanjutkan.'); render(); },
+  async webAnswer(b) {
+    const it = byKey.get(key('web', b.dataset.id));
+    const r = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:12px"><span class="k violet">Pertanyaan dari tugas web</span><p>${it?.title || ''}</p>
+      <label class="field">Jawabanmu<textarea name="text" required></textarea></label><button class="btn primary">Kirim jawaban</button></form>`));
+    if (!r?.text) return;
+    await post(`/api/v1/app/needs/web/${b.dataset.id}`, { text: r.text });
+    toast('Jawaban dikirim.'); render();
+  },
   async needApprove(b) {
     const it = byKey.get(key(b.dataset.kind, b.dataset.id));
     const body = { approve: true };

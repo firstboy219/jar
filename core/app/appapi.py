@@ -95,6 +95,10 @@ async def app_need_answer(kind: str, item_id: int, body: AnswerIn, device: dict 
             return jsonable({"ok": True, "run": await phone_agent.approve(item_id, who)})
         except phone_agent.PhoneError as e:
             raise HTTPException(409, str(e))
+    if kind == "web" and body.approve:   # a web review asked from the chat: sending it is his decision with the admin password
+        detail = await db.pool().fetchval("SELECT detail FROM web_waits WHERE id = $1 AND kind = 'tinjau'", item_id) or {}
+        if detail.get("password"):
+            await require_password(device, body.password, f"web_wait:{item_id}")
     try:
         return jsonable(await needs.answer(kind, item_id, who, approve=body.approve, option=body.option, text=body.text))
     except needs.NeedError as e:
