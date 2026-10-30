@@ -197,8 +197,22 @@ async def _take_task(v: dict) -> None:
     await db.pool().execute("UPDATE inbox_items SET data = data || '{\"task_added\": true}'::jsonb WHERE id = $1", v["id"])
 
 
+_seen = {"mark": None}
+
+
+async def _local_mark() -> tuple:
+    """What changed locally since the last sync (forwarded WhatsApp notifications, Gmail items): nothing new and no Outlook → no run."""
+    return (await db.pool().fetchval("SELECT max(id) FROM notifications WHERE package = ANY($1)", list(WA)),
+            await db.pool().fetchval("SELECT max(id) FROM mail_items"))
+
+
 @appclock.every(300, "inbox.sync")
-async def tick() -> dict:
+async def tick() -> dict | None:
+    mark = await _local_mark()
+    if not (await outlook.status())["connected"] and mark == _seen["mark"]:
+        return None
+    _seen["mark"] = mark
+
     async def run_sync():
         return await sync()
     r = await master.run(master.Job("inbox", "sync", "ambil email, WhatsApp, dan kalender terbaru", trigger="schedule", skill=run_sync))

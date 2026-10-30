@@ -240,7 +240,8 @@ async def save_manual(job: str, cfg: dict, note: str, who: str) -> dict:
 
 async def evaluate(version_id: int, limit: int = 4) -> dict:
     """The job's recent real inputs answered by the active version (A) and this one (B); the heavy brain judges each pair blind."""
-    from . import gateway, master, modelrouter
+    import json as _json
+    from . import master
     v = await db.pool().fetchrow("SELECT * FROM brain_versions WHERE id = $1", version_id)
     if not v or not v["job"]:
         raise BrainError("hanya versi sebuah pekerjaan yang bisa diuji ulang")
@@ -252,16 +253,14 @@ async def evaluate(version_id: int, limit: int = 4) -> dict:
     a_cfg, b_cfg = (active["config"] if active else {"lane": "auto", "instruction": ""}), v["config"]
 
     async def answer(cfg: dict, msgs: list[dict], json_out: bool) -> str:
-        body = {"messages": with_rule(msgs, cfg.get("instruction", "")), "max_tokens": cfg.get("max_tokens", 1500), "temperature": cfg.get("temperature", 0.3)}
-        if json_out:
-            body["response_format"] = {"type": "json_object"}
-        lane = cfg.get("lane") if cfg.get("lane") in ("ringan", "berat") else "ringan"
-        token = modelrouter.NO_FREE.set(True)
-        try:
-            data = await gateway.complete(lane, body, caller="bengkel:uji", session_id=f"bengkel-{version_id}")
-        finally:
-            modelrouter.NO_FREE.reset(token)
-        return ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        """One replay through the master flow too (Hermes routes it; the version's lane, rule, length and temperature applied here)."""
+        r = await master.run(master.Job("bengkel", "ulang", f"uji ulang {v['job']}", trigger="owner", messages=with_rule(msgs, cfg.get("instruction", "")),
+                                        heavy=cfg.get("lane") == "berat", json_out=json_out, no_free=True, max_tokens=int(cfg.get("max_tokens") or 1500),
+                                        temperature=float(cfg.get("temperature") if cfg.get("temperature") is not None else 0.3)))
+        if r["status"] != "done":
+            raise BrainError(r.get("error") or "uji ulang gagal")
+        res = r["result"]
+        return res if isinstance(res, str) else _json.dumps(res, ensure_ascii=False)
     results = []
     for s in samples:
         msgs = s["messages"]

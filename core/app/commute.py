@@ -424,7 +424,10 @@ class ChooseIn(BaseModel):
 
 @router.get(API + "/stations")
 async def api_stations(q: str = "", device: dict = Depends(owner)):
-    all_ = await krl.stations()
+    try:
+        all_ = await krl.stations()
+    except Exception as e:
+        raise HTTPException(503, f"daftar stasiun KRL (Comuline) belum terjangkau — coba lagi ({type(e).__name__})")
     qn = q.lower().strip()
     return {"stations": [s for s in all_ if not qn or qn in s["name"].lower()][:30]}
 
