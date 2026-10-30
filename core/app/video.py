@@ -160,8 +160,9 @@ def _server_captions(vid: str) -> dict:
 async def _phone_captions(vid: str) -> dict:
     from . import phone_agent
     try:
-        r = await phone_agent.op("yt_captions", video=vid, langs="id,en")
+        r = await phone_agent.op("yt_captions", video=vid, langs="id,en", wait=80)   # the watch page, else the official player played silently
     except phone_agent.PhoneError as e:
+        log.warning("captions %s from the phone: %s", vid, e)
         raise VideoError(f"subtitle tidak bisa diambil dari server, dan HP: {e}")
     tr = parse_json3(json.loads(r["json3"])) if r.get("json3") else parse_vtt(r.get("vtt") or "")
     if not tr:

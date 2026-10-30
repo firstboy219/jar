@@ -1,5 +1,17 @@
 package online.cosger.jarvis.phone
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.view.View
+import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -69,8 +81,77 @@ object YouTubeCaptions {
         Regex("\"videoDetails\":\\{[^{}]*?\"$name\":\"((?:[^\"\\\\]|\\\\.)*)\"").find(page)?.groupValues?.get(1)
             ?.let { runCatching { Json.parseToJsonElement("\"$it\"").jsonPrimitive.content }.getOrDefault(it) }.orEmpty()
 
-    fun fetch(video: String, langs: List<String>): JsonObject {
+    /**
+     * The subtitles: the watch page's own track list first; YouTube now often answers that address with nothing (its subtitle requests
+     * carry a token only its player makes), so then the official player itself is asked ([viaPlayer]).
+     */
+    suspend fun fetch(context: Context, server: String, video: String, langs: List<String>): JsonObject {
         if (!ID.matches(video)) throw PhoneOpException("id video tidak valid")
+        val direct = runCatching { withContext(Dispatchers.IO) { fetchDirect(video, langs) } }
+        direct.getOrNull()?.let { return it }
+        val viaPlayer = runCatching { viaPlayer(context, server, video, langs) }
+        viaPlayer.getOrNull()?.let { return it }
+        throw PhoneOpException(viaPlayer.exceptionOrNull()?.message ?: direct.exceptionOrNull()?.message ?: "subtitle tidak bisa diambil")
+    }
+
+    /** The subtitle address the player asks for, with json3 as the format. Pure; unit-tested. */
+    fun asJson3(url: String): String =
+        if (Regex("[?&]fmt=").containsMatchIn(url)) url.replace(Regex("([?&])fmt=[^&]*"), "$1fmt=json3") else "$url&fmt=json3"
+
+    /** The language of a subtitle request (`tlang` when translated, else `lang`). Pure. */
+    fun langOf(url: String): String = (Regex("[?&]tlang=([^&]+)").find(url) ?: Regex("[?&]lang=([^&]+)").find(url))?.groupValues?.get(1).orEmpty()
+
+    /**
+     * JARVIS' own embed of the official YouTube player, in a WebView nobody sees, playing SILENTLY with subtitles on: the player requests
+     * its subtitles (with its token) and that request's address is read — then the subtitle text is fetched once from it. Nothing else.
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    private suspend fun viaPlayer(context: Context, server: String, video: String, langs: List<String>): JsonObject {
+        if (server.isBlank()) throw PhoneOpException("alamat server belum diatur")
+        val found = CompletableDeferred<String>()
+        val web = withContext(Dispatchers.Main) {
+            WebView(context.applicationContext).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                        val u = request.url
+                        if (u.host?.endsWith("youtube.com") == true && u.path?.contains("/api/timedtext") == true) found.complete(u.toString())
+                        return null
+                    }
+                }
+                measure(View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(360, View.MeasureSpec.EXACTLY))
+                layout(0, 0, 640, 360)
+                loadUrl("${server.trimEnd('/')}/embed/youtube/$video?play=1&mute=1&cc=${langs.firstOrNull() ?: "id"}")
+            }
+        }
+        try {
+            val url = withTimeoutOrNull(30_000) { found.await() } ?: throw PhoneOpException("video ini tidak punya subtitle (pemutar YouTube tidak memuatnya)")
+            val cookies = CookieManager.getInstance().getCookie("https://www.youtube.com").orEmpty()
+            val json3 = withContext(Dispatchers.IO) {
+                client.newCall(Request.Builder().url(asJson3(url)).header("User-Agent", web.settings.userAgentString)
+                    .apply { if (cookies.isNotEmpty()) header("Cookie", cookies) }.build()).execute().use { r ->
+                    if (!r.isSuccessful) throw PhoneOpException("YouTube menjawab HTTP ${r.code}")
+                    r.body?.string().orEmpty()
+                }
+            }
+            if (json3.isBlank()) throw PhoneOpException("subtitle kosong (YouTube menolak)")
+            val meta = withContext(Dispatchers.IO) {
+                runCatching { Json.parseToJsonElement(get("https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=$video")).jsonObject }.getOrNull()
+            }
+            return buildJsonObject {
+                put("json3", json3.take(MAX_CHARS))
+                put("lang", langOf(url))
+                put("title", meta?.get("title")?.jsonPrimitive?.contentOrNull.orEmpty())
+                put("channel", meta?.get("author_name")?.jsonPrimitive?.contentOrNull.orEmpty())
+            }
+        } finally {
+            withContext(Dispatchers.Main) { web.stopLoading(); web.destroy() }
+        }
+    }
+
+    private fun fetchDirect(video: String, langs: List<String>): JsonObject {
         val page = get("https://www.youtube.com/watch?v=$video&hl=id")
         val t = pick(tracks(page), langs) ?: throw PhoneOpException("video ini tidak punya subtitle")
         val json3 = get(t.url + "&fmt=json3")

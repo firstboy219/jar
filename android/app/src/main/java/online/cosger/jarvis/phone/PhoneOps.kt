@@ -26,9 +26,9 @@ object PhoneOps {
                 return buildJsonObject { put("type", "phone_result"); put("req", req); put("ok", true); put("title", thread.title) }.toString()
             }
             if (op == "yt_captions") {   // ADR-087: YouTube refuses the server; the phone reads the subtitles from its own connection
-                val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    YouTubeCaptions.fetch(a.s("video"), a.s("langs").split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("id", "en") })
-                }
+                val server = (context.applicationContext as online.cosger.jarvis.JarvisApp).settings.state.value.serverUrl
+                val got = YouTubeCaptions.fetch(context, server, a.s("video"),
+                    a.s("langs").split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("id", "en") })
                 return buildJsonObject { put("type", "phone_result"); put("req", req); got.forEach { (k, v) -> put(k, v) } }.toString()
             }
             if (op.startsWith("web_") && op != "web_read") {   // ADR-087 batch I: a web session nobody sees (any site but money sites)

@@ -256,7 +256,7 @@ function tell(s){document.title=s;try{fetch("/embed/youtube/__ID__/state?s="+enc
 var s=document.createElement("script");s.src="https://www.youtube.com/iframe_api";s.onerror=function(){tell("error:api")};
 document.head.appendChild(s);
 setTimeout(function(){if(!window.YT||!YT.Player)tell("error:api-timeout")},15000);
-var P=null,RATE=__RATE__,CC="__CC__";
+var P=null,RATE=__RATE__,CC="__CC__",MUTE=__MUTE__;
 /* controls for the app (same origin: called directly) and the phone (WebView evaluateJavascript): speed, subtitles, seek, play/pause */
 function jv(c){if(!P||!c)return "";try{
   if(c.cmd==="rate"){P.setPlaybackRate(+c.v||1);}
@@ -268,7 +268,7 @@ function jv(c){if(!P||!c)return "";try{
 function onYouTubeIframeAPIReady(){
   P=new YT.Player("p",{videoId:"__ID__",width:"100%",height:"100%",
     playerVars:{autoplay:0,start:__START__,playsinline:1,rel:0,modestbranding:1,origin:location.origin,cc_load_policy:CC?1:0,cc_lang_pref:CC||undefined,hl:CC||undefined},
-    events:{onReady:function(e){tell("ready");if(RATE!==1)e.target.setPlaybackRate(RATE);if(__PLAY__)e.target.playVideo();},
+    events:{onReady:function(e){tell("ready");if(MUTE)e.target.mute();if(RATE!==1)e.target.setPlaybackRate(RATE);if(__PLAY__)e.target.playVideo();},
             onStateChange:function(e){var t={"0":"ended","1":"playing","2":"paused","3":"buffering"}[e.data];if(t)tell(t);},
             onError:function(e){tell("error:"+e.data);}}});
 }
@@ -276,7 +276,7 @@ function onYouTubeIframeAPIReady(){
 
 
 @app.get("/embed/youtube/{video_id}", response_class=HTMLResponse)
-async def youtube_embed(video_id: str, autoplay: int = 0, start: int = 0, play: int = 0, rate: float = 1.0, cc: str = ""):
+async def youtube_embed(video_id: str, autoplay: int = 0, start: int = 0, play: int = 0, rate: float = 1.0, cc: str = "", mute: int = 0):
     """The official YouTube player, served from JARVIS' own https origin. YouTube refuses embeds without a valid
     origin/referrer (error 152/153), which is what a page made inside the app's WebView has (ADR-034). The page's
     title tells the app when the video ended (playlists) — no JavaScript bridge into the app."""
@@ -286,7 +286,8 @@ async def youtube_embed(video_id: str, autoplay: int = 0, start: int = 0, play: 
     cc = cc if _re.fullmatch(r"[a-z]{2}(-[A-Z]{2})?", cc or "") else ""
     return HTMLResponse(YT_EMBED.replace("__ID__", video_id).replace("__START__", str(max(0, min(start, 86400))))
                         .replace("__PLAY__", "1" if play or autoplay else "0")   # chapters jump and play; the phone's panel asks autoplay (ADR-087)
-                        .replace("__RATE__", str(max(0.25, min(rate, 2.0)))).replace("__CC__", cc),
+                        .replace("__RATE__", str(max(0.25, min(rate, 2.0)))).replace("__CC__", cc)
+                        .replace("__MUTE__", "1" if mute else "0"),   # the phone reading a video's subtitles plays it silently
                         headers={"Cache-Control": "no-cache"})
 
 

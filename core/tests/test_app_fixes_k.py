@@ -131,3 +131,11 @@ async def test_a_mission_s_question_and_its_web_work_on_the_phone(pool, monkeypa
         await c.post("/internal/web_task", json={"goal": "Pesan hotel di Agoda"}, headers=h)
         assert asked[-1][1] == "chat"                                                             # not a project's: reviewed with the password
         assert (await c.get("/internal/web_task/99999", headers=h)).status_code == 404
+
+
+async def test_the_phone_can_play_a_video_silently_to_read_its_subtitles():
+    from app import main
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        page = (await c.get("/embed/youtube/dQw4w9WgXcQ?play=1&mute=1&cc=id")).text
+        assert "MUTE=1" in page and "if(MUTE)e.target.mute()" in page and 'CC="id"' in page
+        assert "MUTE=0" in (await c.get("/embed/youtube/dQw4w9WgXcQ")).text                 # the owner's own player keeps its sound
