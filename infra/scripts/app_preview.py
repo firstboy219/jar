@@ -49,8 +49,41 @@ async def seed() -> str:
         await seed_money(p)
     if {"musik", "video", "berkas", "dongeng", "ukur", "bimbing"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_media(p)
+    if {"alur", "bengkel"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+        await seed_flow(p)
     await db.close()
     return token
+
+
+async def seed_flow(p):
+    """A day of the master flow: fixed procedures, light and heavy brain jobs, Hermes missions, one running now, a brain version on test."""
+    import random
+    rnd = random.Random(3)
+    jobs = [("bisnis", "sinkron", "skill", 0.99), ("inbox", "sync", "skill", 1.0), ("inbox", "triage", "ringan", 0.93), ("inbox", "draf", "ringan", 0.9),
+            ("sholat", "pengingat", "skill", 1.0), ("brief", "compose", "ringan", 0.95), ("bisnis", "strategi", "berat", 0.9), ("rekap", "compose", "ringan", 1.0),
+            ("kopi", "cek-promo-kopikenangan", "hermes", 0.8), ("uang", "catat", "skill", 1.0), ("rapat", "catat-langsung", "ringan", 0.92), ("invest", "analisa", "berat", 1.0)]
+    vid = await p.fetchval("INSERT INTO brain_versions (job, config, request, note, status, canary_pct, activated_at) VALUES ('inbox:draf', $1, 'selalu sebut tenggat di kalimat pertama dan lebih singkat', 'Permintaan pemilik: tenggat disebut di awal.', 'canary', 10, now() - interval '3 hours') RETURNING id",
+                           {"lane": "auto", "instruction": "Selalu sebut tenggat di kalimat pertama. Maksimal 5 kalimat."})
+    for h in range(0, 24 * 3):
+        for f, a, lane, okp in jobs:
+            if rnd.random() > (0.9 if lane == "skill" else 0.35):
+                continue
+            ok = rnd.random() < okp
+            secs = {"skill": 0.4, "ringan": 4.5, "berat": 14, "hermes": 70}[lane] * rnd.uniform(0.6, 1.6)
+            steps = [{"at": "2026-10-30T06:00:00+00:00", "stage": "router", "text": f"dikenali sebagai {f}:{a}"},
+                     {"at": "2026-10-30T06:00:01+00:00", "stage": "hermes", "text": {"skill": "skill tanpa AI — ada cara tetap: tanpa AI", "ringan": "otak ringan — cukup otak ringan",
+                                                                                      "berat": "otak berat — butuh pertimbangan/analisa: otak berat", "hermes": "Hermes + alat — aplikasi HP"}[lane]},
+                     {"at": "2026-10-30T06:00:05+00:00", "stage": "selesai" if ok else "gagal", "text": "selesai" if ok else "AI tidak menjawab"}]
+            await p.execute("""INSERT INTO flow_runs (feature, action, goal, trigger, lane, why, status, steps, cost_usd, model, error, started_at, finished_at, brain_version)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now() - make_interval(hours => $12), now() - make_interval(hours => $12) + make_interval(secs => $13), $14)""",
+                f, a, f"{f} {a}", "schedule" if lane == "skill" else "owner", lane, steps[1]["text"], "done" if ok else "failed", steps,
+                0 if lane == "skill" else round(secs * 0.0004, 5), None if lane == "skill" else ("deepseek-v4-flash" if lane == "ringan" else "deepseek-v4-pro"),
+                None if ok else "AI tidak menjawab", h + rnd.random(), secs, vid if (f, a) == ("inbox", "draf") and rnd.random() < 0.1 else None)
+    await p.execute("""INSERT INTO flow_runs (feature, action, goal, trigger, lane, why, status, steps, started_at) VALUES
+        ('bisnis', 'peluang', 'riset peluang bisnis online baru', 'schedule', 'hermes', 'butuh alat (browser/dokumen/HP): Hermes yang mengerjakan', 'waiting',
+         '[{"at": "2026-10-30T06:00:00+00:00", "stage": "router", "text": "dikenali sebagai bisnis:peluang"}, {"at": "2026-10-30T06:00:01+00:00", "stage": "lane", "text": "membuka Google Trends…"}]', now() - interval '2 minutes'),
+        ('brief', 'compose', 'tulis brief pagi', 'schedule', 'ringan', 'cukup otak ringan', 'running', '[{"at": "2026-10-30T06:00:00+00:00", "stage": "hermes", "text": "otak ringan — cukup otak ringan"}]', now() - interval '6 seconds')""")
+    await p.execute("INSERT INTO flow_samples (run_id, feature, action, messages) SELECT id, feature, action, '[{\"role\": \"user\", \"content\": \"x\"}]' FROM flow_runs WHERE feature = 'inbox' AND action = 'draf' LIMIT 6")
 
 
 async def seed_media(p):
