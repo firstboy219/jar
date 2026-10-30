@@ -1,10 +1,10 @@
 // Sumber API (mockup 36): where the business numbers come from — per source the address, the key (kept encrypted, never shown again), and
 // per number where it is in the API's answer; pasted API documentation fills the form in; "Uji" reads it once and shows what came back.
-import { $, $$, del, get, go, header, html, icon, loading, post, put, render, sheet, toast } from '../core.js';
+import { $, $$, del, get, go, header, html, icon, loading, openWeb, post, put, render, sheet, toast } from '../core.js';
 import { withPassword } from '../needsui.js';
 import { val } from './bisnis.js';
 
-const AUTH = [['none', 'Tanpa kunci'], ['bearer', 'Bearer token'], ['header', 'Header (mis. X-API-Key)'], ['query', 'Parameter URL'], ['basic', 'Basic (user:password)']];
+const AUTH = [['web', 'Lewat web — masuk di HP, tanpa API'], ['none', 'Tanpa kunci'], ['bearer', 'Bearer token'], ['header', 'Header (mis. X-API-Key)'], ['query', 'Parameter URL'], ['basic', 'Basic (user:password)']];
 const AGG = [['sum', 'jumlahkan'], ['count', 'hitung item'], ['value', 'ambil nilai'], ['avg', 'rata-rata'], ['max', 'terbesar'], ['min', 'terkecil']];
 const blankEp = () => ({ metric: 'penjualan', label: '', unit: '', method: 'GET', path: '', params: {}, items: '', value: '', filter: '', agg: 'sum', mode: 'today', date: '', split: '' });
 let meta = null, form = null, tested = null;
@@ -15,7 +15,22 @@ const parseParams = (t) => Object.fromEntries(String(t || '').split('\n').map((l
 const parseHeaders = (t) => Object.fromEntries(String(t || '').split('\n').map((l) => l.trim()).filter((l) => l.includes(':')).map((l) => [l.slice(0, l.indexOf(':')).trim(), l.slice(l.indexOf(':') + 1).trim()]).filter(([k]) => /^[\w-]{1,60}$/.test(k)));
 const opt = (pairs, cur) => pairs.map(([v, l]) => html`<option value="${v}" ${v === cur ? 'selected' : ''}>${l}</option>`);
 
+// a number read off a web page (no API): which page, and what to look for on it, in words
+function webBlock(e, i) {
+  const t = tested?.[i];
+  return html`<div class="card" data-ep="${i}" style="background:var(--bg)">
+    <div class="row sb"><span class="k">Angka ${i + 1} · dari halaman web</span><button type="button" class="ib sm" data-act="rmep" data-i="${i}" aria-label="Hapus angka">${icon('close', 14)}</button></div>
+    <div class="g2"><label class="field">Nama angka<input name="metric" list="metrics" value="${e.metric}" required pattern="[a-z0-9_]{2,40}"></label>
+      <label class="field">Satuan<select name="unit">${opt([['', 'otomatis'], ['rp', 'Rupiah'], ['n', 'jumlah'], ['%', 'persen']], e.unit)}</select></label></div>
+    <label class="field">Halaman (alamat lengkap atau path)<input name="path" value="${e.path}" required placeholder="https://seller.contoh.id/dashboard"></label>
+    <label class="field">Yang dicari di halaman itu<input name="hint" value="${e.hint || ''}" placeholder="mis. total penjualan hari ini / pesanan perlu dikirim"></label>
+    <input type="hidden" name="mode" value="web"><input type="hidden" name="agg" value="value">
+    ${t ? (t.ok ? html`<div class="card green"><span class="small">Terbaca: ${val(t.value, e.unit || 'n')}</span></div>` : html`<div class="card red"><span class="small">${t.error}</span></div>`) : ''}
+  </div>`;
+}
+
 function epBlock(e, i) {
+  if (form?.auth?.type === 'web') return webBlock(e, i);
   const t = tested?.[i];
   return html`<div class="card" data-ep="${i}" style="background:var(--bg)">
     <div class="row sb"><span class="k">Angka ${i + 1}</span><button type="button" class="ib sm" data-act="rmep" data-i="${i}" aria-label="Hapus angka">${icon('close', 14)}</button></div>
@@ -53,6 +68,8 @@ function editor(f) {
           <label class="field">Alamat dasar API<input name="base_url" value="${f.base_url}" required placeholder="https://api.autotoko.id"></label>
           <div class="g2"><label class="field">Kunci<select name="auth_type">${opt(AUTH, f.auth.type)}</select></label>
             <label class="field">Nama header/parameter<input name="auth_name" value="${f.auth.name || ''}" placeholder="X-API-Key"></label></div>
+          ${f.auth.type === 'web' ? html`<div class="card cyan"><span class="small">JARVIS membuka halaman dashboard-mu dari HP (tanpa API) dan membaca angkanya. Masuk akun SEKALI di HP — JARVIS tidak pernah mengetik kata sandimu.</span>
+            <button type="button" class="btn" data-act="login">${icon('lock', 16)} Masuk di HP</button></div>` : ''}
           <label class="field">Kunci berlaku sampai (opsional)<input name="key_expires" type="date" value="${f.auth.expires || ''}"></label>
           <label class="field">Kunci API / token ${f.key_hint ? html`<span class="mono">(tersimpan ${f.key_hint} — kosongkan bila tidak diganti)</span>` : ''}<input name="key" type="password" autocomplete="off" placeholder="${f.key_hint ? '••••••••' : 'tempel kunci API'}"></label>
           <details><summary class="small">Header tambahan (opsional)</summary><label class="field">Satu per baris: Nama: nilai<textarea name="headers" class="inp" style="min-height:70px" placeholder="X-Tenant-Id: renature&#10;Accept: application/json">${Object.entries(f.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}</textarea></label></details>
@@ -78,7 +95,7 @@ function collect() {
   form.endpoints = $$('[data-ep]', f).map((b) => {
     const q = (n) => b.querySelector(`[name=${n}]`)?.value ?? '';
     return { metric: q('metric').trim().toLowerCase(), label: q('label').trim(), unit: q('unit'), method: q('method'), path: q('path').trim(), params: parseParams(q('params')),
-      items: q('items').trim(), value: q('value').trim(), filter: q('filter').trim(), agg: q('agg'), mode: q('mode'), date: q('date').trim(), split: q('split').trim() };
+      items: q('items').trim(), value: q('value').trim(), filter: q('filter').trim(), agg: q('agg') || 'value', mode: q('mode') || 'today', date: q('date').trim(), split: q('split').trim(), hint: q('hint').trim() };
   });
   return form;
 }
@@ -102,6 +119,7 @@ export default {
         tested = null;
       }
       root.innerHTML = String(editor(form));
+      root.querySelector('[name=auth_type]')?.addEventListener('change', () => { collect(); tested = null; render(); });   // web ↔ API changes the number blocks
       return;
     }
     form = null;
@@ -122,6 +140,7 @@ export default {
       </div>`);
   },
   actions: {
+    login() { collect(); if (!form.base_url) return toast('Isi alamat dasarnya dulu (mis. https://seller.contoh.id)', true); openWeb(form.base_url); },
     addep() { collect(); form.endpoints.push(blankEp()); tested = null; render(); },
     rmep(b) { collect(); form.endpoints.splice(Number(b.dataset.i), 1); tested = null; render(); },
     async autofill() {

@@ -31,18 +31,25 @@ object PhoneOps {
                 }
                 return buildJsonObject { put("type", "phone_result"); put("req", req); got.forEach { (k, v) -> put(k, v) } }.toString()
             }
+            if (op == "web_read") {   // ADR-087 (batch H): a page read by the phone itself, in a WebView nobody sees
+                val domains = a["domains"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+                val page = online.cosger.jarvis.web.WebReader.read(context, a.s("url"), domains, ((a.i("wait_s") ?: 25).coerceIn(5, 45)) * 1000L)
+                return buildJsonObject { put("type", "phone_result"); put("req", req); page.forEach { (k, v) -> put(k, v) } }.toString()
+            }
             val svc = PhoneAgentService.instance
                 ?: throw PhoneOpException("Aksesibilitas JARVIS belum aktif di HP (Lainnya → Setelan HP → 5. Operasi aplikasi)")
             when (op) {
                 "begin" -> {
                     val run = a["run"]?.jsonPrimitive?.longOrNull ?: 0L
                     val pkgs = a["packages"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }?.toSet().orEmpty()
-                    svc.begin(run, a.s("label"), pkgs) { onStop(run) }
+                    val sites = a["domains"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
+                    svc.begin(run, a.s("label"), pkgs, sites) { onStop(run) }
                     buildJsonObject { put("ok", true) }
                 }
                 "end" -> { svc.end(); buildJsonObject { put("ok", true) } }
                 "observe" -> svc.observe()
                 "open" -> svc.open(a.s("package"))
+                "open_url" -> svc.openUrl(a.s("url"))
                 "tap" -> svc.tap(a.i("index"))
                 "type" -> svc.type(a.i("index"), a.s("text"), a["submit"]?.jsonPrimitive?.booleanOrNull == true)
                 "scroll" -> svc.scroll(a.s("direction"), a.i("index"))

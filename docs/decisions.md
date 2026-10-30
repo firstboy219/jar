@@ -1465,8 +1465,15 @@ menentukan berat/ringan/non-AI)".
   suggestions from the answer, a mission paused, routine steps and what skills saved, a failed ride finished in Gojek, "do it for me" in
   approved apps (never Pluang: trades only through Investasi), one answer to email + WhatsApp, a room change put on the Outlook calendar.
   The APK can open only the approved apps on the owner's tap (`openApp`), and the alarm shows the subuh time.
-- **Not built** (no reliable source, or out of scope for now): booking cinema seats and other days' schedules (the source shows today and
-  presales only), a live KRL delay/crowding/platform feed (held trains are inferred from the trip's own timing), casting to a TV or picking a
-  speaker, video speed/subtitle/PiP controls, highlighting the target on the guided screen, receipts from the phone's gallery, OAuth API
-  sources, a desktop three-pane cockpit, and a full router/model editor (models are chosen in Komposisi AI on the admin site; Bengkel shows
-  them and how each did).
+- **Visiting the web directly, no API** (batch H; owner 2026-10-30: "bikin Jarvis eksekusi dari visit langsung ke webnya jadi tidak via
+  API"): 21cineplex, CGV and KCI refuse this server (Cloudflare / "Access Restricted" for data-centre addresses), so `webvisit` reads a page
+  either with the server's own Chromium or — for those sites, or when the server meets a bot wall — with the owner's PHONE: a WebView nobody
+  sees, from the phone's own connection (`web_read`), https GET only on the sites named for the visit, nothing typed or submitted. A visit
+  follows links until the light brain finds the answer (each step a master-flow job). Used for: cinema schedules for the coming six days
+  from the chains' own sites; booking — the phone's browser (Chrome, only those sites; the server and the phone both check the address)
+  picks film, time and seats and stops at sign-in/payment, which the owner does himself; KCI's own disruption notes read every 10 minutes
+  during a trip; business numbers read off a seller dashboard with no API — the owner signs in ONCE in the app's own browser
+  (`WebLoginActivity`, its cookies stay in the app) and JARVIS never types a password.
+- **Not built**: casting to a TV or picking a speaker, video speed/subtitle/PiP controls, highlighting the target on the guided screen,
+  receipts from the phone's gallery, a desktop three-pane cockpit, and a full router/model editor (models are chosen in Komposisi AI on the
+  admin site; Bengkel shows them and how each did). Crowding/platform appear only when KCI's page says so; there is still no live train feed.

@@ -40,7 +40,14 @@ APPS = {
                "hint": "Pluang: Beranda menunjukkan total portofolio; tab Portofolio/Aset berisi tiap aset (emas, saham AS, kripto, reksa dana) dengan "
                        "nilai dan untung/rugi. Membeli: pilih aset → Beli → isi nominal Rupiah → periksa harga & ringkasan → konfirmasi; menjual sama "
                        "dengan Jual. Jangan Top Up/Tarik saldo. PIN diketik pemilik."},
+    # ADR-087 batch H (owner 2026-10-30: "visit langsung ke webnya"): the phone's browser, only on these sites — booking a cinema seat goes up to
+    # the sign-in / payment page and stops there (the owner signs in and pays himself)
+    "web": {"label": "Browser HP", "packages": ["com.android.chrome"], "words": r"21 ?cineplex|\bcgv\b|cin[eé]polis|situs bioskop",
+            "sites": ["21cineplex.com", "cgv.id", "cinepolis.co.id", "kci.id", "commuterline.id"], "home": "https://21cineplex.com/",
+            "hint": "Browser Chrome di HP, hanya di situs bioskop/KRL yang diizinkan. Pilih kota → bioskop → film → tanggal → jam → jumlah & kursi; "
+                    "lanjutkan sampai halaman masuk akun atau pembayaran, lalu BERHENTI dan laporkan: pemilik yang masuk akun dan membayar sendiri."},
 }
+PAY_WORDS = re.compile(r"\b(bayar sekarang|pay now|konfirmasi pembayaran|lanjut(kan)? (ke )?pembayaran|checkout|proceed to payment|buy now|beli sekarang)\b", re.I)
 MARK = "[OPERASI-HP]"
 CAP = "phone_agent"                  # what a JARVIS app with the accessibility service says it can do (X-App-Caps)
 APPROVAL_MINUTES = 15
@@ -127,6 +134,8 @@ def check_action(name: str, args: dict, obs: dict, app: str) -> str | None:
         label = " ".join(str(n.get(k) or "") for k in ("t", "d"))
         if name == "ketuk" and FORBIDDEN.search(label):
             return f"\"{label.strip()[:60]}\" di luar izin (isi saldo, transfer, akun, kartu, pinjaman) — tidak boleh"
+        if name == "ketuk" and app == "web" and PAY_WORDS.search(label):
+            return f"\"{label.strip()[:60]}\": pembayaran di situs dilakukan pemilik sendiri — berhenti di sini dan laporkan"
     if name == "ketik" and len(str(args.get("teks") or "")) > 500:
         return "teks terlalu panjang"
     return None
@@ -361,7 +370,7 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
     async with _lock:
         await _set(run_id, status="running")
         try:
-            obs = await _start_app(run_id, app, a, progress)
+            obs = await _start_app(run_id, app, a, progress, goal)
             trace: list[dict] = []
             text, used, todo = None, None, goal
             try:
@@ -400,7 +409,16 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
     return text
 
 
-async def _start_app(run_id: int, app: str, a: dict, progress) -> dict:
+def start_url(goal: str, a: dict) -> str:
+    """Where a browser run starts: the first allowed https address in the goal, else the app's home. Pure."""
+    from .webvisit import allowed
+    for u in re.findall(r"https://[^\s\"'<>)]+", goal or ""):
+        if allowed(u.rstrip(".,"), a.get("sites") or []):
+            return u.rstrip(".,")
+    return a.get("home") or ""
+
+
+async def _start_app(run_id: int, app: str, a: dict, progress, goal: str = "") -> dict:
     if not phone_online():   # ADR-086: the app is closed or asleep — ask for it and wait a few minutes instead of failing at once
         await progress(6, "Menunggu HP tersambung — buka aplikasi JARVIS")
         await hub.broadcast({"type": "notify", "kind": "phone", "title": f"Buka aplikasi JARVIS untuk {a['label']}",
@@ -409,8 +427,8 @@ async def _start_app(run_id: int, app: str, a: dict, progress) -> dict:
         if not await wait_online(OFFLINE_WAIT_S):
             raise PhoneError("HP tidak tersambung selama 5 menit — buka aplikasi JARVIS (dan nyalakan JARVIS siaga di Setelan HP)")
     await progress(8, f"Membuka {a['label']} di HP…")
-    await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"])
-    obs = await op("open", package=a["packages"][0])
+    await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"], domains=a.get("sites") or [])
+    obs = await op("open_url", url=start_url(goal, a)) if a.get("sites") else await op("open", package=a["packages"][0])
     for _ in range(3):   # the app is slow to come to the front, or a system overlay (screenshot, permission) is in the way
         if in_app(obs, app):
             break

@@ -32,6 +32,9 @@ def route_of(goal: str) -> dict:
 def rules_of(app: str) -> list[str]:
     """What JARVIS will and will not do in that app — the same rules the phone agent enforces. Pure."""
     label = phone_agent.APPS.get(app, {}).get("label", app)
+    if sites := phone_agent.APPS.get(app, {}).get("sites"):
+        return [f"Hanya situs {', '.join(sites)} di browser HP", "Tidak mengetik kata sandi; berhenti di halaman masuk akun & pembayaran — kamu yang lanjutkan",
+                "Tanpa top-up, transfer, atau ubah akun"]
     out = [f"Hanya {label}" + (" (dan layar bayar GoPay)" if "com.gojek.gopay" in phone_agent.APPS.get(app, {}).get("packages", []) and app != "gojek" else ""),
            "Tanpa top-up, transfer, pinjaman, atau ubah akun", "Berhenti di layar PIN/OTP — kamu yang mengetik",
            "Periksa harga & detail sebelum menekan tombol terakhir; tanya bila jauh dari perkiraan"]

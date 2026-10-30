@@ -179,6 +179,13 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
         view.post { view.context.startActivity(intent) }
         return true
     }
+    /** A site JARVIS will read from the web, signed into once by the owner himself (ADR-087 batch H); https only. */
+    @JavascriptInterface fun openWeb(url: String?): Boolean {
+        val u = url.orEmpty().take(500)
+        if (online.cosger.jarvis.web.WebRules.host(u) == null) return false
+        view.post { online.cosger.jarvis.web.WebLoginActivity.open(view.context, u) }
+        return true
+    }
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */
     @JavascriptInterface fun location(): String {
         val app = view.context.applicationContext as JarvisApp

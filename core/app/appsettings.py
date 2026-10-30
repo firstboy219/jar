@@ -28,7 +28,7 @@ DEFAULTS: dict[str, dict] = {
     "music": {"moods": {"fokus": "lofi fokus kerja", "semangat": "lagu semangat pagi", "olahraga": "musik olahraga energik",
                         "santai": "lagu santai akustik", "tidur": "musik tidur tenang"}},
     "home": {"hidden": [], "pinned": []},
-    "cinema": {"city": "", "cinemas": [], "max": 4, "office_city": "Jakarta", "office_cinemas": []},
+    "cinema": {"city": "", "cinemas": [], "max": 4, "office_city": "Jakarta", "office_cinemas": [], "seats": 2, "seat_pref": "tengah, baris agak belakang"},
     "inbox": {"family": []},
     "bisnis": {"businesses": ["Autotoko", "Renature"], "alerts": True, "behind_pct": 60, "unpacked_after": "14:00", "cutoff": "15:00", "cutoff_warn_min": 60,
                "profile": "Pemilik Autotoko (SaaS omnichannel marketplace untuk penjual online) dan Renature (jualan online inhaler, mouth spray, produk herbal); "

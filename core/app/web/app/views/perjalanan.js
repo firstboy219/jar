@@ -29,6 +29,8 @@ export default {
       <div class="scr">
         ${replans.length ? html`<div class="card amber"><span class="k amber">Rencana berubah</span>${replans.map((e) => html`<p class="sub">${e.at.slice(11, 16)} ${e.text}</p>`)}
           <div class="btns"><button class="btn" data-act="alts">${icon('train', 16)} Opsi lain</button><button class="btn" data-act="tellHome">${icon('chat', 16)} Kabari rumah</button></div></div>` : ''}
+        ${(t.kci || []).length ? html`<div class="card amber"><span class="k amber">${icon('train', 14)} Info KCI langsung</span>${t.kci.map((k) => html`<span class="small">${k.at.slice(11, 16)} · ${k.text}</span>`)}
+          <span class="small">Dibaca dari situs KCI lewat HP-mu tiap 10 menit selama perjalanan.</span></div>` : ''}
         ${t.ride && !t.ride.ok ? html`<div class="card red"><span class="k" style="color:var(--red-t)">GoRide belum terpesan</span>
           <span class="small">✓ Gojek dibuka di HP</span><span class="small">✕ ${t.ride.error || t.ride.text}</span>
           <div class="btns"><button class="btn primary" data-act="openGojek">Buka Gojek, lanjutkan</button><button class="btn" data-act="rideAgain">Pesan ulang</button><button class="btn ghost" data-act="rideDismiss">Batal</button></div></div>` : ''}

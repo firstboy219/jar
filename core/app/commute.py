@@ -259,7 +259,8 @@ async def trip_view(trip_id: int) -> dict:
     er = await errands() if t["direction"] == "back" else []
     drv = next((e.get("data") for e in reversed(t["events"] or []) if e.get("kind") == "driver"), None)
     return {"id": t["id"], "direction": t["direction"], "status": t["status"], "plan": t["plan"], "chosen": t["chosen"], "events": t["events"],
-            "steps": steps(t["direction"], t["plan"], t["chosen"], er) if t["chosen"] else [], "errands": er, "driver": drv, "ride": ride_status(t["events"])}
+            "steps": steps(t["direction"], t["plan"], t["chosen"], er) if t["chosen"] else [], "errands": er, "driver": drv, "ride": ride_status(t["events"]),
+            "kci": [{"at": e["at"], "text": e["text"]} for e in (t["events"] or []) if e.get("kind") == "kci"][-3:]}
 
 
 PLATE = re.compile(r"\b([A-Z]{1,2}\s?\d{1,4}\s?[A-Z]{1,3})\b")
@@ -345,6 +346,53 @@ async def _broadcast_trip(trip_id: int) -> None:
 
 async def _done_today(trip_id: int, kind: str) -> bool:
     return bool(await db.pool().fetchval("SELECT 1 FROM commute_trips WHERE id = $1 AND events @> $2::jsonb", trip_id, [{"kind": kind}]))
+
+
+# ---------- KCI's own word on the line, read from its site (ADR-087 batch H) ----------
+# There is no public live-delay API; KCI posts disruptions on its site, which refuses this server — the phone reads the page directly.
+
+KCI_URL = "https://commuterline.id/"
+KCI_SITES = ["commuterline.id", "kci.id"]
+KCI_EVERY_MIN = 10
+DISRUPT = re.compile(r"\b(gangguan|terlambat|keterlambatan|tertahan|antrean|rekayasa pola|pembatalan|dibatalkan|tidak beroperasi|perlambatan|"
+                     r"penumpukan|kepadatan|padat|pindah jalur|jalur \d|peron \d|delay)\b", re.I)
+
+
+def kci_notices(text: str, words: list[str], limit: int = 5) -> list[str]:
+    """The sentences of KCI's page about a disruption on his line (one of `words` — line/station names — when given). Pure."""
+    out = []
+    for part in re.split(r"(?<=[.!?])\s+|\n+", text or ""):
+        p = " ".join(part.split())
+        if 20 <= len(p) <= 400 and DISRUPT.search(p) and (not words or any(w.lower() in p.lower() for w in words if w)) and p not in out:
+            out.append(p)
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def kci_check(trip_id: int) -> list[str]:
+    from . import webvisit
+    t = await db.pool().fetchrow("SELECT plan, events FROM commute_trips WHERE id = $1", trip_id)
+    p = t["plan"] or {}
+    words = [x for x in {(p.get("from") or {}).get("name"), (p.get("to") or {}).get("name"), "Bogor", "Jakarta Kota", "Manggarai", "Tanah Abang", "Sudirman"} if x]
+    page = await webvisit.read(KCI_URL, KCI_SITES)
+    seen = {e.get("text") for e in t["events"] or [] if e.get("kind") == "kci"}
+    new = [n for n in kci_notices(page.get("text") or "", words) if n not in seen]
+    for n in new:
+        await _event(trip_id, "kci", n, {"source": page.get("url") or KCI_URL})
+    if new:
+        await hub.broadcast({"type": "notify", "title": "Info KCI untuk perjalananmu", "text": new[0][:180], "kind": "warn", "route": "#/perjalanan"})
+        await _broadcast_trip(trip_id)
+    return new
+
+
+@appclock.every(KCI_EVERY_MIN * 60, "commute.kci")
+async def _kci_tick() -> dict | None:
+    t = await active()
+    if not t:
+        return None   # no trip: nothing to watch, no run
+    r = await master.run(master.Job("perjalanan", "info-kci", "baca info gangguan KRL dari situs KCI", trigger="event", skill=lambda: kci_check(t["id"])))
+    return {"new": r.get("result")} if r["status"] == "done" else None
 
 
 @appclock.every(30, "commute.watch")

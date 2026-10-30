@@ -97,6 +97,8 @@ async def do_for_me(gid: int) -> dict:
     app = approved_app(next((x.get("app") for x in reversed(g["steps"] or []) if x.get("app")), ""))
     if not app:
         raise GuideError("JARVIS hanya boleh mengerjakan di aplikasi yang disetujui (Gojek, Kopi Kenangan, Qpon, JobStreet) — di sini kamu yang mengetuk")
+    if app == "web":   # the phone's browser runs only on the cinema/KRL sites, not on whatever page is being guided
+        raise GuideError("di browser JARVIS hanya bekerja di situs bioskop/KRL yang diizinkan — di sini kamu yang mengetuk")
     if app == "pluang":   # buying/selling always goes through Investasi: the options, the limit, the price guard and his admin password
         raise GuideError("transaksi Pluang hanya lewat layar Investasi (dengan password admin) — di sini kamu yang mengetuk")
     r = await master.run(master.Job("bimbing", "kerjakan", f"kerjakan untuk pemilik: {g['goal'][:80]}", trigger="owner", phone={"app": app, "goal": g["goal"]},

@@ -44,6 +44,7 @@ class PhoneAgentService : AccessibilityService() {
     @Volatile var runId: Long = 0L
         private set
     private var allowed: Set<String> = emptySet()
+    private var sites: List<String> = emptyList()   // a run in the phone's browser: only these sites (ADR-087 batch H)
     private var appLabel = ""
     private val nodes = mutableListOf<AccessibilityNodeInfo>()
     private var banner: LinearLayout? = null
@@ -72,16 +73,18 @@ class PhoneAgentService : AccessibilityService() {
 
     // ---------- a run ----------
 
-    fun begin(run: Long, label: String, packages: Set<String>, onStop: () -> Unit) {
+    fun begin(run: Long, label: String, packages: Set<String>, siteList: List<String> = emptyList(), onStop: () -> Unit) {
         runId = run
         appLabel = label
         allowed = packages
+        sites = siteList
         showBanner(onStop)
     }
 
     fun end() {
         runId = 0L
         allowed = emptySet()
+        sites = emptyList()
         nodes.clear()
         hideBanner()
     }
@@ -111,6 +114,22 @@ class PhoneAgentService : AccessibilityService() {
         requireRun()
         val pkg = foreground()
         if (pkg !in allowed) throw PhoneOpException("layar yang terbuka bukan $appLabel ($pkg)")
+        if (sites.isNotEmpty() && pkg == CHROME) {   // in the browser: only on the sites of this run
+            val bar = appRoot()?.findAccessibilityNodeInfosByViewId("$CHROME:id/url_bar")?.firstOrNull()?.text?.toString().orEmpty()
+            val url = if (bar.startsWith("http")) bar else "https://$bar"
+            if (bar.isNotBlank() && !online.cosger.jarvis.web.WebRules.allowed(url, sites)) throw PhoneOpException("situs $bar di luar izin operasi ini — kembali dulu")
+        }
+    }
+
+    /** Opens one of the run's sites in the phone's browser (Chrome). */
+    suspend fun openUrl(url: String): JsonObject {
+        requireRun()
+        if (sites.isEmpty() || !online.cosger.jarvis.web.WebRules.allowed(url, sites)) throw PhoneOpException("situs di luar izin operasi ini")
+        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).setPackage(CHROME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val end = SystemClock.uptimeMillis() + 12_000
+        delay(1_500)
+        while (SystemClock.uptimeMillis() < end && foreground() != CHROME) delay(500)
+        return observe()
     }
 
     /** Wait until the screen stops changing (no accessibility event for 450 ms; at most 3 s). */
@@ -338,6 +357,7 @@ class PhoneAgentService : AccessibilityService() {
     }
 
     companion object {
+        const val CHROME = "com.android.chrome"
         const val MAX_NODES = 160
         @Volatile var instance: PhoneAgentService? = null
             private set

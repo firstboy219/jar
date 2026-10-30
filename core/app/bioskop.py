@@ -8,13 +8,15 @@ import asyncio
 import html as htmllib
 import logging
 import re
-from datetime import datetime
+import time
+from datetime import date, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import appsettings, db, home, master
+from .bisnis import to_number
 from .appauth import owner
 from .location import WIB
 
@@ -198,6 +200,116 @@ async def _hermes_done(run_id: int, result: dict) -> None:
         await hub.broadcast({"type": "notify", "title": "Jadwal bioskop siap", "text": f"{sum(len(c.get('films') or []) for c in cins)} film hari ini", "kind": "info", "route": "#/bioskop"})
 
 
+# ---------- other days and booking: the cinema chains' own sites, visited directly (ADR-087 batch H) ----------
+# jadwalnonton.com shows today only; 21cineplex / CGV / Cinépolis show the coming days but refuse this server — the phone reads them.
+
+CHAIN_SITE = {"xxi": ("21cineplex.com", "https://21cineplex.com/"), "cgv": ("cgv.id", "https://www.cgv.id/"),
+              "cinepolis": ("cinepolis.co.id", "https://www.cinepolis.co.id/")}
+DAY_SCHEMA = ('{"films": [{"judul": "", "bioskop": "nama bioskop", "jenis": "2D/IMAX/Premiere", "jam": ["HH:MM"], "harga": 0, "rating": "SU/13+/17+"}]}')
+_loading: set[str] = set()
+_failed: dict[str, tuple[float, str]] = {}   # a visit that failed, shown (not retried) for a while
+RETRY_AFTER_S = 600
+
+
+def chain_of(name: str) -> str:
+    n = (name or "").lower()
+    return "cgv" if "cgv" in n else ("cinepolis" if "cinepolis" in n or "cinépolis" in n else "xxi")
+
+
+def to_cinemas(answer: dict) -> list[dict]:
+    """A site visit's answer → the cinemas shape the screen reads (only real HH:MM times). Pure."""
+    cins: dict[str, dict] = {}
+    for f in (answer or {}).get("films") or []:
+        if not isinstance(f, dict) or not f.get("judul"):
+            continue
+        times = sorted({t for t in (f.get("jam") or []) if isinstance(t, str) and re.fullmatch(r"([01]\d|2[0-3])[:.][0-5]\d", t.strip())})
+        if not times:
+            continue
+        c = cins.setdefault(str(f.get("bioskop") or "Bioskop")[:80], {"name": str(f.get("bioskop") or "Bioskop")[:80], "films": []})
+        price = to_number(f.get("harga"))
+        c["films"].append({"title": str(f["judul"])[:120], "rating": str(f.get("rating") or "")[:10], "today": True,
+                           "shows": [{"type": str(f.get("jenis") or "")[:30], "price": int(price) if price else None, "times": [t.replace(".", ":") for t in times]}]})
+    return list(cins.values())
+
+
+async def other_day(day: date, where: str = "") -> dict:
+    """The coming day's schedule at his cinemas, read from each chain's own site (the phone's browser reads it)."""
+    from . import webvisit
+    s = await appsettings.get("cinema")
+    city = await _city(where)
+    picks = s["cinemas"] if where != "kantor" else s["office_cinemas"]
+    try:
+        names = [c["name"] for c in await cinemas_of(city) if not picks or c["slug"] in picks][: int(s["max"])]
+    except (CinemaError, httpx.HTTPError):
+        names = []
+    chains = sorted({chain_of(n) for n in names} or {"xxi"})
+    cinemas, errors = [], []
+    for ch in chains:
+        dom, home_url = CHAIN_SITE[ch]
+        mine = [n for n in names if chain_of(n) == ch]
+        goal = (f"Jadwal tayang film tanggal {day:%d-%m-%Y} ({['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'][day.weekday()]}) "
+                f"di kota {city.replace('-', ' ').title()}" + (f", di bioskop: {', '.join(mine)}" if mine else "") + ": tiap film dengan jam tayang & harga.")
+        try:
+            r = await webvisit.visit(goal, home_url, [dom], DAY_SCHEMA, feature="bioskop", action="hari-lain", max_pages=6)
+            cinemas += to_cinemas(r["answer"])
+        except webvisit.WebError as e:
+            errors.append(f"{dom}: {e}")
+    if not cinemas:
+        raise CinemaError("; ".join(errors) or "jadwal hari itu belum ada di situs bioskop")
+    return {"city": city, "cinemas": cinemas, "source": " · ".join(CHAIN_SITE[c][0] for c in chains) + " (dibuka langsung)", "date": day.isoformat(), "errors": errors}
+
+
+async def _fetch_day(key: str, day: date, where: str) -> None:
+    from . import hub
+    try:
+        r = await master.run(master.Job("bioskop", "hari-lain", f"jadwal bioskop {day:%d %b} dari situs bioskop", skill=lambda: other_day(day, where)))
+        if r["status"] == "done":
+            await db.pool().execute("INSERT INTO cinema_cache (key, data) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, fetched_at = now()", key, r["result"])
+            _failed.pop(key, None)
+            await hub.broadcast({"type": "cinema", "key": key, "ok": True})
+        else:
+            _failed[key] = (time.monotonic(), (r.get("error") or "jadwal tidak terbaca")[:200])
+            await hub.broadcast({"type": "cinema", "key": key, "ok": False, "error": (r.get("error") or "")[:200]})
+    finally:
+        _loading.discard(key)
+
+
+async def day_view(offset: int, where: str = "", retry: bool = False) -> dict:
+    """Another day (1–6 days ahead): from the cache, or a visit started in the background (the screen waits for the 'cinema' event)."""
+    s = await appsettings.get("cinema")
+    city = await _city(where)
+    day = datetime.now(WIB).date() + timedelta(days=offset)
+    key = f"{city}{'@kantor' if where == 'kantor' else ''}:{day.isoformat()}"
+    row = await db.pool().fetchrow("SELECT data, fetched_at FROM cinema_cache WHERE key = $1 AND fetched_at > now() - interval '6 hours'", key)
+    base = {"city": city, "date": day.isoformat(), "day": offset, "where": where or "rumah", "office_city": s["office_city"], "picks": s["cinemas"] if where != "kantor" else s["office_cinemas"]}
+    if not row:
+        failed = _failed.get(key)
+        if failed and not retry and time.monotonic() - failed[0] < RETRY_AFTER_S:
+            return {**base, "error": failed[1], "films": [], "presale": [], "cinemas": [], "all": [], "source": ""}
+        if key not in _loading:
+            _loading.add(key)
+            asyncio.create_task(_fetch_day(key, day, where))
+        return {**base, "loading": True, "films": [], "presale": [], "cinemas": [], "all": [], "source": ""}
+    data = row["data"]
+    return {**base, "source": data.get("source", ""), "films": by_film(data["cinemas"], "00:00"), "presale": [], "errors": data.get("errors", []),
+            "cinemas": [{"slug": "", "name": c["name"], "chain": chain_of(c["name"]), "films": len(c.get("films") or [])} for c in data["cinemas"]], "all": []}
+
+
+async def book(film: str, cinema: str, day: str, time_: str, seats: int | None = None) -> dict:
+    """"Pesan tiket": the phone's browser on the chain's site picks the film, time and seats, and stops at sign-in / payment (he finishes)."""
+    s = await appsettings.get("cinema")
+    dom, home_url = CHAIN_SITE[chain_of(cinema)]
+    n = max(1, min(int(seats or s["seats"]), 8))
+    goal = (f"Di situs {dom} ({home_url}), pesan {n} tiket film \"{film}\" di {cinema} tanggal {day} jam {time_}. Pilih {n} kursi berdampingan "
+            f"({s['seat_pref']}). Lanjutkan sampai halaman masuk akun atau pembayaran, lalu BERHENTI di situ (jangan masuk akun, jangan bayar) dan tulis "
+            "ringkasan: film, bioskop, jam, kursi, total harga.")
+    r = await master.run(master.Job("bioskop", "pesan-tiket", f"siapkan tiket {film} {time_}", trigger="owner", phone={"app": "web", "goal": goal},
+                                    title=f"Tiket {film} {time_}"[:80], no_free=True))
+    if r["status"] == "failed":
+        raise CinemaError(r.get("error") or "browser HP tidak bisa dibuka")
+    return {"status": r["status"], "task_id": r.get("task_id"), "site": dom}
+
+
 @home.provider("cinema")
 async def _home(m: home.Moment) -> list[dict]:
     if not ("akhir-pekan" in m.tags or m.slot == "sore"):
@@ -214,9 +326,27 @@ class PicksIn(BaseModel):
     where: str = Field(default="rumah", pattern="^(rumah|kantor)$")
 
 
-@router.get(API)
-async def api_today(refresh: bool = False, where: str = "", device: dict = Depends(owner)):
+class BookIn(BaseModel):
+    film: str = Field(min_length=1, max_length=120)
+    cinema: str = Field(min_length=1, max_length=120)
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    seats: int | None = Field(default=None, ge=1, le=8)
+
+
+@router.post(API + "/book")
+async def api_book(body: BookIn, device: dict = Depends(owner)):
     try:
+        return await book(body.film, body.cinema, body.date, body.time, body.seats)
+    except CinemaError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.get(API)
+async def api_today(refresh: bool = False, where: str = "", day: int = 0, device: dict = Depends(owner)):
+    try:
+        if 1 <= day <= 6:
+            return await day_view(day, where if where in ("rumah", "kantor") else "", refresh)
         return await today(refresh, "owner", where if where in ("rumah", "kantor") else "")
     except (CinemaError, httpx.HTTPError) as e:
         raise HTTPException(502, str(e) or "jadwal tidak terbaca")

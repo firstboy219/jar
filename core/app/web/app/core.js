@@ -140,6 +140,13 @@ export function openApp(name, label = name) {
   return false;
 }
 
+/** Sign in to a site once, by himself, in the app's own browser on the phone (JARVIS then reads its pages; it never types the password). */
+export function openWeb(url) {
+  if (host.has('openWeb') && host.call('openWeb', url)) return true;
+  toast('Masuk akun dilakukan di aplikasi JARVIS di HP (tombol yang sama).', true);
+  return false;
+}
+
 /** Talk it over with JARVIS: Obrolan opens and the question (with what it is about) is sent. */
 export function discuss(text) { sessionStorage.setItem('jarvis_app_pending', text); go('#/obrolan'); }
 export function back() { if (history.length > 1) history.back(); else go('#/'); }
