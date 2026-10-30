@@ -33,6 +33,7 @@ BUILTIN = [
     {"key": "kantor.inbox", "title": "Sampai kantor: pilah email & WhatsApp", "trigger": {"type": "arrive", "place": "kantor", "after": "06:00", "before": "12:00"},
      "action": "inbox.triage", "mode": "auto"},
     {"key": "siang.kopi", "title": "Tawarkan kopi (cek promo)", "trigger": {"type": "time", "at": "14:30", "days": WORKDAYS, "place": "kantor"}, "action": "coffee.offer", "mode": "auto"},   # the offer itself is the question ("Mau kopi? Lagi diskon …")
+    {"key": "pagi.musik", "title": "Musik pagi (mood yang biasa)", "trigger": {"type": "time", "at": "06:15", "days": WORKDAYS}, "action": "music.mood", "mode": "ask"},
     {"key": "sore.plan", "title": "Rencana pulang (KRL + GoRide)", "trigger": {"type": "time", "at": "16:45", "days": WORKDAYS}, "action": "commute.plan_back", "mode": "auto"},
     {"key": "rumah.recap", "title": "Sampai rumah: rekap hari ini + action plan", "trigger": {"type": "arrive", "place": "rumah", "after": "16:00", "before": "23:30"},
      "action": "recap.compose", "mode": "auto"},
@@ -133,9 +134,9 @@ async def decide_suggestion(habit_id: int, accept: bool) -> dict:
     return dict(row)
 
 
-async def fire(h: dict, why: str) -> dict:
-    """Run one habit now: 'auto' runs its action; 'ask' makes an offer (the action decides what the offer is)."""
-    await db.pool().execute("UPDATE habits SET last_fired = now() WHERE id = $1", h["id"])
+async def fire(h: dict, why: str, at: datetime | None = None) -> dict:
+    """Run one habit now: 'auto' runs its action; 'ask' makes an offer (the action decides what the offer is). `at` = the moment it was due."""
+    await db.pool().execute("UPDATE habits SET last_fired = $2 WHERE id = $1", h["id"], at or datetime.now(WIB))
     label, fn = ACTIONS.get(h["action"], (h["action"], None))
     if fn is None:
         log.warning("habit %s: no action %s", h["key"], h["action"])
@@ -154,7 +155,7 @@ async def fire(h: dict, why: str) -> dict:
 
 
 ROUTES = {"commute.plan_out": "#/berangkat", "commute.plan_back": "#/pulang", "inbox.triage": "#/inbox", "coffee.offer": "#/kopi",
-          "recap.compose": "#/rekap", "story.offer": "#/dongeng"}
+          "recap.compose": "#/rekap", "story.offer": "#/dongeng", "music.mood": "#/musik"}
 
 
 def offer_route(action_name: str) -> str:
@@ -193,7 +194,7 @@ async def tick(now: datetime | None = None) -> list[str]:
         if t.get("place") and here and here != t["place"]:   # "at kantor" habits wait for kantor (unknown place: they go ahead)
             continue
         r = await master.run(master.Job("kebiasaan", h["action"], f"kebiasaan: {h['title']}", trigger="habit",
-                                        skill=lambda h=h: fire(h, f"jam {t['at']}")))
+                                        skill=lambda h=h, t=t: fire(h, f"jam {t['at']}", now)))
         fired.append(h["key"])
         log.info("habit %s fired: %s", h["key"], r.get("result"))
     return fired

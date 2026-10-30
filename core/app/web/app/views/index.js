@@ -1,11 +1,15 @@
 // Every screen of the app, by route name (#/<name>/…). Each module exports {tab?, feature?, render(root, route), actions?}.
 import bangun from './bangun.js';
 import berangkat from './berangkat.js';
+import berkas from './berkas.js';
+import bimbing from './bimbing.js';
+import bioskop from './bioskop.js';
 import bisnis from './bisnis.js';
 import beranda from './beranda.js';
 import brief from './brief.js';
 import butuh from './butuh.js';
 import catatan from './catatan.js';
+import dongeng from './dongeng.js';
 import draf from './draf.js';
 import fitur from './fitur.js';
 import gaji from './gaji.js';
@@ -18,6 +22,7 @@ import kebiasaan from './kebiasaan.js';
 import kontrol from './kontrol.js';
 import kopi from './kopi.js';
 import misi from './misi.js';
+import musik from './musik.js';
 import notfound from './notfound.js';
 import obrolan from './obrolan.js';
 import peluang from './peluang.js';
@@ -28,5 +33,7 @@ import rekap from './rekap.js';
 import sholat from './sholat.js';
 import sumber from './sumber.js';
 import tren from './tren.js';
+import ukur from './ukur.js';
+import video from './video.js';
 
-export const VIEWS = { bangun, berangkat, bisnis, pulang: berangkat, perjalanan, berubah: perjalanan, kebiasaan, rekap, beranda, brief, butuh, catatan, draf, fitur, gaji, halaman, hijriah, inbox, ingatan, invest, kontrol, kopi, misi, notfound, obrolan, peluang, quran, rapat, sholat, sumber, tren };
+export const VIEWS = { bangun, berangkat, berkas, bimbing, bioskop, bisnis, pulang: berangkat, perjalanan, berubah: perjalanan, kebiasaan, rekap, beranda, brief, butuh, catatan, dongeng, draf, fitur, gaji, halaman, hijriah, inbox, ingatan, invest, kontrol, kopi, misi, musik, notfound, obrolan, peluang, quran, rapat, sholat, sumber, tren, ukur, video };

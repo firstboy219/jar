@@ -1,6 +1,7 @@
 // JARVIS app v2 (ADR-087): wires the shell — sign-in, the command dock, the nav icons, the live connection and every screen.
 import { $, $$, connect, go, post, render, store, svg, toast, view, whenAuthNeeded } from './core.js';
 import { VIEWS } from './views/index.js';
+import { startPlayer } from './player.js';
 
 for (const [name, mod] of Object.entries(VIEWS)) view(name, mod);
 
@@ -49,6 +50,7 @@ window.__jarvisGo = (hash) => go(hash);
 if (!store.get()) $('#login').hidden = false;
 connect();
 render();
+startPlayer();
 // report the phone's place to the server while the page is open on the web (the APK reports it natively, in the background)
 if (!window.JarvisHost && navigator.geolocation && location.protocol === 'https:') {
   const send = () => navigator.geolocation.getCurrentPosition((p) => post('/api/v1/app/location', { lat: p.coords.latitude, lon: p.coords.longitude, accuracy_m: p.coords.accuracy }).catch(() => {}), () => {}, { maximumAge: 300000, timeout: 10000 });

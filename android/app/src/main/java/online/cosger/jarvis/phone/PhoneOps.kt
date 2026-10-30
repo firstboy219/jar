@@ -25,6 +25,12 @@ object PhoneOps {
                 if (!ok) throw PhoneOpException("notifikasi itu tidak bisa dibalas dari luar (sudah dibuka/dihapus)")
                 return buildJsonObject { put("type", "phone_result"); put("req", req); put("ok", true); put("title", thread.title) }.toString()
             }
+            if (op == "yt_captions") {   // ADR-087: YouTube refuses the server; the phone reads the subtitles from its own connection
+                val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    YouTubeCaptions.fetch(a.s("video"), a.s("langs").split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("id", "en") })
+                }
+                return buildJsonObject { put("type", "phone_result"); put("req", req); got.forEach { (k, v) -> put(k, v) } }.toString()
+            }
             val svc = PhoneAgentService.instance
                 ?: throw PhoneOpException("Aksesibilitas JARVIS belum aktif di HP (Lainnya → Setelan HP → 5. Operasi aplikasi)")
             when (op) {

@@ -27,6 +27,7 @@ DEFAULTS: dict[str, dict] = {
     "music": {"moods": {"fokus": "lofi fokus kerja", "semangat": "lagu semangat pagi", "olahraga": "musik olahraga energik",
                         "santai": "lagu santai akustik", "tidur": "musik tidur tenang"}},
     "home": {"hidden": []},
+    "cinema": {"city": "", "cinemas": [], "max": 4},
     "bisnis": {"businesses": ["Autotoko", "Renature"], "alerts": True, "behind_pct": 60, "unpacked_after": "14:00",
                "profile": "Pemilik Autotoko (SaaS omnichannel marketplace untuk penjual online) dan Renature (jualan online inhaler, mouth spray, produk herbal); "
                           "juga karyawan kantor di Jakarta, tinggal di Bogor.",

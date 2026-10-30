@@ -59,6 +59,7 @@ class Job:
     title: str = ""
     private: bool = False
     no_free: bool = False              # personal content (an email, a chat): never a free endpoint that may log prompts
+    vision: bool = False               # the prompt carries a picture: the brain's eyes (category 'penglihatan') do the thinking
     max_tokens: int = 1800
     on_done: str | None = None         # "module:function" called with (run_id, result dict) when an asynchronous job ends
     data: dict = field(default_factory=dict)   # kept with the run for on_done
@@ -178,7 +179,7 @@ async def _think(job: Job, lane: str, run_id: int) -> tuple[Any, str | None]:
     from . import modelrouter
     token = modelrouter.NO_FREE.set(True) if job.no_free else None
     try:
-        data = await gateway.complete(lane, body, caller=f"master:{job.feature}", session_id=f"flow-{run_id}", private=job.private)
+        data = await gateway.complete("penglihatan" if job.vision else lane, body, caller=f"master:{job.feature}", session_id=f"flow-{run_id}", private=job.private)
     finally:
         if token is not None:
             modelrouter.NO_FREE.reset(token)

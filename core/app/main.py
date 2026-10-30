@@ -258,8 +258,8 @@ document.head.appendChild(s);
 setTimeout(function(){if(!window.YT||!YT.Player)tell("error:api-timeout")},15000);
 function onYouTubeIframeAPIReady(){
   new YT.Player("p",{videoId:"__ID__",width:"100%",height:"100%",
-    playerVars:{autoplay:0,playsinline:1,rel:0,modestbranding:1,origin:location.origin},
-    events:{onReady:function(){tell("ready")},
+    playerVars:{autoplay:0,start:__START__,playsinline:1,rel:0,modestbranding:1,origin:location.origin},
+    events:{onReady:function(e){tell("ready");if(__PLAY__)e.target.playVideo();},
             onStateChange:function(e){var t={"0":"ended","1":"playing","2":"paused","3":"buffering"}[e.data];if(t)tell(t);},
             onError:function(e){tell("error:"+e.data);}}});
 }
@@ -267,14 +267,15 @@ function onYouTubeIframeAPIReady(){
 
 
 @app.get("/embed/youtube/{video_id}", response_class=HTMLResponse)
-async def youtube_embed(video_id: str, autoplay: int = 1):
+async def youtube_embed(video_id: str, autoplay: int = 1, start: int = 0, play: int = 0):
     """The official YouTube player, served from JARVIS' own https origin. YouTube refuses embeds without a valid
     origin/referrer (error 152/153), which is what a page made inside the app's WebView has (ADR-034). The page's
     title tells the app when the video ended (playlists) — no JavaScript bridge into the app."""
     import re as _re
     if not _re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
         raise HTTPException(404)
-    return HTMLResponse(YT_EMBED.replace("__ID__", video_id).replace("__AUTO__", "1" if autoplay else "0"),
+    return HTMLResponse(YT_EMBED.replace("__ID__", video_id).replace("__AUTO__", "1" if autoplay else "0").replace("__START__", str(max(0, min(start, 86400))))
+                        .replace("__PLAY__", "1" if play else "0"),   # the app's chapters jump to a time and start playing (ADR-087)
                         headers={"Cache-Control": "no-cache"})
 
 

@@ -95,6 +95,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
     // Owner console: fingerprint/face before sensitive screens
     implementation("androidx.biometric:biometric:1.1.0")
+    // ADR-087 (Kamera ukur): the AR ruler; ARCore is optional — phones without it measure from a photo in the app instead
+    implementation("com.google.ar:core:1.51.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

@@ -153,6 +153,12 @@ class MainActivity : FragmentActivity() {
                 LaunchedEffect(stage.panel?.id) { if (onApp && stage.panel != null) talkOpen = true }
                 val unheard = board.reports.count { it.state == online.cosger.jarvis.ui.SpokenReport.State.Unheard }
                 LaunchedEffect(unheard) { if (onApp && unheard > 0) talkOpen = true }
+                // Bimbing layar (ADR-087): the page asks for the screen to be shared; Android asks the owner once per session
+                val askShare = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+                    if (r.resultCode == android.app.Activity.RESULT_OK && r.data != null) {
+                        online.cosger.jarvis.screen.ScreenShareService.start(this@MainActivity, r.resultCode, r.data!!)
+                    }
+                }
                 val hostActions = remember(nav) {
                     object : online.cosger.jarvis.ui.console.AppHostActions {
                         override fun talk() { talkOpen = true }
@@ -162,6 +168,10 @@ class MainActivity : FragmentActivity() {
                                     ?.let { nav.navigate("console/${it.path}") }
                                 what in setOf("desk", "notes", "tasks", "meetings") -> nav.navigate(what)
                                 what == "talk" -> talkOpen = true
+                                what == "guide" -> if (!(application as JarvisApp).engine.screen.active.value) {
+                                    askShare.launch(getSystemService(android.media.projection.MediaProjectionManager::class.java).createScreenCaptureIntent())
+                                }
+                                what == "measure" -> startActivity(android.content.Intent(this@MainActivity, online.cosger.jarvis.measure.MeasureActivity::class.java))
                                 else -> vm.notify("Fitur ini hadir di versi aplikasi berikutnya.")
                             }
                         }

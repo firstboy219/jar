@@ -253,9 +253,9 @@ async def times_for(city_id: str, day: date, coords: dict | None = None) -> tupl
     return compute_times(day, lat, lon), "hitungan"
 
 
-async def hijri_offset() -> int:
-    """Days to shift the tabular calendar to match the Kemenag date (refreshed once a day from api.myquran.com)."""
-    today = datetime.now(WIB).date()
+async def hijri_offset(day: date | None = None) -> int:
+    """Days to shift the tabular calendar to match the Kemenag date for `day` (today by default; refreshed once a day from api.myquran.com)."""
+    today = day or datetime.now(WIB).date()
     saved = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'ibadah:hijri'") or {}
     if saved.get("day") == today.isoformat():
         return int(saved.get("offset", 0))
@@ -279,7 +279,7 @@ async def today_view(now: datetime | None = None) -> dict:
     now = (now or datetime.now(WIB)).astimezone(WIB)
     cid, name, coords = await city()
     times, source = await times_for(cid, now.date(), coords)
-    off = await hijri_offset()
+    off = await hijri_offset(now.date())
     h = hijri_of(now.date(), off)
     s = await appsettings.get("ibadah")
     nxt = next_prayer(times, now)
@@ -364,7 +364,7 @@ async def tick(now: datetime | None = None) -> list[str]:
                                         skill=lambda name=name, at=times[name][:5], mode=mode, quiet=quiet: remind(name, at, mode, quiet)))
             done.append(name)
     # sahur before a sunnah fast, and the day before a bekam day
-    off = await hijri_offset()
+    off = await hijri_offset(now.date())
     tomorrow = now.date() + timedelta(days=1)
     ev_today = events_for(now.date(), hijri_of(now.date(), off))
     ev_tomorrow = events_for(tomorrow, hijri_of(tomorrow, off))

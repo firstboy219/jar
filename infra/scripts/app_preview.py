@@ -47,8 +47,36 @@ async def seed() -> str:
         await seed_bisnis(p)
     if {"gaji", "invest", "kopi"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_money(p)
+    if {"musik", "video", "berkas", "dongeng", "ukur", "bimbing"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+        await seed_media(p)
     await db.close()
     return token
+
+
+async def seed_media(p):
+    """What wave 6 screens show: music played (the usual mood), a summarised video, files made, a story, measurements, a guidance session."""
+    from datetime import datetime
+    from app import home
+    from app.location import WIB
+    now = datetime.now(WIB)
+    for i, (mood, title) in enumerate([("semangat", "Bangkit — Rizky Febian"), ("semangat", "Laskar Pelangi — Nidji"), ("fokus", "Lofi Hujan Jakarta — Kopi Senja")]):
+        await p.execute("INSERT INTO media_log (kind, mood, query, title, slot, weekday, at) VALUES ('music', $1, $1, $2, $3, $4, now() - make_interval(days => $5))",
+                        mood, title, home.slot_of(now), now.weekday(), i)
+    await p.execute("""INSERT INTO video_notes (video_id, title, channel, duration_s, lang, transcript, source, summary) VALUES ('SfLhKxznVQI', 'Resep Es Kopi Susu Gula Aren | Ide Jualan', 'KitchenDaily', 260, 'id',
+        '[{"t": 0, "text": "Halo semua"}]', 'phone', '{"ringkasan": "Cara membuat es kopi susu gula aren botolan untuk jualan: takaran espresso, susu, dan gula aren, serta hitungan modal per botol (±Rp6.500).", "lane": "ringan",
+        "poin": ["Espresso 30 ml per botol", "Gula aren cair 25 ml", "Susu UHT full cream 150 ml", "Botol 250 ml, tahan 3 hari di kulkas"], "untuk_siapa": "Cocok kalau mau jualan minuman dari rumah",
+        "bab": [{"t": 0, "judul": "Pembuka & bahan"}, {"t": 38, "judul": "Membuat gula aren cair"}, {"t": 104, "judul": "Racikan per botol"}, {"t": 196, "judul": "Hitung modal & harga jual"}]}')""")
+    await p.execute("INSERT INTO stories (title, theme, data) VALUES ('Kancil dan Bintang yang Hilang', 'hewan', $1)", {"menit": 5, "lane": "ringan",
+        "pesan": "Menolong teman membuat hati kita terang.",
+        "paragraf": ["Di tepi hutan yang sejuk, hiduplah seekor kancil kecil bernama Cilo. Setiap malam, Cilo suka berbaring di atas rumput sambil menghitung bintang. Satu, dua, tiga…",
+                     "Suatu malam, Cilo melihat ada satu bintang yang hilang dari tempatnya. “Ke mana ya bintang kecil itu?” bisik Cilo.",
+                     "Krek-krek… terdengar suara dari semak. Ternyata itu Kunang, si kunang-kunang yang tersesat dan menangis karena tidak bisa pulang.",
+                     "Cilo tersenyum. “Ayo, aku antar pulang,” katanya lembut. Mereka berjalan pelan menyusuri sungai sampai tiba di pohon besar tempat keluarga Kunang tinggal."]})
+    await p.execute("""INSERT INTO measures (label, kind, data) VALUES ('Lebar meja kerja', 'ar', '{"segmen": [1.42, 0.68], "total": 2.1, "unit": "m"}'),
+        ('Depan rumah tetangga', 'foto', '{"objek": "rumah 2 lantai", "ukuran": {"lebar": {"perkiraan": 8.5, "min": 7.5, "max": 9.5}, "tinggi": {"perkiraan": 6.8, "min": 6.0, "max": 7.5}}, "acuan": ["pintu", "motor di carport"], "yakin": "sedang", "catatan": "Dua lantai ≈ 3 m per lantai + atap."}')""")
+    await p.execute("INSERT INTO guide_sessions (goal, status, steps) VALUES ('aktifkan notifikasi tagihan di BCA mobile', 'active', $1)", [
+        {"n": 1, "instruksi": "Ketuk ikon profil di kanan atas", "target": "Akun", "posisi": "kanan atas", "status": "lanjut", "lane": "ringan"},
+        {"n": 2, "instruksi": "Pilih “Pengaturan Notifikasi”", "target": "Pengaturan Notifikasi", "posisi": "tengah", "status": "lanjut", "lane": "ringan"}])
 
 
 async def seed_money(p):
