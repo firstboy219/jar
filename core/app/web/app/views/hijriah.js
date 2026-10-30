@@ -12,9 +12,9 @@ async function monthGrid() {
   return html`<div class="card"><div class="row sb"><button class="ib sm" data-act="prev" aria-label="Bulan sebelumnya">‹</button><span class="ttl">${m.title}</span><button class="ib sm" data-act="next" aria-label="Bulan berikutnya">›</button></div>
     <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center">${DAY.map((d) => html`<span class="small">${d}</span>`)}
       ${Array.from({ length: lead }, () => html`<span></span>`)}
-      ${m.days.map((d) => { const g = new Date(`${d.date}T00:00:00`); const ev = d.events.length; return html`<div title="${d.events.join(', ')}" style="padding:4px 0;border-radius:8px;${d.today ? 'background:var(--green-bg);border:1px solid var(--green)' : ''}">
+      ${m.days.map((d) => { const g = new Date(`${d.date}T00:00:00`); const ev = d.events.length; return html`<div ${ev ? html`data-act="day" data-ev="${d.events.join(' · ')}" data-d="${d.day} · ${g.getDate()} ${MON[g.getMonth()]}"` : ''} style="padding:4px 0;border-radius:8px;${ev ? 'cursor:pointer;' : ''}${d.today ? 'background:var(--green-bg);border:1px solid var(--green)' : ''}">
         <div style="font-size:14px;font-weight:600">${d.day}</div><div style="font-size:9px;color:var(--mu)">${g.getDate()} ${MON[g.getMonth()]}</div>${ev ? html`<div style="width:5px;height:5px;border-radius:3px;background:var(--amber);margin:2px auto 0"></div>` : ''}</div>`; })}</div>
-    <span class="small">● ada puasa sunnah / hari besar / hari bekam — ketuk lama untuk detail</span></div>`;
+    <span class="small"><span style="color:var(--amber)">●</span> ada puasa sunnah / hari besar / hari bekam — ketuk tanggalnya untuk detail</span></div>`;
 }
 
 export default {
@@ -45,6 +45,7 @@ export default {
       <p class="small" style="padding:0 4px">Tanggal Hijriah mengikuti kalender Kemenag. Awal Ramadan, Syawal &amp; Dzulhijjah menunggu sidang isbat.</p></div>`);
   },
   actions: {
+    day(b) { toast(`${b.dataset.d}: ${b.dataset.ev}`); },
     month() { showMonth = !showMonth; monthOff = 0; render(); },
     prev() { monthOff -= 1; render(); },
     next() { monthOff += 1; render(); },

@@ -1,11 +1,11 @@
 // Tren & strategi (mockup 34): months of a number (sales by default) — per month, per weekday, the 7-day line, last 30 days against the
 // 30 before — and the heavy brain's strategy from those numbers: what is happening, what to do this week, how to measure it.
-import { get, header, html, icon, loading, post, render, toast } from '../core.js';
+import { get, header, html, icon, loading, post, render, speak, toast } from '../core.js';
 import { rupiah } from '../lib.js';
 import { columns, laneChip } from '../ui.js';
 import { val } from './bisnis.js';
 
-let st = { b: '', m: 'penjualan', days: 120 };
+let st = { b: '', m: 'penjualan', days: 120 }, cur = null;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const WD = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 const LABEL = { penjualan: 'Penjualan', pesanan: 'Pesanan', dikemas: 'Dikemas', dikirim: 'Dikirim', pencairan: 'Pencairan', retur: 'Retur', mrr: 'MRR', gmv: 'GMV', pelanggan: 'Pelanggan', toko_aktif: 'Toko aktif' };
@@ -27,7 +27,7 @@ export default {
     if (!st.b) { const d = await get('/api/v1/app/bisnis'); st.b = d.businesses[0]?.name || ''; }
     if (!st.b) { root.innerHTML = String(html`${header('Tren & strategi')}<div class="scr"><div class="card"><p>Belum ada bisnis tersambung.</p><a class="btn primary" href="#/sumber">Tambah sumber API</a></div></div>`); return; }
     const d = await get(`/api/v1/app/bisnis/trend?business=${encodeURIComponent(st.b)}&metric=${encodeURIComponent(st.m)}&days=${st.days}`);
-    const t = d.trend, s = d.strategy, u = d.unit;
+    const t = d.trend, s = cur = d.strategy, u = d.unit;
     const months = Object.entries(t.months);
     const base = d.metrics.filter((m) => !m.includes('@'));
     root.innerHTML = String(html`${header('Tren & strategi', { sub: st.b })}
@@ -49,11 +49,14 @@ export default {
               <span class="small">${x.kenapa}</span>${(x.langkah || []).map((l, i) => html`<span class="sub">${i + 1}. ${l}</span>`)}<span class="small">Dampak: ${x.dampak} · Ukur: ${x.ukur}</span></details>`)}
             ${(s.risiko || []).length ? html`<span class="small t-amber2">Risiko: ${s.risiko.join('; ')}</span>` : ''}`
           : html`<p class="sub">Belum ada strategi. Otak berat menyusunnya dari angka 4 bulan (otomatis tiap Senin pagi).</p>`}
+          ${s ? html`<div class="btns"><button class="btn" data-act="read">${icon('speaker', 16)} Bacakan</button>${(s.minggu_ini || []).length ? html`<button class="btn" data-act="tasks">${icon('list', 16)} Jadikan tugas</button>` : ''}</div>` : ''}
           <button class="btn primary" data-act="strategy">${icon('bolt', 16)} ${s ? 'Susun ulang' : 'Susun strategi'} (otak berat)</button></div>
       </div>`);
   },
   actions: {
     metric(b) { st.m = b.dataset.m; render(); },
+    read() { speak([`Strategi ${st.b}.`, cur.ringkasan, ...(cur.minggu_ini || []).length ? ['Minggu ini:', ...cur.minggu_ini] : []].join(' ')); },
+    async tasks() { const r = await post('/api/v1/app/bisnis/strategy/tasks', { business: st.b }); toast(r.tasks.length ? `${r.tasks.length} tugas masuk Catatan` : 'Sudah ada di Catatan'); },
     async strategy() { toast('Otak berat menganalisa… (±1 menit)'); await post('/api/v1/app/bisnis/strategy', { business: st.b }); render(); },
   },
 };

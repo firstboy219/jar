@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import audit, db, hub
-from .appauth import actor, owner
+from .appauth import actor, owner, require_password
 
 log = logging.getLogger("jarvis-core")
 router = APIRouter()
@@ -317,6 +317,22 @@ async def rollback(job: str, who: str) -> dict:
     return await job_view(job)
 
 
+async def models(days: int = 7) -> dict:
+    """Which models each brain uses (chosen in Komposisi AI on the admin site) and how each model actually did."""
+    from . import gateway
+    cats = await gateway.categories()
+    lanes = {}
+    for lane, cat in (("ringan", "ringan"), ("berat", "berat"), ("penglihatan", "penglihatan")):
+        c = cats.get(cat) or {}
+        lanes[lane] = {"title": c.get("title") or cat, "routes": [{"provider": r.get("provider"), "model": r.get("model")} for r in (c.get("routes") or [])][:4],
+                       "allow_free": bool(c.get("allow_free"))}
+    usage = [dict(r) for r in await db.pool().fetch(
+        """SELECT model, lane, count(*) AS runs, round(100.0 * count(*) FILTER (WHERE status = 'done') / count(*))::int AS ok_pct,
+                  coalesce(sum(cost_usd), 0)::float AS cost, round(avg(EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (WHERE finished_at IS NOT NULL)::numeric, 1)::float AS avg_s
+           FROM flow_runs WHERE model IS NOT NULL AND started_at > now() - make_interval(days => $1) GROUP BY model, lane ORDER BY count(*) DESC LIMIT 20""", days)]
+    return {"lanes": lanes, "usage": usage, "days": days}
+
+
 # ---------- API ----------
 
 class ProposeIn(BaseModel):
@@ -331,6 +347,11 @@ class ManualIn(BaseModel):
 class DeployIn(BaseModel):
     mode: str = Field(pattern="^(canary|all)$")
     pct: int = Field(default=10, ge=1, le=50)
+    password: str = Field(default="", max_length=200)
+
+
+class PasswordIn(BaseModel):
+    password: str = Field(default="", max_length=200)
 
 
 def _job(job: str) -> str:
@@ -340,6 +361,11 @@ def _job(job: str) -> str:
 @router.get(API)
 async def api_jobs(device: dict = Depends(owner)):
     return {"jobs": await jobs(), "global": await job_view("")}
+
+
+@router.get(API + "/models")
+async def api_models(device: dict = Depends(owner)):
+    return await models()
 
 
 @router.get(API + "/{job}")
@@ -373,6 +399,8 @@ async def api_evaluate(version_id: int, device: dict = Depends(owner)):
 
 @router.post(API + "/version/{version_id}/deploy")
 async def api_deploy(version_id: int, body: DeployIn, device: dict = Depends(owner)):
+    """Changing how the brain works for real is his decision: the admin password, like a phone run (a draft or an evaluation needs none)."""
+    await require_password(device, body.password, f"brain_version:{version_id}")
     try:
         return await deploy(version_id, body.mode, actor(device), body.pct)
     except BrainError as e:
@@ -380,7 +408,8 @@ async def api_deploy(version_id: int, body: DeployIn, device: dict = Depends(own
 
 
 @router.post(API + "/{job}/rollback")
-async def api_rollback(job: str, device: dict = Depends(owner)):
+async def api_rollback(job: str, body: PasswordIn | None = None, device: dict = Depends(owner)):
+    await require_password(device, (body.password if body else ""), f"brain_rollback:{job}")
     try:
         return await rollback(_job(job), actor(device))
     except BrainError as e:

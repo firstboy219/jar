@@ -144,7 +144,9 @@ async def seed_money(p):
                     {"salary": 15_000_000, "payday": 25, "pots": [{"name": "Makan & kopi", "amount": 2_500_000, "categories": ["makan", "kopi"]},
                                                                   {"name": "Transport", "amount": 1_200_000, "categories": ["transport"]},
                                                                   {"name": "Tagihan", "amount": 1_800_000, "categories": ["tagihan"]},
-                                                                  {"name": "Belanja rumah", "amount": 3_000_000, "categories": ["belanja", "anak & keluarga"]}]},
+                                                                  {"name": "Belanja rumah", "amount": 3_000_000, "categories": ["belanja", "anak & keluarga"]},
+                                                                  {"name": "Investasi", "amount": 1_500_000, "categories": ["investasi"]}],
+                     "emergency_saved": 22_000_000, "emergency_months": 6},
                     {"usual": "Kopi Kenangan Mantan", "sugar": "less sugar", "max_price": 75000, "pickup": True, "outlet": "Sudirman", "enabled": True, "apps": ["kopikenangan", "qpon"]})
     rows = [("Kopi Kenangan", "kopi", 28000, "GoPay"), ("GoFood · Bakso Pak Kumis", "makan", 46000, "GoPay"), ("GoRide", "transport", 17000, "GoPay"),
             ("KRL Commuter", "transport", 5000, "GoPay"), ("Indomaret", "belanja", 182500, "BCA"), ("PLN Prabayar", "tagihan", 500000, "BCA"),
@@ -160,6 +162,9 @@ async def seed_money(p):
                 {"name": "Makan & kopi", "amount": 2600000, "categories": ["makan", "kopi"], "alasan": "realistis dari 3 bulan"}, {"name": "Transport", "amount": 1100000, "categories": ["transport"], "alasan": "KRL + GoRide"},
                 {"name": "Belanja rumah & anak", "amount": 3125000, "categories": ["belanja", "anak & keluarga"], "alasan": ""}, {"name": "Lain-lain", "amount": 1500000, "categories": ["lainnya", "hiburan", "kesehatan"], "alasan": ""}],
         "hemat": ["Masak/bekal 2× seminggu menghemat ±Rp400 rb", "Kopi pakai promo saja (rata-rata Rp18 rb, bukan Rp28 rb)"]}')""")
+    for i, total in enumerate([44_100_000, 45_300_000, 44_800_000, 46_900_000, 47_400_000]):
+        await p.execute("INSERT INTO invest_snapshots (at, data) VALUES (now() - make_interval(days => $1), $2)", 35 - i * 7, {"total": total, "kas": 1_000_000, "aset": []})
+    await p.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source, app) VALUES (now() - interval '3 days', 500000, 'out', 'Pluang Emas', 'investasi', 'jarvis', 'Pluang')")
     sid = await p.fetchval("""INSERT INTO invest_snapshots (data) VALUES ('{"total": 48250000, "kas": 1250000, "aset": [
         {"nama": "Emas", "kode": "", "jenis": "emas", "jumlah": 14.2, "nilai": 23430000, "untung_pct": 12.4, "harga": 1650000},
         {"nama": "Apple", "kode": "AAPL", "jenis": "saham_as", "jumlah": 3.1, "nilai": 11200000, "untung_pct": 6.1, "harga": 3612000},
@@ -168,7 +173,7 @@ async def seed_money(p):
     await p.execute("""INSERT INTO settings_kv (key, value) VALUES ('app:invest', '{"targets": {"emas": 40, "saham_as": 30, "kripto": 15, "reksa_dana": 15}}')""")
     await p.execute("""INSERT INTO invest_proposals (snapshot_id, data) VALUES ($1, '{"ringkasan": "Emas sudah 50% portofolio (target 40%) setelah naik 4% sebulan; Bitcoin turun 4% dan masih di bawah target 15%. Rupiah melemah 0,8%.",
         "lane": "berat", "kondisi": ["Emas di atas target alokasi", "Bitcoin terkoreksi 4% sepekan", "S&P 500 naik 1,2% sebulan"],
-        "opsi": [{"id": "A", "judul": "Seimbangkan: tambah reksa dana & Bitcoin", "aksi": [{"jenis": "beli", "aset": "Reksa Dana Pasar Uang", "nominal": 1000000}, {"jenis": "beli", "aset": "Bitcoin", "nominal": 500000}], "alasan": "Mendekatkan ke target tanpa menjual emas yang sedang naik.", "risiko": "Bitcoin bisa turun lagi"},
+        "opsi": [{"id": "A", "judul": "Seimbangkan: tambah reksa dana & Bitcoin", "aksi": [{"jenis": "beli", "aset": "Reksa Dana Pasar Uang", "nominal": 1000000}, {"jenis": "beli", "aset": "Bitcoin", "nominal": 500000}], "alasan": "Mendekatkan ke target tanpa menjual emas yang sedang naik.", "risiko": "Bitcoin bisa turun lagi", "disarankan": true},
                  {"id": "B", "judul": "Ambil untung emas Rp2 jt", "aksi": [{"jenis": "jual", "aset": "Emas", "nominal": 2000000}], "alasan": "Untung 12,4%; kembalikan ke target 40%.", "risiko": "Emas bisa lanjut naik"},
                  {"id": "C", "judul": "Tahan dulu", "aksi": [], "alasan": "Tidak ada transaksi minggu ini.", "risiko": ""}]}')""", sid)
     await p.execute("""INSERT INTO coffee_offers (status, promos, trigger) VALUES ('offered', '[
@@ -204,7 +209,11 @@ async def seed_bisnis(p):
         "strategi": [{"judul": "Bundling inhaler + mouth spray", "kenapa": "Rata-rata pesanan Rp110 rb; bundling mendorong ke Rp150 rb", "langkah": ["Buat paket 2+1", "Pasang di semua kanal lewat Autotoko"], "dampak": "+8–12% omzet", "usaha": "rendah", "ukur": "AOV ≥ Rp140 rb"}],
         "risiko": ["Stok mouth spray menipis"]}')""")
     await p.execute("""INSERT INTO biz_insights (kind, data) VALUES ('opportunity', '{"peluang": [
-        {"judul": "Aromaterapi roll-on untuk pekerja kantor", "ringkasan": "Pencarian roll-on aromaterapi naik 40% dalam 3 bulan; cocok dengan rantai pasok Renature.", "kenapa_sekarang": "Tren self-care & musim hujan", "modal": "Rp15–25 jt", "potensi": "Rp20–40 jt/bln", "cocok": "Bahan & maklon sama dengan inhaler; jual lewat Autotoko", "skor": 8, "langkah_pertama": "Uji 100 pcs di TikTok Shop", "sumber": ["https://trends.google.com/trends/explore?q=roll%20on%20aromaterapi"]},
+        {"judul": "Aromaterapi roll-on untuk pekerja kantor", "ringkasan": "Pencarian roll-on aromaterapi naik 40% dalam 3 bulan; cocok dengan rantai pasok Renature.", "kenapa_sekarang": "Tren self-care & musim hujan", "modal": "Rp15–25 jt", "potensi": "Rp20–40 jt/bln", "cocok": "Bahan & maklon sama dengan inhaler; jual lewat Autotoko", "skor": 8, "langkah_pertama": "Uji 100 pcs di TikTok Shop", "sumber": ["https://trends.google.com/trends/explore?q=roll%20on%20aromaterapi"],
+         "riset": {"status": "done", "kesimpulan": "Layak dicoba kecil-kecilan: margin ±55% dengan maklon yang sama, pesaing besar masih sedikit di bawah Rp30 rb.", "pasar": "±12 rb pencarian/bulan, naik 40% sejak Juli",
+                   "hitungan": {"modal_awal": "Rp18 jt", "hpp_per_unit": "Rp11 rb", "harga_jual": "Rp25 rb", "margin": "55%", "balik_modal": "±3 bulan"},
+                   "pesaing": [{"nama": "Aromatic Roll", "harga": "Rp29 rb", "catatan": "4,8★ · 2 rb terjual"}, {"nama": "Minyak Kayu Putih Roll", "harga": "Rp18 rb", "catatan": "pasar massal"}],
+                   "rencana_30_hari": ["Minggu 1: sampel 3 aroma dari maklon", "Minggu 2: foto & listing di TikTok Shop via Autotoko", "Minggu 3–4: uji iklan Rp1 jt, ukur CTR & konversi"]}},
         {"judul": "Modul Autotoko untuk reseller herbal", "ringkasan": "Paket SaaS khusus brand herbal kecil: katalog BPOM, stok multi-gudang.", "kenapa_sekarang": "Banyak UMKM herbal pindah ke marketplace", "modal": "Rp5 jt (pengembangan)", "potensi": "30 toko × Rp299 rb", "cocok": "Memakai Autotoko yang sudah ada", "skor": 7, "langkah_pertama": "Wawancara 5 penjual herbal", "sumber": []}]}')""")
 
 

@@ -83,6 +83,7 @@ h1.big { margin: 0; font: 600 26px/1.18 var(--f-head); }
 .card h3 { margin: 0; font: 600 16px/1.3 var(--f-head); }
 .card p { margin: 0; }
 details.card { display: block; } details.card > summary { list-style-position: inside; } details.card[open] > :not(summary) { display: block; margin-top: 8px; }
+details.card[open] > .row, details.card[open] > .btns { display: flex; } details.card[open] > .g2, details.card[open] > .g3, details.card[open] > .g4 { display: grid; }
 .ttl { font-size: 14px; font-weight: 600; }
 .sub { font-size: 13px; color: var(--tx2); }
 .small { font-size: 12px; color: var(--mu); }
@@ -155,7 +156,7 @@ details.card { display: block; } details.card > summary { list-style-position: i
 .tile .sq { width: 48px; height: 48px; border-radius: 16px; background: var(--s1); border: 1px solid var(--bd); color: var(--tx); display: flex; align-items: center; justify-content: center; position: relative; }
 .tile .sq.primary { background: var(--cyan); color: var(--bg); border: 0; }
 .tile .sq .need { position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 5px; background: var(--amber); border: 2px solid var(--bg); }
-.ftile { height: 78px; border-radius: 14px; background: var(--s1); border: 1px solid var(--bd); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 0 4px; text-align: center; font-size: 11px; cursor: pointer; position: relative; }
+.ftile { color: inherit; font: inherit; height: 78px; border-radius: 14px; background: var(--s1); border: 1px solid var(--bd); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 0 4px; text-align: center; font-size: 11px; cursor: pointer; position: relative; }
 .ftile .need { position: absolute; top: 6px; right: 6px; width: 8px; height: 8px; border-radius: 4px; background: var(--amber); }
 
 .hero { border-width: 1.5px; padding: 16px; border-radius: 20px; gap: 10px; cursor: pointer; }

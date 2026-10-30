@@ -11,6 +11,7 @@ let meta = null, form = null, tested = null;
 const ago = (s) => { if (!s) return 'belum'; const m = Math.round((Date.now() - new Date(s)) / 60000); return m < 1 ? 'baru saja' : m < 60 ? `${m} mnt lalu` : m < 1440 ? `${Math.round(m / 60)} jam lalu` : `${Math.round(m / 1440)} hari lalu`; };
 const paramsText = (p) => Object.entries(p || {}).map(([k, v]) => `${k}=${v}`).join('\n');
 const parseParams = (t) => Object.fromEntries(String(t || '').split('\n').map((l) => l.trim()).filter((l) => l.includes('=')).map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]));
+const parseHeaders = (t) => Object.fromEntries(String(t || '').split('\n').map((l) => l.trim()).filter((l) => l.includes(':')).map((l) => [l.slice(0, l.indexOf(':')).trim(), l.slice(l.indexOf(':') + 1).trim()]).filter(([k]) => /^[\w-]{1,60}$/.test(k)));
 const opt = (pairs, cur) => pairs.map(([v, l]) => html`<option value="${v}" ${v === cur ? 'selected' : ''}>${l}</option>`);
 
 function epBlock(e, i) {
@@ -52,6 +53,7 @@ function editor(f) {
           <div class="g2"><label class="field">Kunci<select name="auth_type">${opt(AUTH, f.auth.type)}</select></label>
             <label class="field">Nama header/parameter<input name="auth_name" value="${f.auth.name || ''}" placeholder="X-API-Key"></label></div>
           <label class="field">Kunci API / token ${f.key_hint ? html`<span class="mono">(tersimpan ${f.key_hint} — kosongkan bila tidak diganti)</span>` : ''}<input name="key" type="password" autocomplete="off" placeholder="${f.key_hint ? '••••••••' : 'tempel kunci API'}"></label>
+          <details><summary class="small">Header tambahan (opsional)</summary><label class="field">Satu per baris: Nama: nilai<textarea name="headers" class="inp" style="min-height:70px" placeholder="X-Tenant-Id: renature&#10;Accept: application/json">${Object.entries(f.headers || {}).map(([k, v]) => `${k}: ${v}`).join('\n')}</textarea></label></details>
           <div class="g2"><label class="field">Baca tiap (menit)<input name="poll_min" type="number" min="5" max="1440" value="${f.poll_min}"></label>
             <label class="field">Status<select name="paused">${opt([['', 'aktif'], ['1', 'dijeda']], f.status === 'paused' ? '1' : '')}</select></label></div>
           <span class="small">${icon('lock', 12)} Kunci disimpan terenkripsi dengan kunci brankas JARVIS dan tidak pernah ditampilkan lagi.</span>
@@ -70,7 +72,7 @@ function collect() {
   if (!f) return form;
   const g = (n) => f.elements[n]?.value ?? '';
   form = { ...form, business: g('business').trim(), name: g('name').trim(), base_url: g('base_url').trim(), auth: { type: g('auth_type'), name: g('auth_name').trim() },
-    key: g('key'), poll_min: Number(g('poll_min')) || 15, paused: g('paused') === '1' };
+    key: g('key'), poll_min: Number(g('poll_min')) || 15, paused: g('paused') === '1', headers: parseHeaders(g('headers')) };
   form.endpoints = $$('[data-ep]', f).map((b) => {
     const q = (n) => b.querySelector(`[name=${n}]`)?.value ?? '';
     return { metric: q('metric').trim().toLowerCase(), label: q('label').trim(), unit: q('unit'), method: q('method'), path: q('path').trim(), params: parseParams(q('params')),

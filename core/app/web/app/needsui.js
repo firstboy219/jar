@@ -1,6 +1,6 @@
 // What waits for the owner (ADR-087), drawn the same on the front page and on Butuh kamu: a run on his phone (route, the learned routine's
 // track record, the rules it keeps; admin password), an approval, a pick between options (★ the one he usually takes), a question.
-import { html, icon, post, render, sheet, toast } from './core.js';
+import { html, icon, post, raw, render, sheet, toast } from './core.js';
 
 let byKey = new Map();
 const key = (kind, id) => `${kind}:${id}`;
@@ -33,19 +33,34 @@ export function itemCard(it, compact = false) {
 const host = () => window.JarvisHost;
 
 /** {password, remember, bio}: the fingerprint first when the phone keeps the password (APK ≥ 0.26), else typed. */
-async function askPassword(title) {
+async function askPassword(title, { kicker = 'Izin operasi HP', button = 'Setujui &amp; jalankan',
+  note = 'Dari jadwal, proyek, atau kebiasaan yang kamu setujui: tanpa password, pengaman tetap sama.' } = {}) {
   if (host()?.hasBiometric?.()) {
     const pw = await new Promise((ok) => { window.__jarvisBio = ok; host().biometric(title); });
     if (pw) return { password: pw, bio: true };
   }
   const canKeep = !!host()?.rememberPassword;
   const r = await sheet(String(html`<form class="col" style="display:flex;flex-direction:column;gap:14px">
-    <span class="k amber">Izin operasi HP</span><h3 style="margin:0;font:600 20px var(--f-head)">${title}</h3>
+    <span class="k amber">${kicker}</span><h3 style="margin:0;font:600 20px var(--f-head)">${title}</h3>
     <label class="field">Password admin <input type="password" name="password" autocomplete="current-password" required autofocus></label>
     ${canKeep ? html`<label class="row" style="gap:8px;font-size:13px"><input type="checkbox" name="remember"> Lain kali pakai sidik jari</label>` : ''}
-    <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn amber">Setujui &amp; jalankan</button></div>
-    <span class="small" style="text-align:center">Dari jadwal, proyek, atau kebiasaan yang kamu setujui: tanpa password, pengaman tetap sama.</span></form>`));
+    <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn amber">${raw(button)}</button></div>
+    ${note ? html`<span class="small" style="text-align:center">${note}</span>` : ''}</form>`));
   return r && r.password ? { password: r.password, remember: !!r.remember } : null;
+}
+
+/** Ask for the admin password (fingerprint when kept), then run `fn(password)`; a wrong kept password is forgotten. Null when cancelled. */
+export async function withPassword(title, fn, opts = {}) {
+  const pw = await askPassword(title, opts);
+  if (!pw) return null;
+  try {
+    const r = await fn(pw.password);
+    if (pw.remember) host()?.rememberPassword?.(pw.password);
+    return r;
+  } catch (e) {
+    if (pw.bio && e.status === 422) host()?.rememberPassword?.('');
+    throw e;
+  }
 }
 
 /** The actions every screen showing these cards adds to its own. */

@@ -41,6 +41,15 @@ function listView(ms) {
     ${done.length ? html`<div class="sec"><span>Terakhir</span></div><div class="list">${done.slice(0, 25).map(row)}</div>` : ''}`;
 }
 
+// What finished missions produced: a line of each result, newest first; each opens to its full report.
+function resultsView(ms) {
+  if (!ms.length) return empty('Belum ada hasil.', 'Misi yang selesai — riset, laporan, pesanan — beserta hasilnya muncul di sini.');
+  const text = (p) => { if (!p) return ''; try { const j = JSON.parse(p); return j.summary || j.ringkasan || j.text || p; } catch { return p; } };
+  return html`<div class="list">${ms.map((m) => html`<a class="li click" href="#/misi/${m.id}"><span class="ico green">${icon('check', 16)}</span>
+    <div class="grow" style="min-width:0"><div class="ttl">${m.title}</div><div class="small" style="overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${text(m.preview)}</div>
+    <div class="small">${new Date(m.finished_at || m.created_at).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}${m.cost ? ` · ${usd(m.cost)}` : ''}</div></div>${icon('right', 16)}</a>`)}</div>`;
+}
+
 function detailView(t) {
   const lane = LANE_OF_RUNTIME[t.runtime] || t.runtime;
   const steps = (t.plan?.steps || []);
@@ -90,10 +99,11 @@ export default {
         const img = root.querySelector('#frame');
         if (img) stopFrame = liveFrame(img, t.id);
       } else {
-        tab = route.query.tab === 'jadwal' ? 'jadwal' : 'misi';
-        const body = tab === 'jadwal' ? scheduledView((await get('/api/v1/projects')).projects || []) : listView((await get('/api/v1/app/missions')).missions);
+        tab = ['jadwal', 'hasil'].includes(route.query.tab) ? route.query.tab : 'misi';
+        const body = tab === 'jadwal' ? scheduledView((await get('/api/v1/projects')).projects || [])
+          : tab === 'hasil' ? resultsView((await get('/api/v1/app/missions?done=true')).missions) : listView((await get('/api/v1/app/missions')).missions);
         root.innerHTML = String(html`${header('Misi', { back: false, sub: 'semua pekerjaan JARVIS' })}<div class="scr">
-          <div class="chips"><a class="chip ${tab === 'misi' ? 'on' : ''}" href="#/misi">Misi</a><a class="chip ${tab === 'jadwal' ? 'on' : ''}" href="#/misi?tab=jadwal">${icon('clock', 13)} Terjadwal</a></div>${body}</div>`);
+          <div class="chips"><a class="chip ${tab === 'misi' ? 'on' : ''}" href="#/misi">Misi</a><a class="chip ${tab === 'hasil' ? 'on' : ''}" href="#/misi?tab=hasil">${icon('chart', 13)} Hasil & laporan</a><a class="chip ${tab === 'jadwal' ? 'on' : ''}" href="#/misi?tab=jadwal">${icon('clock', 13)} Terjadwal</a></div>${body}</div>`);
       }
     };
     await paint();

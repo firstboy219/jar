@@ -518,6 +518,22 @@ async def api_list(source: str | None = None, device: dict = Depends(owner)):
     return await listing(source)
 
 
+async def drafts() -> list[dict]:
+    """Every reply drafted (not yet sent, newest first) and the ones sent in the last week."""
+    rows = await db.pool().fetch(
+        """SELECT id, source, sender, subject, status, draft->>'style' AS style, coalesce((draft->>'sent')::boolean, false) AS sent,
+                  left(draft->>'body', 160) AS preview, received_at
+           FROM inbox_items WHERE draft IS NOT NULL AND draft ? 'body'
+             AND (NOT coalesce((draft->>'sent')::boolean, false) OR received_at > now() - interval '7 days')
+           ORDER BY coalesce((draft->>'sent')::boolean, false), received_at DESC LIMIT 40""")
+    return [dict(r) for r in rows]
+
+
+@router.get(API + "/drafts")
+async def api_drafts(device: dict = Depends(owner)):
+    return {"drafts": await drafts()}
+
+
 @router.post(API + "/refresh")
 async def api_refresh(device: dict = Depends(owner)):
     s = await sync()

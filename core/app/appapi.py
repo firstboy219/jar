@@ -104,12 +104,14 @@ async def app_need_answer(kind: str, item_id: int, body: AnswerIn, device: dict 
 # ---------- missions ----------
 
 @router.get(API + "/missions")
-async def app_missions(device: dict = Depends(owner)):
+async def app_missions(done: bool = False, device: dict = Depends(owner)):
+    """The missions (running first); done=true: the finished ones with a look at what each produced (Hasil & laporan)."""
     rows = await db.pool().fetch(
         """SELECT id, title, status, kind, category, runtime, model_used, cost_usd::float AS cost, phase, progress, created_at, finished_at,
-                  EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at)))::int AS seconds
-           FROM tasks WHERE company_id IS NULL AND dev_role IS NULL AND kind NOT IN ('flowcheck')
-           ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT 40""")
+                  EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at)))::int AS seconds,
+                  CASE WHEN $1 THEN left(coalesce(result::text, ''), 220) END AS preview
+           FROM tasks WHERE company_id IS NULL AND dev_role IS NULL AND kind NOT IN ('flowcheck') AND (NOT $1 OR status = 'completed')
+           ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT 40""", done)
     return jsonable({"missions": [dict(r) for r in rows]})
 
 
@@ -228,6 +230,13 @@ async def app_place_delete(name: str, device: dict = Depends(owner)):
 SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home", "quran", "bisnis", "cinema", "inbox"}
 
 
+def loosens_invest(cur: dict, new: dict) -> bool:
+    """Does this change make investing less guarded (a higher limit, a wider price guard, no password)? Pure."""
+    def more(k):
+        return isinstance(new.get(k), (int, float)) and new[k] > cur.get(k, 0)
+    return more("limit") or more("price_guard_pct") or new.get("password") is False
+
+
 @router.get(API + "/settings/{key}")
 async def app_setting(key: str, device: dict = Depends(owner)):
     if key not in SETTING_KEYS:
@@ -241,6 +250,10 @@ async def app_setting_put(key: str, body: dict = Body(...), device: dict = Depen
     if key not in SETTING_KEYS:
         raise HTTPException(404)
     from . import appsettings, hub
+    body = dict(body)
+    password = str(body.pop("admin_password", "") or "")
+    if key == "invest" and loosens_invest(await appsettings.get("invest"), body):
+        await require_password(device, password, "settings:invest")   # a higher limit or a looser guard is his decision, like a trade
     try:
         out = await appsettings.put(key, body, actor(device))
     except appsettings.SettingError as e:

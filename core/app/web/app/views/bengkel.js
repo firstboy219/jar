@@ -2,6 +2,7 @@
 // job's recent real inputs (old vs new, judged blind), then rolled out to 10% first and promoted or rolled back automatically; any version can
 // be restored. Global: the thresholds Hermes decides by.
 import { $, get, header, html, icon, loading, post, render, toast } from '../core.js';
+import { withPassword } from '../needsui.js';
 import { laneChip } from '../ui.js';
 
 const ST = { draft: ['draf', ''], canary: ['uji', 'amber'], active: ['dipakai', 'green'], retired: ['lama', ''], rolled_back: ['dibatalkan', 'red'] };
@@ -51,6 +52,20 @@ function jobScreen(v, job) {
     </div>`;
 }
 
+const BRAIN = { ringan: ['Otak ringan', 'cyan'], berat: ['Otak berat', 'violet'], penglihatan: ['Mata (gambar)', 'amber'] };
+const usd = (c) => (c ? `$${c < 0.01 ? c.toFixed(4) : c.toFixed(2)}` : '$0');
+
+// Which model each brain uses (picked in Komposisi AI on the admin site) and how each model did this week.
+function models(m) {
+  return html`<details class="card"><summary class="ttl" style="cursor:pointer">${icon('layers', 14)} Model tiap otak</summary>
+    ${Object.entries(m.lanes).map(([k, l]) => html`<div style="display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--bd)">
+      <div class="row sb"><span class="tag ${BRAIN[k]?.[1] || ''}">${BRAIN[k]?.[0] || k}</span><span class="small">${l.allow_free ? 'boleh model gratis' : 'berbayar saja'}</span></div>
+      ${l.routes.length ? l.routes.map((r, i) => html`<span class="mono small">${i === 0 ? '①' : i === 1 ? '②' : '③'} ${r.model}</span>`) : html`<span class="small t-amber2">belum dipilih — atur di Komposisi AI</span>`}</div>`)}
+    ${m.usage.length ? html`<span class="small" style="margin-top:6px"><b>Dipakai ${m.days} hari terakhir</b></span>${m.usage.map((u) => html`<div class="row sb" style="font-size:12px"><span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%">${u.model}</span>
+      <span class="small">${u.runs}× · ${u.ok_pct}% · ${u.avg_s ?? '–'} dtk · ${usd(u.cost)}</span></div>`)}` : ''}
+    <span class="small">Ganti model di jar1 → Komposisi AI. Semua lewat OpenRouter; isi sensitif hanya ke model berbayar.</span></details>`;
+}
+
 let cur = { job: null };
 
 export default {
@@ -66,10 +81,11 @@ export default {
       root.innerHTML = String(jobScreen(v, job === 'global' ? '' : job));
       return;
     }
-    const d = await get('/api/v1/app/brain');
+    const [d, m] = await Promise.all([get('/api/v1/app/brain'), get('/api/v1/app/brain/models')]);
     root.innerHTML = String(html`${header('Bengkel otak', { sub: 'ubah cara kerja tiap pekerjaan, uji, pasang bertahap' })}
       <div class="scr">
         <a class="card violet" href="#/bengkel/global" style="text-decoration:none"><span class="k violet">Ambang Hermes</span>${cfgView(d.global.global, '')}</a>
+        ${models(m)}
         <div class="list">${d.jobs.map((j) => html`<a class="li click" href="#/bengkel/${j.job}"><div class="grow" style="min-width:0">
           <div class="row sb"><span style="font-size:14px">${j.feature} · ${j.action}</span><span class="mono small">${j.runs}×</span></div>
           <div class="row" style="gap:6px">${laneChip(j.lane)}<span class="small">${j.ok_pct ?? '–'}% berhasil · ${j.avg_s} dtk</span>${j.versions.map((s) => html`<span class="tag ${ST[s][1]}">${ST[s][0]}</span>`)}</div></div>${icon('right', 16)}</a>`)}</div>
@@ -93,10 +109,17 @@ export default {
     },
     async evaluate(b) { toast('Menguji ulang pada contoh nyata… (±1 menit)'); evalRes = await post(`/api/v1/app/brain/version/${b.dataset.id}/evaluate`); render(); },
     async deploy(b) {
-      await post(`/api/v1/app/brain/version/${b.dataset.id}/deploy`, { mode: b.dataset.m, pct: 10 });
-      toast(b.dataset.m === 'canary' ? 'Dipasang untuk 10% jalan — dipantau otomatis' : 'Dipakai penuh');
+      const all = b.dataset.m === 'all';
+      const ok = await withPassword(`${all ? 'Pakai penuh' : 'Uji 10%'} versi #${b.dataset.id}`, (password) => post(`/api/v1/app/brain/version/${b.dataset.id}/deploy`, { mode: b.dataset.m, pct: 10, password }),
+        { kicker: 'Ubah cara kerja otak', button: all ? 'Pakai sekarang' : 'Pasang 10%', note: cur.job === 'global' ? 'Berlaku untuk semua pekerjaan.' : 'Bisa dibatalkan kapan saja.' });
+      if (!ok) return;
+      toast(all ? 'Dipakai penuh' : 'Dipasang untuk 10% jalan — dipantau otomatis');
       draft = null; evalRes = null; render();
     },
-    async rollback() { await post(`/api/v1/app/brain/${encodeURIComponent(cur.job)}/rollback`); toast('Dikembalikan'); render(); },
+    async rollback() {
+      const ok = await withPassword('Batalkan perubahan terakhir', (password) => post(`/api/v1/app/brain/${encodeURIComponent(cur.job)}/rollback`, { password }),
+        { kicker: 'Ubah cara kerja otak', button: 'Kembalikan', note: '' });
+      if (ok) { toast('Dikembalikan'); render(); }
+    },
   },
 };

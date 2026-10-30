@@ -22,7 +22,7 @@ export default {
               <div class="small">${p.label}${p.merchant && p.merchant !== p.label ? ` · ${p.merchant}` : ''}${p.voucher ? ` · ${p.voucher}` : ''}${p.syarat ? ` · ${p.syarat}` : ''}</div></div>
               <div style="text-align:right"><div class="mono">${rupiah(p.harga, true)}</div>${p.hemat_pct ? html`<div class="small" style="text-decoration:line-through">${rupiah(p.harga_normal, true)}</div>` : ''}</div>
               <button class="btn sm primary" data-act="order" data-i="${i}">Pesan</button></div>`) : html`<span class="small">Tidak ada promo di bawah ${rupiah(st.max_price, true)} hari ini.</span>`}
-            ${st.usual ? html`<button class="btn" data-act="usual">${icon('coffee', 16)} ${st.usual} seperti biasa</button>` : ''}
+            ${st.usual ? html`<button class="btn" data-act="usual">${icon('coffee', 16)} ${st.usual} seperti biasa${st.usual_learned ? ' (dipelajari)' : ''}</button>` : ''}
             <button class="btn ghost sm" data-act="decline">Tidak dulu</button></div>` : ''}
         ${live && o.status === 'ordering' ? html`<div class="card cyan"><span class="k cyan">Memesan ${o.choice?.menu || ''}</span><span class="small">JARVIS sedang memesan di ${o.choice?.label || 'aplikasi'}. Ketik PIN GoPay sendiri saat diminta.</span></div>` : ''}
         ${o && o.status === 'ordered' ? html`<div class="card green"><span class="k green">Dipesan</span><span class="sub">${o.result?.order?.pesanan || o.choice?.menu}</span>
@@ -30,7 +30,8 @@ export default {
         ${o && o.status === 'failed' && live ? html`<div class="card red"><span class="small">${(o.result?.errors || []).join('; ') || o.result?.order?.catatan || 'Gagal'}</span></div>` : ''}
         ${!live || ['declined', 'ordered', 'failed', 'expired'].includes(o.status) ? html`<button class="btn primary block" data-act="check">${icon('search', 16)} Cek promo kopi sekarang</button>` : ''}
         <form class="card" id="cf"><span class="k">Kopiku</span>
-          <label class="field">Biasanya pesan<input name="usual" value="${st.usual}" placeholder="mis. Kopi Kenangan Mantan"></label>
+          <label class="field">Biasanya pesan<input name="usual" value="${st.usual_learned ? '' : st.usual}" placeholder="${st.usual_learned ? `${st.usual} (dipelajari dari pesananmu)` : 'mis. Kopi Kenangan Mantan'}"></label>
+          ${st.usual_learned ? html`<span class="small">JARVIS memperhatikan kamu paling sering pesan <b>${st.usual}</b>. Kosongkan untuk terus belajar, atau ketik untuk menetapkan.</span>` : ''}
           <div class="g2"><label class="field">Gula<input name="sugar" value="${st.sugar}"></label><label class="field">Batas harga<input name="max_price" type="number" min="10000" step="1000" value="${st.max_price}"></label></div>
           <div class="g2"><label class="field">Ambil di<select name="pickup"><option value="1" ${st.pickup ? 'selected' : ''}>Pick up</option><option value="" ${st.pickup ? '' : 'selected'}>Diantar</option></select></label>
             <label class="field">Outlet<input name="outlet" value="${st.outlet}" placeholder="terdekat"></label></div>

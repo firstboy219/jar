@@ -37,9 +37,12 @@ FEATURES: list[dict] = [
     {"id": "berangkat", "label": "Berangkat", "icon": "train", "group": "Perjalanan", "route": "#/berangkat", "slots": ["pagi"]},
     {"id": "pulang", "label": "Pulang", "icon": "car", "group": "Perjalanan", "route": "#/pulang", "slots": ["sore"]},
     {"id": "perjalanan", "label": "Di jalan", "icon": "lock", "group": "Perjalanan", "route": "#/perjalanan", "slots": []},
+    {"id": "berubah", "label": "Rencana berubah", "icon": "alert", "group": "Perjalanan", "route": "#/berubah", "slots": []},
     {"id": "inbox", "label": "Perlu perhatian", "icon": "inbox", "group": "Kerja", "route": "#/inbox", "slots": ["kerja", "siang", "sore"]},
     {"id": "rapat", "label": "Rekam rapat", "icon": "meet", "group": "Kerja", "route": "#/rapat", "slots": ["kerja"]},
     {"id": "catatan", "label": "Catatan & tugas", "icon": "notes", "group": "Kerja", "route": "#/catatan", "slots": ["kerja", "malam"]},
+    {"id": "draf", "label": "Draf email", "icon": "mail", "group": "Kerja", "route": "#/draf", "slots": []},
+    {"id": "hasil", "label": "Hasil & laporan", "icon": "chart", "group": "Kerja", "route": "#/misi?tab=hasil", "slots": []},
     {"id": "rekap", "label": "Rekap harian", "icon": "recap", "group": "Kerja", "route": "#/rekap", "slots": ["malam"]},
     {"id": "misi", "label": "Misi", "icon": "layers", "group": "Kerja", "route": "#/misi", "slots": []},
     {"id": "karier", "label": "Karier JobStreet", "icon": "job", "group": "Kerja", "route": "#/karier", "slots": ["pagi", "malam"]},
@@ -193,11 +196,20 @@ async def opened(feature: str) -> bool:
     return True
 
 
+def with_pins(pinned: list[str], ranked: list[str], n: int = 7, max_pins: int = 4) -> list[str]:
+    """His pinned features first (at most `max_pins`, in his order), then the learned ones, n in all. Pure."""
+    screens = {f["id"] for f in FEATURES if f["route"].startswith("#/")}
+    pins = [p for p in dict.fromkeys(pinned) if p in screens][:max_pins]
+    return (pins + [r for r in ranked if r not in pins])[:n]
+
+
 async def shortcuts(m: Moment, n: int = 7) -> list[dict]:
+    from . import appsettings
     rows = await db.pool().fetch("SELECT feature, opened_at FROM app_usage WHERE opened_at > now() - interval '30 days'")
-    ids = rank_shortcuts([(r["feature"], r["opened_at"]) for r in rows], m, n)
+    pinned = (await appsettings.get("home")).get("pinned") or []
+    ids = with_pins(pinned, rank_shortcuts([(r["feature"], r["opened_at"]) for r in rows], m, n + 4), n)
     by_id = {f["id"]: f for f in FEATURES}
-    return [{k: by_id[i][k] for k in ("id", "label", "icon", "route")} for i in ids]
+    return [{**{k: by_id[i][k] for k in ("id", "label", "icon", "route")}, "pinned": i in pinned} for i in ids]
 
 
 # ---------- the page ----------

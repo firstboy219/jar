@@ -14,28 +14,54 @@ router = APIRouter()
 API = "/api/v1/app/flow"
 
 
+def weak_points(jobs: list[dict]) -> list[dict]:
+    """Where JARVIS does badly or wastefully (a week of runs per job): often failing, slow, costly, or always thinking about a job that
+    could be a fixed procedure. Worst first. Pure."""
+    out = []
+    for j in jobs:
+        if j["runs"] < 3:
+            continue
+        name = f"{j['feature']} · {j['action']}"
+        if j["ok_pct"] is not None and j["ok_pct"] < 80:
+            out.append({"job": f"{j['feature']}:{j['action']}", "kind": "gagal", "score": 100 - j["ok_pct"],
+                        "text": f"{name}: hanya {j['ok_pct']}% berhasil dari {j['runs']} kali — lihat kegagalannya, ubah cara kerjanya"})
+        if j["avg_s"] > 120 and j["hermes"] < j["runs"]:
+            out.append({"job": f"{j['feature']}:{j['action']}", "kind": "lambat", "score": min(60, j["avg_s"] / 10),
+                        "text": f"{name}: rata-rata {round(j['avg_s'])} detik — coba otak ringan atau prompt lebih pendek"})
+        if j["cost"] > 0.5:
+            out.append({"job": f"{j['feature']}:{j['action']}", "kind": "mahal", "score": min(50, j["cost"] * 20),
+                        "text": f"{name}: ${j['cost']:.2f} seminggu — pertimbangkan otak ringan untuk pekerjaan ini"})
+        if j["runs"] >= 10 and j["no_ai_pct"] == 0 and j["ringan"] == j["runs"] and (j["ok_pct"] or 0) >= 95:
+            out.append({"job": f"{j['feature']}:{j['action']}", "kind": "bisa-skill", "score": 20,
+                        "text": f"{name}: {j['runs']}× selalu berhasil dengan AI — Hermes bisa menjadikannya skill tanpa AI"})
+    return sorted(out, key=lambda w: -w["score"])[:8]
+
+
 async def view(hours: int = 24) -> dict:
     live = [dict(r) for r in await db.pool().fetch(
         """SELECT id, feature, action, goal, trigger, lane, why, status, task_id, brain_version, started_at,
                   EXTRACT(EPOCH FROM (now() - started_at))::float AS seconds, steps -> -1 AS last_step
            FROM flow_runs WHERE status IN ('routing', 'running', 'waiting') AND started_at > now() - interval '3 hours' ORDER BY id DESC LIMIT 30""")]
     st = await db.pool().fetch(
-        """SELECT coalesce(lane, 'routing') AS lane, count(*) AS n, count(*) FILTER (WHERE status = 'failed') AS failed
+        """SELECT coalesce(lane, 'routing') AS lane, count(*) AS n, count(*) FILTER (WHERE status = 'failed') AS failed,
+                  count(*) FILTER (WHERE status = 'done') AS ok, coalesce(sum(cost_usd), 0)::float AS cost,
+                  avg(EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (WHERE finished_at IS NOT NULL)::float AS secs
            FROM flow_runs WHERE started_at > now() - make_interval(hours => $1) GROUP BY 1""", hours)
-    stations = {r["lane"]: {"runs": r["n"], "failed": r["failed"]} for r in st}
+    stations = {r["lane"]: {"runs": r["n"], "failed": r["failed"], "ok_pct": round(100 * r["ok"] / r["n"]) if r["n"] else None,
+                            "cost": round(r["cost"], 4), "avg_s": round(r["secs"] or 0, 1)} for r in st}
     total = sum(v["runs"] for v in stations.values())
     feats = [dict(r) for r in await db.pool().fetch(
         """SELECT feature, action, count(*) AS runs, count(*) FILTER (WHERE status = 'done') AS ok, count(*) FILTER (WHERE lane = 'skill') AS no_ai,
                   count(*) FILTER (WHERE lane = 'ringan') AS ringan, count(*) FILTER (WHERE lane = 'berat') AS berat, count(*) FILTER (WHERE lane = 'hermes') AS hermes,
                   coalesce(sum(cost_usd), 0)::float AS cost, avg(EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (WHERE finished_at IS NOT NULL)::float AS secs,
                   max(started_at) AS last_at
-           FROM flow_runs WHERE started_at > now() - interval '7 days' GROUP BY feature, action ORDER BY count(*) DESC LIMIT 60""")]
+           FROM flow_runs WHERE started_at > now() - make_interval(hours => $1) GROUP BY feature, action ORDER BY count(*) DESC LIMIT 60""", max(hours, 24))]
     for f in feats:
         f["ok_pct"] = round(100 * f["ok"] / f["runs"]) if f["runs"] else None
         f["no_ai_pct"] = round(100 * f["no_ai"] / f["runs"]) if f["runs"] else None
         f["avg_s"] = round(f.pop("secs") or 0, 1)
     return {"hours": hours, "total": total, "stations": stations, "live": live, "recent": await master.recent(40),
-            "day": await master.summary(1), "week": await master.summary(7), "jobs": feats}
+            "day": await master.summary(1), "week": await master.summary(7), "jobs": feats, "weak": weak_points(feats)}
 
 
 async def run_detail(run_id: int) -> dict | None:

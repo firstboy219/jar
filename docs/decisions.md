@@ -1441,3 +1441,20 @@ menentukan berat/ringan/non-AI)".
 - **Safety kept**: phone runs from chat need the admin password (feature taps in the app and his schedules/habits do not); JARVIS never types
   PIN/OTP/passwords and stops at those screens; only approved apps (now also Kopi Kenangan, Qpon, Pluang, JobStreet — with their payment
   screens); no top-up/transfer/account changes; investment execution always asks the admin password (a wrong one is 422, not a lost login).
+- **Mockup audit and gap batches A–E** (wave 9): every one of the 48 mockup screens was checked against the code; what was missing was built,
+  each with tests. A: needs inline on the front page (route, the routine's track record, its rules), mission steps and time left, saving and
+  reading results, the scheduled tab, attachments and quick replies in chat, the admin password released by a strong fingerprint when the owner
+  opts in (kept encrypted on the phone only). B: the trip's driver (from Gojek notifications), a held train, errands on the way, alternatives,
+  "tell home", lock-screen notification actions. C: snoozed messages, a family filter, the ignored list, drafts with their context and Outlook
+  attachments, tasks that open their source, JobStreet "viewed" from the phone and interview prep the evening before. D: a calendar meeting
+  offers recording at the office, mosques on the way and prayers during the trip, a whole Hijri month, tables→Excel, translation, risky
+  clauses, signing, OCR of scanned PDFs, photo recognise/read/translate/paint, AR area and height, cinemas near the office, closing pages by
+  content, saving the playing song. E: the usual coffee learned from orders, the emergency fund and last period per pot, the salary's
+  investing pot in the analysis, one recommended option, a post-trade price-guard check, all businesses together, the shipping cutoff alert,
+  strategy steps as tasks, deep research and "not for me" (the research learns his taste), the flow's weak points and lane numbers, the
+  brain's models, pinned shortcuts, drafts/results/changed-plan in the catalog. Every new process runs through `master.run`.
+- **More guarded by the admin password** (E): loosening the investment guard (a higher limit, a wider price guard, no password) and putting a
+  brain version live or rolling one back — drafting and evaluating a version need none.
+- **Not built** (no reliable source or out of scope for now): booking cinema seats, a live KRL delay feed (held trains are inferred from the
+  trip's own timing), video speed/subtitle/PiP controls, a desktop three-pane cockpit, and a full router/model editor (models are chosen in
+  Komposisi AI on the admin site; Bengkel shows them and how each did).

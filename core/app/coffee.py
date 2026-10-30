@@ -78,8 +78,29 @@ def order_goal(choice: dict, s: dict) -> str:
 
 # ---------- checking promos ----------
 
+def learned_usual(menus: list[str], min_count: int = 2) -> str:
+    """The menu he ordered most among his recent orders (at least `min_count` times); "" when there is no habit yet. Pure."""
+    from collections import Counter
+    c = Counter(" ".join(m.split()) for m in menus if m and m.strip())
+    if not c:
+        return ""
+    menu, n = c.most_common(1)[0]
+    return menu if n >= min_count else ""
+
+
+async def _settings() -> dict:
+    """His coffee settings; with no usual typed, the usual is learned from what he ordered (the last 15 orders)."""
+    s = dict(await appsettings.get("coffee"))
+    s["usual_learned"] = False
+    if not (s["usual"] or "").strip():
+        rows = await db.pool().fetch("SELECT choice->>'menu' AS m FROM coffee_offers WHERE status = 'ordered' AND choice IS NOT NULL ORDER BY id DESC LIMIT 15")
+        if u := learned_usual([r["m"] or "" for r in rows]):
+            s["usual"], s["usual_learned"] = u, True
+    return s
+
+
 async def check(trigger: str = "owner") -> dict:
-    s = await appsettings.get("coffee")
+    s = await _settings()
     if not s["enabled"]:
         raise CoffeeError("fitur kopi dimatikan")
     recent = await db.pool().fetchrow("SELECT * FROM coffee_offers WHERE status IN ('checking', 'offered') AND created_at > now() - make_interval(mins => $1) ORDER BY id DESC LIMIT 1",
@@ -118,7 +139,7 @@ async def _check_done(run_id: int, result: dict) -> None:
     await db.pool().execute("UPDATE coffee_offers SET promos = $2, result = $3, updated_at = now() WHERE id = $1", oid, allp, {"pending": pending, "errors": errors})
     if pending:
         return
-    s = await appsettings.get("coffee")
+    s = await _settings()
     offer = best(allp, s["usual"], float(s["max_price"]))
     status = "offered" if offer or s["usual"] else "failed"
     await db.pool().execute("UPDATE coffee_offers SET status = $2, updated_at = now() WHERE id = $1", oid, status)
@@ -127,7 +148,7 @@ async def _check_done(run_id: int, result: dict) -> None:
 
 
 async def _tell(o: dict) -> None:
-    s = await appsettings.get("coffee")
+    s = await _settings()
     top = best(o["promos"] or [], s["usual"], float(s["max_price"]))
     if top:
         p = top[0]
@@ -151,7 +172,7 @@ async def order(offer_id: int, index: int | None, custom: str, who: str) -> dict
         raise CoffeeError("tawaran ini sudah tidak berlaku")
     if o["created_at"] < datetime.now(WIB) - timedelta(hours=OFFER_HOURS):
         raise CoffeeError("promo sudah lama — cek lagi")
-    s = await appsettings.get("coffee")
+    s = await _settings()
     shown = best(o["promos"] or [], s["usual"], float(s["max_price"]))
     if index is not None:
         if not 0 <= index < len(shown):
@@ -193,7 +214,7 @@ async def _order_done(run_id: int, result: dict) -> None:
 
 async def state() -> dict:
     o = await db.pool().fetchrow("SELECT * FROM coffee_offers ORDER BY id DESC LIMIT 1")
-    s = await appsettings.get("coffee")
+    s = await _settings()
     hist = [dict(r) for r in await db.pool().fetch("SELECT id, choice, result, created_at FROM coffee_offers WHERE status = 'ordered' ORDER BY id DESC LIMIT 8")]
     cur = dict(o) if o else None
     if cur:
@@ -210,7 +231,7 @@ async def _home(m: home.Moment) -> list[dict]:
     if not o:
         return []
     if o["status"] == "offered":
-        s = await appsettings.get("coffee")
+        s = await _settings()
         top = best(o["promos"] or [], s["usual"], float(s["max_price"]))
         sub = f"Diskon {top[0]['menu']} {rp_short(top[0]['harga'])} di {top[0]['label']}" if top else f"{s['usual']} seperti biasa?"
         return [{"id": "coffee", "title": "Mau kopi?", "sub": sub[:100], "route": "#/kopi", "icon": "coffee", "tone": "amber", "score": 72, "cta": "Pesan"}]

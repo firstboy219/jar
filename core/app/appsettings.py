@@ -27,10 +27,10 @@ DEFAULTS: dict[str, dict] = {
              "undo_min": 5, "min_match": 80, "cv_doc_id": "", "times": ["07:00", "19:00"], "cv_attachment": "", "profile": "", "exclude": [], "max_per_day": 8},
     "music": {"moods": {"fokus": "lofi fokus kerja", "semangat": "lagu semangat pagi", "olahraga": "musik olahraga energik",
                         "santai": "lagu santai akustik", "tidur": "musik tidur tenang"}},
-    "home": {"hidden": []},
+    "home": {"hidden": [], "pinned": []},
     "cinema": {"city": "", "cinemas": [], "max": 4, "office_city": "Jakarta", "office_cinemas": []},
     "inbox": {"family": []},
-    "bisnis": {"businesses": ["Autotoko", "Renature"], "alerts": True, "behind_pct": 60, "unpacked_after": "14:00",
+    "bisnis": {"businesses": ["Autotoko", "Renature"], "alerts": True, "behind_pct": 60, "unpacked_after": "14:00", "cutoff": "15:00", "cutoff_warn_min": 60,
                "profile": "Pemilik Autotoko (SaaS omnichannel marketplace untuk penjual online) dan Renature (jualan online inhaler, mouth spray, produk herbal); "
                           "juga karyawan kantor di Jakarta, tinggal di Bogor.",
                "strategy_day": 0, "strategy_at": "07:30", "opportunity_day": 5, "opportunity_at": "09:00"},

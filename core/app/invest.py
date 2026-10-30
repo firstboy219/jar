@@ -94,13 +94,35 @@ def clean_options(data, p: dict, limit: float) -> list[dict]:
             acts.append({"jenis": jenis, "aset": aset, "nominal": round(nominal)})
         if not ok or sum(a["nominal"] for a in acts if a["jenis"] == "beli") > limit:
             continue
-        out.append({"id": "", "judul": str(o["judul"])[:100], "aksi": acts, "alasan": str(o.get("alasan") or "")[:400], "risiko": str(o.get("risiko") or "")[:200]})
+        out.append({"id": "", "judul": str(o["judul"])[:100], "aksi": acts, "alasan": str(o.get("alasan") or "")[:400], "risiko": str(o.get("risiko") or "")[:200],
+                    "disarankan": bool(o.get("disarankan"))})
     if not any(not o["aksi"] for o in out):
-        out.append({"id": "", "judul": "Tahan dulu", "aksi": [], "alasan": "Tidak ada transaksi minggu ini; pantau lagi pekan depan.", "risiko": ""})
+        out.append({"id": "", "judul": "Tahan dulu", "aksi": [], "alasan": "Tidak ada transaksi minggu ini; pantau lagi pekan depan.", "risiko": "", "disarankan": False})
     out = out[:3] if any(not o["aksi"] for o in out[:3]) else out[:2] + [next(o for o in out if not o["aksi"])]
+    starred = next((o for o in out if o["disarankan"]), None)
     for i, o in enumerate(out):
         o["id"] = "ABC"[i]
+        o["disarankan"] = o is starred   # one recommendation at most
     return out
+
+
+def verify_exec(got: dict, p: dict, guard_pct: float, limit: float) -> list[str]:
+    """After the phone carried out his pick: the bought prices against the prices read (the guard) and the total against the limit —
+    anything off is told to him. Pure."""
+    prices = {a["nama"].lower(): a.get("harga") for a in p.get("aset") or []}
+    warn, total = [], 0.0
+    for b in got.get("berhasil") or []:
+        if not isinstance(b, dict):
+            continue
+        n = to_number(b.get("nominal")) or 0
+        if b.get("jenis") == "beli":
+            total += n
+        ref, now = prices.get(str(b.get("aset") or "").lower()), to_number(b.get("harga"))
+        if ref and now and abs(now - ref) / ref * 100 > guard_pct:
+            warn.append(f"{b.get('aset')}: harga Rp{int(now):,} bergeser {abs(now - ref) / ref * 100:.1f}% dari saat dibaca (batas {guard_pct}%)".replace(",", "."))
+    if total > limit:
+        warn.append(f"total pembelian Rp{int(total):,} melebihi batas Rp{int(limit):,}".replace(",", "."))
+    return warn
 
 
 def exec_goal(option: dict, p: dict, guard_pct: float, limit: float) -> str:
@@ -179,17 +201,21 @@ async def analyse(snapshot_id: int, trigger: str = "owner") -> dict:
         raise InvestError("bacaan portofolio tidak ada")
     p, s = row["data"], await appsettings.get("invest")
     mkt = await _market(p)
+    budget = await pot_budget()
     prev = await db.pool().fetchval("SELECT data FROM invest_snapshots WHERE id < $1 ORDER BY id DESC LIMIT 1", snapshot_id)
     msgs = [{"role": "system", "content": (
         "Kamu penasihat investasi pribadi yang hati-hati untuk investor ritel Muslim di Indonesia (hindari yang jelas tidak syariah bila ada pilihan). "
         "Dari portofolio Pluang, kondisi pasar, dan target alokasi pemilik, beri TIGA opsi untuk minggu ini; satu opsi harus 'tahan' (tanpa transaksi). "
         f"Batas total pembelian per opsi Rp{int(s['limit']):,}".replace(",", ".") + "; jual hanya aset yang dimiliki; jangan menyarankan aset yang tidak ada di Pluang. "
-        "Jelaskan dengan angka. JSON: {\"ringkasan\": \"2–3 kalimat\", \"kondisi\": [\"…\"], \"opsi\": [{\"judul\": \"…\", \"aksi\": [{\"jenis\": \"beli|jual\", "
-        "\"aset\": \"nama persis seperti di portofolio atau nama aset Pluang\", \"nominal\": 0}], \"alasan\": \"…\", \"risiko\": \"…\"}]}")},
+        "Jelaskan dengan angka; tandai SATU opsi yang paling kamu sarankan dengan \"disarankan\": true. JSON: {\"ringkasan\": \"2–3 kalimat\", \"kondisi\": [\"…\"], "
+        "\"opsi\": [{\"judul\": \"…\", \"aksi\": [{\"jenis\": \"beli|jual\", "
+        "\"aset\": \"nama persis seperti di portofolio atau nama aset Pluang\", \"nominal\": 0}], \"alasan\": \"…\", \"risiko\": \"…\", \"disarankan\": false}]}")},
         {"role": "user", "content": (f"Portofolio (dibaca {row['at']:%Y-%m-%d %H:%M}): total {rp_short(p['total'])}, kas {rp_short(p['kas'])}; aset: "
                                      + "; ".join(f"{a['nama']} ({a['jenis']}) {rp_short(a['nilai'])}, untung {a['untung_pct']}%" for a in p["aset"])
                                      + f"\nAlokasi sekarang: {allocation(p)}; target pemilik: {s['targets'] or 'belum ditentukan'}; profil risiko: {s['risk']}; tujuan: {s['goal'] or '-'}"
                                      + f"\nPasar: {mkt or 'tidak tersedia'}"
+                                     + (f"\nAnggaran investasi dari alokasi gaji (pos {budget['pot']}): {rp_short(budget['amount'])}, sudah dipakai "
+                                        f"{rp_short(budget['spent'])}, sisa {rp_short(budget['left'])} — pembelian sebaiknya tidak melebihi sisa ini" if budget else "")
                                      + (f"\nBacaan sebelumnya: total {rp_short(prev['total'])}" if prev else ""))}]
     r = await master.run(master.Job("invest", "analisa", "analisa portofolio dan beri tiga pilihan", trigger=trigger, messages=msgs, heavy=True, json_out=True,
                                     no_free=True, max_tokens=1800))
@@ -197,12 +223,25 @@ async def analyse(snapshot_id: int, trigger: str = "owner") -> dict:
         raise InvestError(r.get("error") or "analisa gagal")
     opts = clean_options(r["result"], p, float(s["limit"]))
     data = {"ringkasan": str(r["result"].get("ringkasan") or "")[:500], "kondisi": [str(x)[:200] for x in r["result"].get("kondisi") or []][:6],
-            "opsi": opts, "pasar": mkt, "alokasi": allocation(p), "lane": r.get("lane")}
+            "opsi": opts, "pasar": mkt, "alokasi": allocation(p), "budget": budget, "lane": r.get("lane")}
     await db.pool().execute("UPDATE invest_proposals SET status = 'expired' WHERE status = 'new'")
     pid = await db.pool().fetchval("INSERT INTO invest_proposals (snapshot_id, data, run_id) VALUES ($1, $2, $3) RETURNING id", snapshot_id, data, r["run_id"])
     await hub.broadcast({"type": "notify", "title": "Pilihan investasi minggu ini", "text": " · ".join(f"{o['id']}: {o['judul']}" for o in opts)[:200],
                          "kind": "info", "route": "#/invest"})
     return {"id": pid, **data}
+
+
+async def pot_budget() -> dict | None:
+    """The investing pot of his salary allocation (Gaji): its amount, what went to investing this pay period, what is left."""
+    ms = await appsettings.get("money")
+    pot = next((p for p in ms["pots"] if "investasi" in (p.get("categories") or [])), None)
+    if not pot:
+        return None
+    start, end = money.period_of(datetime.now(WIB).date(), int(ms["payday"]))
+    t0 = datetime(start.year, start.month, start.day, tzinfo=WIB)
+    spent = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE direction = 'out' AND category = 'investasi' AND at >= $1", t0)
+    amount = float(pot.get("amount") or 0)
+    return {"pot": pot.get("name") or "Investasi", "amount": amount, "spent": spent, "left": max(0.0, amount - spent)}
 
 
 # ---------- executing his pick ----------
@@ -242,11 +281,21 @@ async def _exec_done(run_id: int, result: dict) -> None:
     except ValueError:
         got = {"catatan": (result.get("text") or "")[:1000]}
     ok = bool(result.get("ok"))
-    await db.pool().execute("UPDATE invest_proposals SET status = $2, result = $3 WHERE id = $1", pid, "done" if ok else "failed", got if isinstance(got, dict) else {"catatan": str(got)})
+    got = got if isinstance(got, dict) else {"catatan": str(got)}
+    warn = []
+    if ok:
+        row = await db.pool().fetchrow("SELECT p.snapshot_id, s.data FROM invest_proposals p LEFT JOIN invest_snapshots s ON s.id = p.snapshot_id WHERE p.id = $1", pid)
+        st = await appsettings.get("invest")
+        warn = verify_exec(got, (row["data"] if row else None) or {"aset": []}, float(st["price_guard_pct"]), float(st["limit"]))
+        if warn:
+            got["peringatan"] = warn
+    await db.pool().execute("UPDATE invest_proposals SET status = $2, result = $3 WHERE id = $1", pid, "done" if ok else "failed", got)
     for b in (got.get("berhasil") or []) if ok and isinstance(got, dict) else []:
         n = to_number(b.get("nominal")) or 0
         if b.get("jenis") == "beli" and n > 0:
             await money.record(n, f"Pluang {b.get('aset', '')}"[:60], f"invest:{pid}:{b.get('aset', '')}"[:120], "investasi", f"beli {b.get('aset', '')}", "Pluang")
+    if warn:
+        await hub.broadcast({"type": "notify", "title": "Periksa transaksi Pluang", "text": "; ".join(warn)[:200], "kind": "warn", "route": "#/invest"})
     await hub.broadcast({"type": "notify", "title": "Investasi selesai" if ok else "Investasi tidak jadi", "kind": "info", "route": "#/invest",
                          "text": "; ".join(f"{b.get('jenis')} {b.get('aset')} {rp_short(to_number(b.get('nominal')) or 0)}" for b in got.get("berhasil") or [])[:200]
                          if ok and isinstance(got, dict) else (result.get("text") or "")[:200]})
@@ -275,7 +324,7 @@ async def state() -> dict:
     if p:
         p["fresh"] = p["status"] == "new" and p["created_at"] > datetime.now(WIB) - timedelta(hours=PROPOSAL_HOURS)
     return {"snapshot": dict(snap) if snap else None, "proposal": p, "history": hist, "running": dict(running) if running else None,
-            "settings": {k: s[k] for k in ("limit", "price_guard_pct", "targets", "check_day", "check_at", "risk", "goal")},
+            "settings": {k: s[k] for k in ("limit", "price_guard_pct", "targets", "check_day", "check_at", "risk", "goal")}, "budget": await pot_budget(),
             "allocation": allocation(snap["data"]) if snap else {}}
 
 

@@ -20,7 +20,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from statistics import mean
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -290,6 +290,13 @@ def judge(business: str, now: datetime, today_vals: dict, same_time: dict, max60
         if left >= max(5, 0.2 * today_vals["pesanan"]):
             out.append({"key": f"unpacked:{business}:{day}", "tone": "amber", "title": f"{business}: {round(left)} pesanan belum dikemas",
                         "text": f"{round(today_vals['dikemas'])} dari {round(today_vals['pesanan'])} pesanan sudah dikemas. Kejar sebelum kurir pick-up."})
+    cutoff = s.get("cutoff") or ""
+    if re.fullmatch(r"\d{2}:\d{2}", cutoff) and today_vals.get("pesanan") and today_vals.get("dikemas") is not None:
+        left = round(today_vals["pesanan"] - today_vals["dikemas"])
+        mins = int(cutoff[:2]) * 60 + int(cutoff[3:]) - (now.hour * 60 + now.minute)
+        if left > 0 and 0 < mins <= int(s.get("cutoff_warn_min") or 60):
+            out.append({"key": f"cutoff:{business}:{day}", "tone": "red", "title": f"{business}: {left} pesanan belum dikemas, batas kirim {cutoff.replace(':', '.')}",
+                        "text": f"{mins} menit lagi kurir pick-up. Lewat batas, pesanan dikirim besok dan skor toko bisa turun."})
     if max60 and today_vals.get("penjualan", 0) > max60 and max60 > 0:
         out.append({"key": f"record:{business}:{day}", "tone": "green", "title": f"{business}: rekor penjualan 60 hari!",
                     "text": f"{rp_short(today_vals['penjualan'])} hari ini, tertinggi sejak dua bulan lalu ({rp_short(max60)})."})
@@ -733,6 +740,7 @@ async def find_opportunities(trigger: str = "owner") -> dict:
         "Autotoko (penjual marketplace), brand Renature (inhaler, mouth spray, produk kesehatan herbal), dan kemampuan jualan online. "
         f"Tentang pemilik: {s['profile']}. Angka bisnis sekarang: {'; '.join(top) or 'belum ada'}. "
         f"Hindari yang sudah pernah diusulkan: {', '.join(await _past_titles()) or '-'}. "
+        f"Pemilik bilang BUKAN untuknya (pelajari seleranya, jangan usulkan yang mirip): {'; '.join(await _not_for_me()) or '-'}. "
         f"Jawab HANYA JSON: {OPP_FORMAT}")
     r = await master.run(master.Job("bisnis", "peluang", "riset peluang bisnis online baru", trigger=trigger, tools=True, heavy=True, no_free=True,
                                     instruction=instruction, title="Cari peluang bisnis baru", on_done="bisnis:_opportunities_done"))
@@ -744,6 +752,12 @@ async def find_opportunities(trigger: str = "owner") -> dict:
 async def _past_titles() -> list[str]:
     rows = await db.pool().fetch("SELECT data FROM biz_insights WHERE kind = 'opportunity' AND created_at > now() - interval '90 days'")
     return [p.get("judul", "") for r in rows for p in (r["data"].get("peluang") or [])][:30]
+
+
+async def _not_for_me() -> list[str]:
+    """What he said is not for him (and why), so the research learns his taste."""
+    rows = await db.pool().fetch("SELECT data FROM biz_insights WHERE kind = 'opportunity' AND created_at > now() - interval '365 days' ORDER BY id DESC")
+    return [f"{p['judul']}" + (f" ({p['alasan_tolak']})" if p.get("alasan_tolak") else "") for r in rows for p in (r["data"].get("peluang") or []) if p.get("dismissed")][:20]
 
 
 def clean_opportunities(data) -> list[dict]:
@@ -804,6 +818,69 @@ async def save_opportunity(batch_id: int, index: int, who: str) -> dict:
     data["peluang"][index]["saved"] = True
     await db.pool().execute("UPDATE biz_insights SET data = $2, status = 'saved' WHERE id = $1", batch_id, data)
     return t
+
+
+async def dismiss_opportunity(batch_id: int, index: int, reason: str, who: str) -> None:
+    data = await db.pool().fetchval("SELECT data FROM biz_insights WHERE id = $1 AND kind = 'opportunity'", batch_id)
+    if not data or not 0 <= index < len(data.get("peluang") or []):
+        raise BisnisError("peluang tidak ada")
+    data["peluang"][index].update({"dismissed": True, "alasan_tolak": reason.strip()[:200]})
+    await db.pool().execute("UPDATE biz_insights SET data = $2 WHERE id = $1", batch_id, data)
+    await audit.record(who, "bisnis.opportunity_dismissed", f"biz_insight:{batch_id}", index=index)
+
+
+DEEP_FORMAT = ("{\"pasar\": \"ukuran & tren dengan angka\", \"pesaing\": [{\"nama\": \"…\", \"harga\": \"…\", \"catatan\": \"…\"}], "
+               "\"pemasok\": [\"…\"], \"hitungan\": {\"modal_awal\": \"Rp…\", \"hpp_per_unit\": \"Rp…\", \"harga_jual\": \"Rp…\", \"margin\": \"…%\", "
+               "\"balik_modal\": \"…\"}, \"risiko\": [\"…\"], \"rencana_30_hari\": [\"minggu 1: …\"], \"kesimpulan\": \"layak/tidak dan kenapa\", \"sumber\": [\"url\"]}")
+
+
+async def deep_research(batch_id: int, index: int, trigger: str = "owner") -> dict:
+    """One opportunity researched deeper by Hermes with the browser: market, competitors and their prices, suppliers, the numbers, a 30-day plan."""
+    data = await db.pool().fetchval("SELECT data FROM biz_insights WHERE id = $1 AND kind = 'opportunity'", batch_id)
+    if not data or not 0 <= index < len(data.get("peluang") or []):
+        raise BisnisError("peluang tidak ada")
+    p = data["peluang"][index]
+    s = await appsettings.get("bisnis")
+    instruction = (f"Riset MENDALAM satu peluang bisnis untuk pemilik di Indonesia, pakai browser (marketplace, Google Trends, situs pemasok, berita): "
+                   f"\"{p['judul']}\" — {p['ringkasan']} Cek harga pesaing nyata di Shopee/Tokopedia/TikTok Shop, pemasok/maklon dan harganya, "
+                   f"hitung HPP, margin, dan balik modal dengan angka, lalu rencana 30 hari. Tentang pemilik: {s['profile']}. "
+                   f"Jujur bila tidak layak. Jawab HANYA JSON: {DEEP_FORMAT}")
+    r = await master.run(master.Job("bisnis", "riset-dalam", f"riset mendalam: {p['judul']}", trigger=trigger, tools=True, heavy=True, no_free=True,
+                                    instruction=instruction, title=f"Riset: {p['judul']}"[:80], on_done="bisnis:_deep_done", data={"batch": batch_id, "index": index}))
+    if r["status"] == "failed":
+        raise BisnisError(r.get("error") or "riset tidak bisa dimulai")
+    data["peluang"][index]["riset"] = {"status": "running", "task_id": r.get("task_id")}
+    await db.pool().execute("UPDATE biz_insights SET data = $2 WHERE id = $1", batch_id, data)
+    return {"status": r["status"], "task_id": r.get("task_id"), "lane": r.get("lane")}
+
+
+async def _deep_done(run_id: int, result: dict) -> None:
+    d = result.get("data") or {}
+    data = await db.pool().fetchval("SELECT data FROM biz_insights WHERE id = $1 AND kind = 'opportunity'", d.get("batch"))
+    if not data or not 0 <= int(d.get("index", -1)) < len(data.get("peluang") or []):
+        return
+    p = data["peluang"][int(d["index"])]
+    try:
+        got = master.parse_json(result.get("text") or "") if result.get("ok") else None
+    except ValueError:
+        got = None
+    p["riset"] = {"status": "done", **got} if isinstance(got, dict) else {"status": "done" if result.get("ok") else "failed", "catatan": (result.get("text") or "")[:3000]}
+    await db.pool().execute("UPDATE biz_insights SET data = $2 WHERE id = $1", d["batch"], data)
+    await hub.broadcast({"type": "notify", "title": f"Riset selesai: {p['judul']}"[:80], "text": str(p["riset"].get("kesimpulan") or "")[:160], "kind": "info", "route": "#/peluang"})
+
+
+async def strategy_tasks(business: str, who: str) -> list[dict]:
+    """This week's strategy steps → tasks in Catatan (each opens Tren); steps already there are not added twice."""
+    st = await latest_strategy(business)
+    if not st or not st.get("minggu_ini"):
+        raise BisnisError("belum ada strategi minggu ini")
+    have = {t["text"] for t in await notes.tasks()}
+    out = []
+    for step in st["minggu_ini"][:8]:
+        text = f"{business}: {step}"[:300]
+        if text not in have:
+            out.append(await notes.add_task(text, None, None, who, link=f"#/tren?b={quote(business)}"))
+    return out
 
 
 # ---------- the source form: pasted API docs → filled in ----------
@@ -958,6 +1035,35 @@ async def api_opps_now(device: dict = Depends(owner)):
 async def api_opp_save(batch_id: int, index: int, device: dict = Depends(owner)):
     try:
         return await save_opportunity(batch_id, index, actor(device))
+    except BisnisError as e:
+        _err(e)
+
+
+class DismissIn(BaseModel):
+    reason: str = Field(default="", max_length=200)
+
+
+@router.post(API + "/opportunities/{batch_id}/{index}/dismiss")
+async def api_opp_dismiss(batch_id: int, index: int, body: DismissIn, device: dict = Depends(owner)):
+    try:
+        await dismiss_opportunity(batch_id, index, body.reason, actor(device))
+    except BisnisError as e:
+        _err(e)
+    return {"ok": True}
+
+
+@router.post(API + "/opportunities/{batch_id}/{index}/deep")
+async def api_opp_deep(batch_id: int, index: int, device: dict = Depends(owner)):
+    try:
+        return await deep_research(batch_id, index)
+    except BisnisError as e:
+        _err(e)
+
+
+@router.post(API + "/strategy/tasks")
+async def api_strategy_tasks(body: BizIn, device: dict = Depends(owner)):
+    try:
+        return {"tasks": await strategy_tasks(body.business, actor(device))}
     except BisnisError as e:
         _err(e)
 

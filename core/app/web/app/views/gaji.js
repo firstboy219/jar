@@ -13,6 +13,8 @@ function setup(s) {
     <div class="g2"><label class="field">Gaji bersih per bulan<input name="salary" type="number" min="0" step="50000" value="${s.salary || ''}" required></label>
       <label class="field">Tanggal gajian<input name="payday" type="number" min="1" max="31" value="${s.payday}" required></label></div>
     <label class="field">Tujuan keuangan (opsional)<input name="goals" value="${s.goals}" placeholder="mis. dana darurat 6× gaji, DP rumah 2028"></label>
+    <div class="g2"><label class="field">Dana darurat sekarang<input name="emergency_saved" type="number" min="0" step="100000" value="${s.emergency_saved || 0}"></label>
+      <label class="field">Target (× pengeluaran bulanan)<input name="emergency_months" type="number" min="1" max="24" value="${s.emergency_months}"></label></div>
     <button class="btn primary" data-act="savesettings">Simpan</button>
     <span class="small">Pengeluaran dicatat otomatis dari notifikasi GoPay & bank di HP (izin baca notifikasi). Notifikasi berisi OTP/PIN tidak pernah dibaca.</span></form>`;
 }
@@ -20,11 +22,19 @@ function setup(s) {
 function plan(p) {
   return html`<div class="card violet"><div class="row sb"><span class="k violet">Usulan alokasi · mulai ${d(p.period_start)}</span>${laneChip(p.lane)}</div>
     <p class="sub">${p.ringkasan}</p>
-    ${p.pos.map((x, i) => html`<div class="row sb" style="gap:8px"><span style="font-size:14px" class="grow">${x.name}<br><span class="small">${x.alasan}</span></span>
+    ${p.pos.map((x, i) => html`<div class="row sb" style="gap:8px"><span style="font-size:14px" class="grow">${x.name}<br><span class="small">${x.alasan}</span>${x.last ? html`<br><span class="small">periode lalu terpakai ${rupiah(x.last, true)}</span>` : ''}</span>
       <input class="inp mono" style="width:130px;height:38px;text-align:right" data-pot="${i}" type="number" min="0" step="50000" value="${x.amount}"></div>`)}
     <div class="row sb"><span class="small">Total</span><span class="mono">${rupiah(p.total)} / ${rupiah(p.salary)}</span></div>
     ${(p.hemat || []).map((h) => html`<span class="small">• ${h}</span>`)}
+    ${p.catatan ? html`<span class="small t-amber2">${p.catatan}</span>` : ''}
     <button class="btn primary" data-act="apply" data-id="${p.id}">Pakai alokasi ini</button></div>`;
+}
+
+function emergency(e) {
+  if (!e || !e.target) return '';
+  return html`<div class="card ${e.pct >= 100 ? 'green' : 'cyan'}"><div class="row sb"><span class="k ${e.pct >= 100 ? 'green' : 'cyan'}">Dana darurat</span><span class="mono" style="font-size:13px">${rupiah(e.saved, true)} / ${rupiah(e.target, true)}</span></div>
+    <div class="bar"><i class="${e.pct >= 100 ? 'green' : ''}" style="width:${e.pct}%"></i></div>
+    <span class="small">cukup untuk ${String(e.covers_months).replace('.', ',')} bulan (target ${e.months}× ≈ ${rupiah(e.monthly, true)}/bulan). Transfer berkategori "tabungan" ikut terhitung.</span></div>`;
 }
 
 export default {
@@ -44,9 +54,10 @@ export default {
         <div class="card"><div class="row sb"><span class="k">Terpakai</span><span class="mono">${rupiah(s.spent, true)} / ${rupiah(s.salary, true)}</span></div>
           <div class="bar" style="height:10px"><i class="${pct > 90 ? 'amber' : ''}" style="width:${pct}%"></i></div>
           <div class="row sb small"><span>sisa ${rupiah(s.left, true)}</span><span>laju: ${rupiah(s.pace, true)} sampai gajian${s.pace > s.salary ? ' — melebihi gaji' : ''}</span></div></div>
+        ${emergency(s.emergency)}
         ${s.pots.length ? html`<span class="sec">Pos anggaran</span>${s.pots.map((p) => html`<div class="card ${p.level === 'over' ? 'red' : p.level === 'warn' ? 'amber' : ''}">
           <div class="row sb"><span class="ttl">${p.name}</span><span class="mono" style="font-size:13px">${rupiah(p.spent, true)}${p.amount ? ` / ${rupiah(p.amount, true)}` : ''}</span></div>
-          ${p.amount ? html`<div class="bar"><i class="${p.level === 'ok' ? 'green' : 'amber'}" style="width:${Math.min(100, p.pct)}%"></i></div><span class="small">${p.pct}% · ${p.categories.join(', ')}</span>` : html`<span class="small">${p.unplanned ? 'pengeluaran yang belum masuk pos mana pun' : ''}</span>`}</div>`)}`
+          ${p.amount ? html`<div class="bar"><i class="${p.level === 'ok' ? 'green' : 'amber'}" style="width:${Math.min(100, p.pct)}%"></i></div><span class="small">${p.pct}% · ${p.categories.join(', ')}${p.last ? ` · periode lalu ${rupiah(p.last, true)}` : ''}</span>` : html`<span class="small">${p.unplanned ? 'pengeluaran yang belum masuk pos mana pun' : ''}</span>`}</div>`)}`
           : html`<div class="card"><p class="sub">Belum ada pos anggaran. Minta JARVIS menyusun alokasi dari pengeluaranmu.</p></div>`}
         ${!s.plan ? html`<button class="btn block" data-act="plan">${icon('bolt', 16)} Susun alokasi gaji (otak berat)</button>` : ''}
         ${cats.length ? html`<div class="card"><span class="k">Per kategori</span>${cats.map(([k, v]) => html`<div class="row" style="font-size:13px"><span style="width:110px;color:var(--tx2)">${k}</span>
@@ -65,7 +76,9 @@ export default {
     async savesettings() {
       const f = $('#setf'); if (!f.reportValidity()) return;
       const v = Object.fromEntries(new FormData(f).entries());
-      await put('/api/v1/app/settings/money', { salary: Number(v.salary), payday: Number(v.payday), goals: v.goals || '' });
+      const em = Number(v.emergency_saved || 0);
+      await put('/api/v1/app/settings/money', { salary: Number(v.salary), payday: Number(v.payday), goals: v.goals || '', emergency_months: Number(v.emergency_months || 6),
+        ...(em !== Number(cur?.settings?.emergency_saved || 0) ? { emergency_saved: em, emergency_at: new Date().toISOString().slice(0, 10) } : {}) });
       toast('Tersimpan'); render();
     },
     async plan() { toast('Otak berat menyusun alokasi…'); await post('/api/v1/app/money/plan'); render(); },

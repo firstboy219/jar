@@ -1,6 +1,6 @@
 // Bisnis hari ini (mockup 33): per business — sales, orders, packed, payouts so far today against the usual for this hour of this weekday,
 // sales per marketplace, what needs a look (alerts), and this week's strategy in one line; read from his own APIs every few minutes.
-import { get, header, html, icon, loading, on, post, render, toast } from '../core.js';
+import { $, get, header, html, icon, loading, on, post, put, render, toast } from '../core.js';
 import { rupiah } from '../lib.js';
 
 let pick = '';
@@ -15,8 +15,8 @@ function kpi(k) {
 }
 
 function business(b) {
-  const main = b.kpis.filter((k) => ['penjualan', 'pesanan', 'dikemas', 'pencairan'].includes(k.metric));
-  const other = b.kpis.filter((k) => !['penjualan', 'pesanan', 'dikemas', 'pencairan'].includes(k.metric));
+  const main = b.kpis.filter((k) => MAIN.includes(k.metric));
+  const other = b.kpis.filter((k) => !MAIN.includes(k.metric));
   const chMax = Math.max(1, ...b.channels.map((c) => c.value));
   const errs = b.sources.filter((s) => s.last_error);
   return html`
@@ -34,35 +34,66 @@ function business(b) {
     <span class="small" style="padding:0 4px">Sinkron ${ago(b.synced_at)} · ${b.sources.length} sumber${errs.length ? html` · <span class="t-amber2">${errs.length} bermasalah</span>` : ''} · lewat alur master (skill tanpa AI)</span>`;
 }
 
+const MAIN = ['penjualan', 'pesanan', 'dikemas', 'pencairan'];
+
+// Every business together: the main numbers added up (same unit), each business in one line with what needs a look.
+function all(list) {
+  const sum = MAIN.map((m) => {
+    const ks = list.map((b) => b.kpis.find((k) => k.metric === m)).filter(Boolean);
+    return ks.length ? { metric: m, label: ks[0].label, unit: ks[0].unit, value: ks.reduce((t, k) => t + k.value, 0),
+      yesterday: ks.every((k) => k.yesterday != null) ? ks.reduce((t, k) => t + k.yesterday, 0) : null } : null;
+  }).filter(Boolean);
+  const alerts = list.flatMap((b) => b.alerts.filter((a) => a.tone !== 'green'));
+  return html`
+    ${alerts.map((a) => html`<div class="card ${a.tone === 'red' ? 'red' : 'amber'}"><span class="ttl">${a.title}</span><span class="small">${a.text}</span></div>`)}
+    ${sum.length ? html`<div class="g2">${sum.map(kpi)}</div>` : ''}
+    <div class="list">${list.map((b) => { const v = (m) => b.kpis.find((k) => k.metric === m); return html`<button class="li click" data-act="pick" data-b="${b.name}" style="width:100%;text-align:left;background:none;border-left:0;border-right:0;border-top:0">
+      <div class="grow"><div class="row sb"><span class="ttl">${b.name}</span><span class="mono">${v('penjualan') ? val(v('penjualan').value, 'rp') : '—'}</span></div>
+      <div class="small">${v('pesanan') ? `${Math.round(v('pesanan').value)} pesanan` : ''}${b.packed ? ` · ${b.packed.pct}% dikemas` : ''}${v('pencairan') ? ` · cair ${val(v('pencairan').value, 'rp')}` : ''}${b.alerts.filter((a) => a.tone !== 'green').length ? html` · <span class="t-amber2">${b.alerts.filter((a) => a.tone !== 'green').length} perlu dilihat</span>` : ''}</div></div>${icon('right', 16)}</button>`; })}</div>
+    <span class="small" style="padding:0 4px">Gabungan ${list.length} bisnis · ketuk salah satu untuk detailnya</span>`;
+}
+
 export default {
   tab: 'beranda',
   feature: 'bisnis',
   async render(root, route) {
     pick = route.query.b || pick;
     root.innerHTML = String(html`${header('Bisnis hari ini')}<div class="scr">${loading()}</div>`);
-    const d = await get('/api/v1/app/bisnis');
+    const [d, bs] = await Promise.all([get('/api/v1/app/bisnis'), get('/api/v1/app/settings/bisnis')]);
     if (!d.businesses.length) {
       root.innerHTML = String(html`${header('Bisnis hari ini')}<div class="scr"><div class="card cyan"><span class="k cyan">Sambungkan bisnismu</span>
         <p class="sub">Masukkan API Autotoko dan Renature (alamat, kunci API, dan di mana angka penjualan/pesanan/dikemas/pencairan berada). JARVIS membacanya tiap beberapa menit — tanpa AI — dan memberi tahu bila ada yang perlu kamu lihat.</p>
         <a class="btn primary" href="#/sumber">Tambah sumber API</a></div></div>`);
       return;
     }
-    if (!d.businesses.some((b) => b.name === pick)) pick = d.businesses[0].name;
+    const many = d.businesses.length > 1;
+    if (!d.businesses.some((b) => b.name === pick) && !(many && pick === '*')) pick = many ? '*' : d.businesses[0].name;
     const b = d.businesses.find((x) => x.name === pick);
     root.innerHTML = String(html`${header('Bisnis hari ini', { sub: new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' }),
       right: html`<button class="ib box" data-act="sync" aria-label="Sinkron sekarang">${icon('repeat', 18)}</button>` })}
       <div class="scr">
-        ${d.businesses.length > 1 ? html`<div class="chips">${d.businesses.map((x) => html`<button class="chip ${x.name === pick ? 'on' : ''}" data-act="pick" data-b="${x.name}">${x.name}${x.alerts.length ? html` <span class="dot amber"></span>` : ''}</button>`)}</div>` : ''}
-        ${business(b)}
-        <div class="g3"><a class="btn" href="#/tren?b=${encodeURIComponent(b.name)}">${icon('invest', 16)} Tren</a><a class="btn" href="#/peluang">${icon('bulb', 16)} Peluang</a><a class="btn" href="#/sumber">${icon('code', 16)} Sumber</a></div>
+        ${many ? html`<div class="chips"><button class="chip ${pick === '*' ? 'on' : ''}" data-act="pick" data-b="*">Semua</button>${d.businesses.map((x) => html`<button class="chip ${x.name === pick ? 'on' : ''}" data-act="pick" data-b="${x.name}">${x.name}${x.alerts.length ? html` <span class="dot amber"></span>` : ''}</button>`)}</div>` : ''}
+        ${b ? business(b) : all(d.businesses)}
+        <details class="card"><summary class="small">Pengaturan peringatan</summary><form id="bsf" style="display:flex;flex-direction:column;gap:8px">
+          <label class="row" style="gap:8px;font-size:14px"><input type="checkbox" name="alerts" ${bs.alerts ? 'checked' : ''}> Beri tahu bila ada yang perlu dilihat</label>
+          <div class="g2"><label class="field">Batas kirim kurir<input name="cutoff" type="time" value="${bs.cutoff}"></label><label class="field">Ingatkan sebelum (menit)<input name="cutoff_warn_min" type="number" min="10" max="240" value="${bs.cutoff_warn_min}"></label></div>
+          <div class="g2"><label class="field">Cek belum dikemas mulai<input name="unpacked_after" type="time" value="${bs.unpacked_after}"></label><label class="field">Tertinggal bila di bawah (%)<input name="behind_pct" type="number" min="10" max="95" value="${bs.behind_pct}"></label></div>
+          <button class="btn" data-act="saveAlerts">Simpan</button></form></details>
+        <div class="g3"><a class="btn" href="#/tren${b ? `?b=${encodeURIComponent(b.name)}` : ''}">${icon('invest', 16)} Tren</a><a class="btn" href="#/peluang">${icon('bulb', 16)} Peluang</a><a class="btn" href="#/sumber">${icon('code', 16)} Sumber</a></div>
       </div>`);
-    return on('bisnis', (e) => { if (!e.business || e.business === pick) render(); });
+    return on('bisnis', (e) => { if (!e.business || pick === '*' || e.business === pick) render(); });
   },
   actions: {
     pick(btn) { pick = btn.dataset.b; render(); },
+    async saveAlerts(b, e) {
+      e?.preventDefault();
+      const f = $('#bsf'); const v = Object.fromEntries(new FormData(f).entries());
+      await put('/api/v1/app/settings/bisnis', { alerts: !!v.alerts, cutoff: v.cutoff || '', cutoff_warn_min: Number(v.cutoff_warn_min) || 60, unpacked_after: v.unpacked_after || '14:00', behind_pct: Number(v.behind_pct) || 60 });
+      toast('Tersimpan');
+    },
     async sync() {
       const { sources } = await get('/api/v1/app/bisnis/sources');
-      const mine = sources.filter((s) => s.business === pick);
+      const mine = sources.filter((s) => pick === '*' || s.business === pick);
       toast(`Membaca ${mine.length} sumber…`);
       for (const s of mine) await post(`/api/v1/app/bisnis/sources/${s.id}/sync`);
       render();

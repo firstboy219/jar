@@ -22,11 +22,12 @@ function graph(d) {
     <text x="158" y="136" text-anchor="middle" fill="var(--mu)" font-size="10">memilih jalur</text>
     ${(st.routing?.runs || liveBy('routing')) ? html`<circle class="pulse" cx="100" cy="123" r="5" fill="var(--cyan)"/>` : ''}
     ${LANES.map(([k, name, sub, tone], i) => html`
-      <path d="M198 123 C 222 123, 222 ${laneY[i] + 22}, 246 ${laneY[i] + 22}" fill="none" stroke="var(--${tone})" stroke-opacity=".55" stroke-width="${thick(st[k]?.runs)}"/>
-      <rect x="246" y="${laneY[i]}" width="90" height="44" rx="10" fill="var(--s1)" stroke="var(--${tone})"/>
-      <text x="291" y="${laneY[i] + 18}" text-anchor="middle" fill="var(--tx)" font-size="11" font-weight="600">${name}</text>
-      <text x="291" y="${laneY[i] + 33}" text-anchor="middle" fill="var(--mu)" font-size="10">${st[k]?.runs || 0}× · ${sub}</text>
-      ${liveBy(k) ? html`<circle class="pulse" cx="232" cy="${laneY[i] + 22}" r="6" fill="var(--${tone})"/><text x="232" y="${laneY[i] + 10}" text-anchor="middle" fill="var(--${tone})" font-size="10">${liveBy(k)}</text>` : ''}`)}
+      <path d="M198 123 C 220 123, 220 ${laneY[i] + 22}, 238 ${laneY[i] + 22}" fill="none" stroke="var(--${tone})" stroke-opacity=".55" stroke-width="${thick(st[k]?.runs)}"/>
+      <rect x="238" y="${laneY[i]}" width="98" height="46" rx="10" fill="var(--s1)" stroke="var(--${tone})"/>
+      <text x="287" y="${laneY[i] + 15}" text-anchor="middle" fill="var(--tx)" font-size="11" font-weight="600">${name}</text>
+      <text x="287" y="${laneY[i] + 28}" text-anchor="middle" fill="var(--mu)" font-size="9.5">${st[k]?.runs || 0}× · ${st[k]?.runs ? `${st[k].ok_pct}% berhasil` : sub}</text>
+      ${st[k]?.runs ? html`<text x="287" y="${laneY[i] + 40}" text-anchor="middle" fill="var(--mu)" font-size="9">${secs(st[k].avg_s)}${st[k].cost ? ` · ${usd(st[k].cost)}` : ''}</text>` : ''}
+      ${liveBy(k) ? html`<circle class="pulse" cx="226" cy="${laneY[i] + 22}" r="6" fill="var(--${tone})"/><text x="226" y="${laneY[i] + 10}" text-anchor="middle" fill="var(--${tone})" font-size="10">${liveBy(k)}</text>` : ''}`)}
   </svg>`;
 }
 
@@ -37,8 +38,8 @@ function detail(r) {
         <div class="row" style="gap:6px;flex-wrap:wrap">${laneChip(r.lane, r.why)}<span class="tag">${r.trigger}</span>${r.model ? html`<span class="tag">${r.model}</span>` : ''}
           <span class="tag">${secs(r.seconds)}</span>${r.cost_usd ? html`<span class="tag">${usd(r.cost_usd)}</span>` : ''}${r.brain_version ? html`<a class="tag violet" href="#/bengkel/${r.feature}:${r.action}">versi otak #${r.brain_version}</a>` : ''}</div>
         ${r.why ? html`<span class="small">Hermes: ${r.why}</span>` : ''}</div>
-      <div class="steps">${(r.steps || []).map((s, i, a) => html`<div class="step"><div class="rail"><span class="n done">${icon('check', 12)}</span>${i < a.length - 1 ? html`<span class="ln"></span>` : ''}</div>
-        <div class="body"><div class="row sb"><span style="font-size:14px;font-weight:600">${s.stage}</span><span class="mono small">${new Date(s.at).toLocaleTimeString('id-ID')}</span></div><span class="small">${s.text}</span></div></div>`)}</div>
+      <div class="steps">${(r.steps || []).map((s, i, a) => { const took = i < a.length - 1 ? (new Date(a[i + 1].at) - new Date(s.at)) / 1000 : null; return html`<div class="step"><div class="rail"><span class="n done">${icon('check', 12)}</span>${i < a.length - 1 ? html`<span class="ln"></span>` : ''}</div>
+        <div class="body"><div class="row sb"><span style="font-size:14px;font-weight:600">${s.stage}</span><span class="mono small">${new Date(s.at).toLocaleTimeString('id-ID')}${took != null ? html` · <span style="color:var(--${took > 30 ? 'amber' : 'mu'}${took > 30 ? '-t' : ''})">${secs(took)}</span>` : ''}</span></div><span class="small">${s.text}</span></div></div>`; })}</div>
       ${r.error ? html`<div class="card red"><span class="k">Gagal</span><span class="small">${r.error}</span></div>` : ''}
       ${r.result_preview ? html`<details class="card"><summary class="small">Hasil</summary><pre class="mono" style="font-size:11px;white-space:pre-wrap">${r.result_preview}</pre></details>` : ''}
       ${r.task_id ? html`<a class="btn" href="#/misi/${r.task_id}">Buka misi #${r.task_id}</a>` : ''}
@@ -46,7 +47,9 @@ function detail(r) {
     </div>`;
 }
 
-let timer = null;
+let timer = null, hours = 24;
+const RANGES = [[1, '1 jam'], [24, '24 jam'], [48, '48 jam'], [168, '7 hari']];
+const WEAK = { gagal: 'red', lambat: 'amber', mahal: 'amber', 'bisa-skill': 'green' };
 
 export default {
   tab: 'beranda',
@@ -55,11 +58,15 @@ export default {
     const id = route.params[0];
     root.innerHTML = String(html`${header('Alur langsung')}<div class="scr">${loading()}</div>`);
     if (id) { root.innerHTML = String(detail(await get(`/api/v1/app/flow/${id}`))); return on('flow', (e) => { if (String(e.run) === id) { clearTimeout(timer); timer = setTimeout(render, 600); } }); }
-    const d = await get('/api/v1/app/flow');
+    if (route.query.h) hours = Number(route.query.h) || 24;
+    const d = await get(`/api/v1/app/flow?hours=${hours}`);
     const day = d.day;
     root.innerHTML = String(html`${header('Alur langsung', { sub: `${day.runs} pekerjaan hari ini · ${day.no_ai_pct ?? 0}% tanpa AI · ${day.ok_pct ?? '–'}% berhasil` })}
       <div class="scr">
+        <div class="chips">${RANGES.map(([h, l]) => html`<button class="chip ${h === hours ? 'on' : ''}" data-act="range" data-h="${h}">${l}</button>`)}</div>
         <div class="card">${graph(d)}</div>
+        ${d.weak.length ? html`<div class="card amber"><span class="k amber">Titik lemah</span>${d.weak.map((w) => html`<a class="row" href="#/bengkel/${w.job}" style="gap:8px;text-decoration:none;color:inherit;padding:3px 0">
+          <span class="tag ${WEAK[w.kind] || ''}">${w.kind}</span><span class="small grow">${w.text}</span>${icon('right', 14)}</a>`)}</div>` : ''}
         <div class="g4"><div class="kpi"><b>${d.live.length}</b><span>berjalan</span></div><div class="kpi"><b>${d.week.ok_pct ?? '–'}%</b><span>berhasil 7 hr</span></div>
           <div class="kpi"><b>${d.week.no_ai_pct ?? 0}%</b><span>tanpa AI</span></div><div class="kpi"><b>${usd(d.week.cost) || '$0'}</b><span>biaya 7 hr</span></div></div>
         ${d.live.length ? html`<span class="sec">Sedang berjalan</span><div class="list">${d.live.map((r) => html`<a class="li click" href="#/alur/${r.id}"><span class="dot ${r.lane === 'hermes' ? 'amber' : r.lane === 'berat' ? 'violet' : 'cyan'} live"></span>
@@ -69,12 +76,15 @@ export default {
           <div class="row sb"><span style="font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.feature} · ${r.action}</span><span class="small">${ago(r.started_at)}</span></div>
           <div class="row" style="gap:6px">${laneChip(r.lane, r.why)}${r.status === 'failed' ? html`<span class="tag red">gagal</span>` : r.status !== 'done' ? html`<span class="tag amber">${r.status}</span>` : ''}
             <span class="small">${secs(r.seconds)}${r.cost ? ` · ${usd(r.cost)}` : ''}</span></div></div></a>`)}</div>
-        <span class="sec">Efektivitas per pekerjaan · 7 hari</span>
+        <span class="sec">Efektivitas per pekerjaan · ${hours >= 168 ? '7 hari' : hours > 24 ? `${hours} jam` : '24 jam'}</span>
         <div class="tblbox"><table class="tbl"><thead><tr><th scope="col">Pekerjaan</th><th scope="col">Jalan</th><th scope="col">Berhasil</th><th scope="col">Tanpa AI</th><th scope="col">Waktu</th></tr></thead>
           <tbody>${d.jobs.map((j) => html`<tr data-go="#/bengkel/${j.feature}:${j.action}" style="cursor:pointer"><td>${j.feature}<br><span class="small">${j.action}</span></td><td class="mono">${j.runs}</td>
             <td class="mono" style="color:var(--${(j.ok_pct ?? 100) >= 90 ? 'green' : (j.ok_pct ?? 100) >= 70 ? 'amber' : 'red'}-t)">${j.ok_pct ?? '–'}%</td><td class="mono">${j.no_ai_pct}%</td><td class="mono">${secs(j.avg_s)}</td></tr>`)}</tbody></table></div>
         <a class="btn block" href="#/bengkel">${icon('code', 16)} Bengkel otak</a>
       </div>`);
     return on('flow', () => { clearTimeout(timer); timer = setTimeout(render, 1500); });
+  },
+  actions: {
+    range(b) { hours = Number(b.dataset.h); render(); },
   },
 };

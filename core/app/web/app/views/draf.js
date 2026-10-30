@@ -7,12 +7,25 @@ import { laneChip } from '../ui.js';
 const STYLES = [['kamu', 'Gayaku'], ['formal', 'Formal'], ['singkat', 'Singkat'], ['english', 'English']];
 let cur = { id: null, item: null, style: 'kamu', lane: null };
 
+// #/draf with no message: every reply drafted (waiting for Kirim first), and the ones sent this week.
+async function list(root) {
+  root.innerHTML = String(html`${header('Draf email')}<div class="scr">${loading()}</div>`);
+  const { drafts } = await get('/api/v1/app/inbox/drafts');
+  const waiting = drafts.filter((d) => !d.sent), sent = drafts.filter((d) => d.sent);
+  const row = (d) => html`<a class="li click" href="#/draf/${d.id}"><span class="ico ${d.sent ? 'green' : 'cyan'}">${icon(d.sent ? 'check' : 'mail', 16)}</span>
+    <div class="grow" style="min-width:0"><div class="ttl">${d.subject || '(tanpa subjek)'}</div><div class="small">ke ${d.sender}${d.style ? ` · gaya ${d.style}` : ''}</div>
+    <div class="small" style="overflow:hidden;white-space:nowrap;text-overflow:ellipsis">${d.preview || ''}</div></div>${icon('right', 16)}</a>`;
+  root.innerHTML = String(html`${header('Draf email', { sub: `${waiting.length} menunggu dikirim` })}<div class="scr">
+    ${waiting.length ? html`<div class="list">${waiting.map(row)}</div>` : html`<div class="card"><p class="sub">Tidak ada draf yang menunggu. Buka email di Perlu perhatian lalu minta JARVIS menulis balasan.</p><a class="btn" href="#/inbox">Perlu perhatian</a></div>`}
+    ${sent.length ? html`<span class="sec">Terkirim minggu ini</span><div class="list">${sent.map(row)}</div>` : ''}</div>`);
+}
+
 export default {
   tab: 'beranda',
-  feature: 'inbox',
+  feature: 'draf',
   async render(root, route) {
     const id = route.params[0];
-    if (!id) return go('#/inbox');
+    if (!id) return list(root);
     root.innerHTML = String(html`${header('Draf balasan')}<div class="scr">${loading()}</div>`);
     const it = await get(`/api/v1/app/inbox/item/${id}`);
     cur = { id, item: it, style: it.draft?.style || cur.style || 'kamu', lane: it.draft?.lane || null, files: cur.id === id ? (cur.files || []) : (it.draft?.attachments || []).map((a) => ({ id: a, name: 'lampiran' })) };

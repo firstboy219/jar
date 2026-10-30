@@ -58,7 +58,7 @@ export default {
           ${d.needs > 1 ? html`<a class="card amber row" href="#/butuh"><span class="k amber grow">Butuh kamu · ${d.needs}</span>${icon('right', 16)}</a>` : ''}
           <div class="sec"><span>Pintasan</span><span class="small" style="text-transform:none;letter-spacing:0">urut menurut jam &amp; kebiasaan</span></div>
           <div class="tiles">
-            ${d.shortcuts.map((s) => html`<a class="tile" href="${s.route}"><span class="sq">${icon(s.icon, 20)}</span><span>${s.label}</span></a>`)}
+            ${d.shortcuts.map((s) => html`<a class="tile" href="${s.route}" style="position:relative"><span class="sq">${icon(s.icon, 20)}</span><span>${s.label}</span>${s.pinned ? html`<span style="position:absolute;top:0;right:8px;color:var(--amber);font-size:10px" aria-label="disematkan">★</span>` : ''}</a>`)}
             <a class="tile" href="#/fitur"><span class="sq primary">${icon('grid', 20)}</span><b style="color:var(--tx)">Semua fitur</b></a>
           </div>
           ${d.all.filter((c) => ['missions', 'calendar', 'scheduled'].includes(c.kind) && c.list?.length && c.id !== d.hero?.id && !d.cards.some((x) => x.id === c.id)).map((c) => card(c, true))}

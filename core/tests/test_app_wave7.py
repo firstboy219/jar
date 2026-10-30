@@ -151,7 +151,16 @@ async def test_the_live_flow_view_and_run_detail(pool, monkeypatch):
         b = (await c.get("/api/v1/app/brain", headers=h)).json()
         assert any(j["job"] == "brief:compose" for j in b["jobs"]) and b["global"]["global"]["learn_min_runs"] == 5
         assert (await c.get("/api/v1/app/brain/brief:compose", headers=h)).json()["samples"] == 1
-        assert (await c.post("/api/v1/app/brain/brief:compose/rollback", headers=h)).status_code == 409
+        from app import appauth
+
+        async def check(pw):
+            return 200 if pw == "pw-admin" else 401
+        monkeypatch.setattr(appauth, "_check", check)
+        assert (await c.post("/api/v1/app/brain/brief:compose/rollback", headers=h)).status_code == 422                 # his decision: the password
+        assert (await c.post("/api/v1/app/brain/brief:compose/rollback", json={"password": "pw-admin"}, headers=h)).status_code == 409
+        assert (await c.post("/api/v1/app/brain/version/1/deploy", json={"mode": "all"}, headers=h)).status_code == 422
+        m = (await c.get("/api/v1/app/brain/models", headers=h)).json()
+        assert set(m["lanes"]) == {"ringan", "berat", "penglihatan"} and isinstance(m["usage"], list)
         assert (await c.post("/api/v1/app/brain/global/manual", json={"config": {"learn_min_runs": 0}}, headers=h)).status_code == 422
         assert (await c.get("/api/v1/app/flow")).status_code in (401, 403)
     await pool.execute("UPDATE flow_runs SET started_at = now() - interval '40 days' WHERE lane = 'skill'")
