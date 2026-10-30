@@ -41,8 +41,10 @@ async def get(question_id: int) -> dict | None:
 
 
 async def open_questions() -> list[dict]:
-    await db.pool().execute(
-        "UPDATE owner_questions SET status = 'expired' WHERE status = 'open' AND created_at < now() - interval '1 day'")
+    await db.pool().execute(   # nobody waits for these any more: a day old, its mission over, or no mission and two hours old
+        """UPDATE owner_questions q SET status = 'expired' WHERE status = 'open' AND (created_at < now() - interval '1 day'
+             OR (task_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tasks t WHERE t.id = q.task_id AND t.status IN ('queued', 'running')))
+             OR (task_id IS NULL AND created_at < now() - interval '2 hours'))""")
     rows = await db.pool().fetch(
         """SELECT q.id, q.question, q.task_id, t.title FROM owner_questions q LEFT JOIN tasks t ON t.id = q.task_id
            WHERE q.status = 'open' ORDER BY q.id""")

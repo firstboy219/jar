@@ -7,7 +7,7 @@ from collections import Counter
 
 from . import approvals, db, phone_agent, project_flow, questions
 
-KIND_ICON = {"approval": "shield", "phone": "car", "choice": "list", "question": "chat"}
+KIND_ICON = {"approval": "shield", "phone": "car", "choice": "list", "question": "chat", "lagu": "music"}
 APPROVAL_LABEL = {"mail_send": "Kirim email", "calendar_create": "Buat acara kalender", "n8n_activate_workflow": "Aktifkan workflow",
                   "setting_change": "Ubah pengaturan", "task_budget": "Tambah anggaran tugas", "skill_publish": "Terbitkan skill"}
 
@@ -112,12 +112,22 @@ def web_item(w: dict) -> dict:
             "button": d.get("button") or "", "missing": d.get("missing") or [], "url": d.get("url") or "", "at": w.get("created_at")}
 
 
+def music_item(p: dict) -> dict:
+    """Songs he asked for, to tick (owner 2026-10-31): the ticked ones become MP3s."""
+    return {"kind": "lagu", "id": p["id"], "title": f"Pilih lagu: {p['query']}"[:140], "sub": f"{len(p['options'])} hasil YouTube · centang yang mau diputar",
+            "icon": "music", "cta": "Proses", "password": False, "options": p["options"]}
+
+
 def question_item(q: dict) -> dict:
     text = q["question"]
     title = text if len(text) <= 160 else text[:157].rsplit(" ", 1)[0] + "…"
     sub = f"Ditanya oleh misi: {q['title']}" if q.get("title") else (f"Ditanya oleh misi #{q['task_id']}" if q.get("task_id") else "Ditanya oleh pekerja JARVIS")
     return {"kind": "question", "id": q["id"], "title": title, "text": text, "sub": sub, "icon": "chat", "cta": "Jawab", "password": False,
-            "task_id": q.get("task_id")}
+            "task_id": q.get("task_id"), "takeover": bool(TAKEOVER.search(text))}
+
+
+# a worker asking him to do something on its browser (a robot check, a sign-in): he acts on the page, he does not type an answer
+TAKEOVER = re.compile(r"verifikasi|captcha|cloudflare|just a moment|bukan robot|intervensi|ambil alih|login|masuk akun|kode otp", re.I)
 
 
 async def listing() -> list[dict]:
@@ -134,6 +144,9 @@ async def listing() -> list[dict]:
         it["recommended"] = recommend(it["options"], [a if isinstance(a, dict) else {} for a in past])
         out.append(it)
     out += [question_item(q) for q in await questions.open_questions()]
+    from . import musik
+    if pick := await musik.open_pick():
+        out.append(music_item(pick))
     from . import webagent
     out += [web_item(w) for w in await webagent.open_waits()]
     out += [approval_item(a) for a in await approvals.list_("awaiting_approval")]
@@ -164,6 +177,9 @@ async def answer(kind: str, item_id: int, actor: str, approve: bool | None = Non
             return {"ok": True, "result": await project_flow.answer(item_id, option, actor)}
         except project_flow.FlowError as e:
             raise NeedError(str(e))
+    if kind == "lagu":   # "Batal" on the list (ticking goes through /music/picks)
+        from . import musik
+        return {"ok": await musik.dismiss(item_id)}
     if kind == "question":
         if not text.strip():
             raise NeedError("jawabannya kosong")

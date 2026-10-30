@@ -71,7 +71,7 @@ export default {
       </div>`);
   },
   actions: {
-    async mood(b) { toast(`Memutar musik ${b.dataset.m}…`); await post('/api/v1/app/music/play', { mood: b.dataset.m }); },
+    async mood(b) { toast(`Mencari lagu ${b.dataset.m}…`); const r = await post('/api/v1/app/music/play', { mood: b.dataset.m }); toast(`${r.count} lagu — centang di Butuh kamu`); },
     async choose(b) {
       await post(`/api/v1/app/commute/trip/${state.trip.id}/choose`, { index: Number(b.dataset.i) });
       toast('Rencana dipakai. JARVIS mengingatkan & memesan di waktunya.');

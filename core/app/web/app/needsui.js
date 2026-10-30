@@ -11,12 +11,17 @@ export function itemCard(it, compact = false) {
   byKey.set(key(it.kind, it.id), it);
   const tone = it.kind === 'phone' ? 'amber' : it.kind === 'choice' ? 'cyan' : it.kind === 'question' ? 'violet' : 'amber';
   if (it.kind === 'web') return webCard(it, compact);
+  if (it.kind === 'lagu') return songsCard(it, compact);
   const actions = it.kind === 'choice'
     ? html`<div style="display:flex;flex-direction:column;gap:8px">${it.options.map((o) => html`<button class="btn ${o.i === it.recommended ? 'primary' : ''}" data-act="needPick" data-id="${it.id}" data-opt="${o.i}" style="justify-content:space-between">
         <span>${o.i === it.recommended ? '★ ' : ''}${o.label || o.title || `Opsi ${o.i + 1}`}</span>${o.waktu ? html`<span class="mono small">${o.waktu}</span>` : ''}</button>`)}
         ${it.recommended != null ? html`<span class="small">★ biasanya kamu pilih ini</span>` : ''}</div>`
     : it.kind === 'question'
-      ? html`<div class="btns"><button class="btn violet" data-act="needAnswer" data-id="${it.id}">Jawab</button>${it.task_id ? html`<a class="btn" href="#/misi/${it.task_id}" style="flex:0 0 120px">Buka misi</a>` : ''}</div>`
+      ? (it.takeover
+        ? html`<div class="btns">${it.task_id ? html`<a class="btn violet" href="#/misi/${it.task_id}">${icon('hand', 14)} Buka misi · Ambil alih</a>` : ''}
+            <button class="btn" data-act="needDone" data-id="${it.id}" style="flex:0 0 ${it.task_id ? '140px' : 'auto'}">Sudah, lanjutkan</button></div>
+          <span class="small">Selesaikan di layar misinya (Ambil alih), lalu ketuk “Sudah, lanjutkan”. Tidak perlu mengetik apa pun.</span>`
+        : html`<div class="btns"><button class="btn violet" data-act="needAnswer" data-id="${it.id}">Jawab</button>${it.task_id ? html`<a class="btn" href="#/misi/${it.task_id}" style="flex:0 0 120px">Buka misi</a>` : ''}</div>`)
       : html`<div class="btns"><button class="btn ${tone}" data-act="needApprove" data-kind="${it.kind}" data-id="${it.id}" ${it.admin_only ? 'disabled' : ''}>${it.admin_only ? 'Hanya di admin web' : it.cta}</button>
           <button class="btn" data-act="needReject" data-kind="${it.kind}" data-id="${it.id}" style="flex:0 0 96px">Tolak</button></div>`;
   const r = it.route || {};
@@ -33,6 +38,21 @@ export function itemCard(it, compact = false) {
 }
 
 // a web task waiting for him (ADR-087 batch I): the page itself on his phone, a pick, an answer, or the filled form to review
+const mmss = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '');
+
+/** Songs to tick (owner 2026-10-31): the ticked ones become MP3s, the first plays as soon as it is ready. */
+function songsCard(it, compact) {
+  return html`<form class="card cyan" data-songs="${it.id}" style="gap:10px">
+    <div class="row top"><span class="ico cyan">${icon('music', 20)}</span><div class="grow"><div class="ttl">${it.title}</div><div class="sub">${it.sub}</div></div></div>
+    <div style="display:flex;flex-direction:column;gap:6px">${it.options.slice(0, compact ? 5 : 10).map((o, i) => html`<label class="row" style="gap:10px;cursor:pointer;padding:4px 0">
+      <input type="checkbox" name="o" value="${i}" ${i === 0 ? 'checked' : ''} style="width:20px;height:20px;flex:0 0 20px">
+      <img src="${o.cover}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:64px;height:36px;object-fit:cover;border-radius:6px;flex:0 0 64px">
+      <span class="grow" style="min-width:0"><span style="display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.title}</span>
+        <span class="small">${o.channel}${o.duration_s ? ` · ${mmss(o.duration_s)}` : ''}</span></span></label>`)}</div>
+    <div class="btns"><button class="btn cyan" data-act="songsGo" data-id="${it.id}">${icon('music', 14)} Jadikan MP3 &amp; putar</button>
+      <button class="btn" data-act="needReject" data-kind="lagu" data-id="${it.id}" style="flex:0 0 96px">Batal</button></div></form>`;
+}
+
 /** One place to choose (a hotel, a restaurant): its picture, price, rating and reviews from the site, where it is and how to get there. */
 function placeCard(it, c, i, compact) {
   return html`<div class="card" style="background:var(--bg2);gap:8px;padding:12px">
@@ -117,6 +137,17 @@ export const needActions = {
     toast('Buka aplikasi JARVIS di HP untuk menyelesaikan langkah ini.', true);
   },
   async webDone(b) { await post(`/api/v1/app/needs/web/${b.dataset.id}`, { approve: true }); toast('JARVIS melanjutkan.'); render(); },
+  async songsGo(b, e) {
+    e?.preventDefault();
+    const f = b.closest('form'), choose = [...f.querySelectorAll('input[name=o]:checked')].map((x) => Number(x.value));
+    if (!choose.length) return toast('Centang minimal satu lagu.', true);
+    b.disabled = true;
+    try {
+      const r = await post(`/api/v1/app/music/picks/${b.dataset.id}`, { choose });
+      toast(r.converter ? `${r.count} lagu sedang dijadikan MP3 — yang pertama langsung diputar.` : `${r.count} lagu: diputar lewat YouTube (converter MP3 belum dinyalakan).`);
+    } catch (err) { toast(err.message || 'Gagal memproses', true); b.disabled = false; return; }
+    render();
+  },
   async webAsk(b, e) {
     e?.preventDefault();
     const f = b.closest('form'), text = f ? new FormData(f).get('text') : '';
@@ -151,6 +182,11 @@ export const needActions = {
   },
   async needReject(b) { await post(`/api/v1/app/needs/${b.dataset.kind}/${b.dataset.id}`, { approve: false }); toast('Ditolak.'); render(); },
   async needPick(b) { await post(`/api/v1/app/needs/choice/${b.dataset.id}`, { option: Number(b.dataset.opt) }); toast('Pilihanmu dicatat.'); render(); },
+  async needDone(b) {
+    await post(`/api/v1/app/needs/question/${b.dataset.id}`, { text: 'Sudah kuselesaikan, lanjutkan.' });
+    toast('Misinya diberi tahu dan melanjutkan.');
+    render();
+  },
   async needAnswer(b) {
     const it = byKey.get(key('question', b.dataset.id));
     const r = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:12px"><span class="k violet">Pertanyaan dari misi</span><p style="white-space:pre-wrap">${it?.text || it?.title || ''}</p>

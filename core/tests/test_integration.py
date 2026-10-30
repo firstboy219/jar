@@ -843,9 +843,7 @@ async def test_clear_requests_are_done_directly_and_failures_start_a_capability_
     monkeypatch.setattr(hermes, "stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no LLM worker")))
     _fake_llm(monkeypatch, [])  # the main agent's model must not be needed at all
 
-    async def no_song(query):
-        return {"error": "tidak ada lagu berlisensi bebas yang cocok"}
-    monkeypatch.setattr(media_tools, "play", no_song)
+    monkeypatch.setattr(media_tools, "youtube_search", lambda q, n: [])   # a request for songs is a list to tick; here nothing is found
     t = await chat.handle("tolong putarkan lagu ada band", "s30", actor="test")
     assert "ada band" in t.reply and "mencari cara sendiri" in t.reply
     gap = await pool.fetchrow("SELECT kind, category, instruction FROM tasks")

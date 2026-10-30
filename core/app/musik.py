@@ -5,6 +5,7 @@ butuh musik bermode apa sport/semangat"). The morning habit offers that mood.
 Playing is a fixed procedure through the master flow (skill: licensed tracks, or the official YouTube player for a named song —
 media_tools); the screen and the phone get it as a stage event, and the app's player plays it."""
 
+import asyncio
 import logging
 from collections import Counter
 from datetime import datetime
@@ -13,7 +14,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import appsettings, db, habits, home, master, media_tools, playlists, stage
+from . import appsettings, db, habits, home, hub, master, media_tools, playlists, stage
 from .appauth import owner
 from .config import settings
 from .location import WIB
@@ -71,6 +72,116 @@ async def play(mood: str = "", query: str = "", trigger: str = "owner") -> dict:
     return {**r["result"], "mood": mood, "lane": r.get("lane")}
 
 
+# ---------- a request for music → a list he ticks → MP3s (owner 2026-10-31) ----------
+
+PICK_RESULTS = 10
+MAX_PICK_S = 15 * 60      # a song, not a compilation
+
+
+def song_options(found: list[dict]) -> list[dict]:
+    """YouTube results worth offering as songs: real watch links, not hour-long compilations, no duplicates; with a cover. Pure."""
+    from . import musiclib
+    out, seen = [], set()
+    for v in found:
+        link = musiclib.youtube_link(str(v.get("url") or ""))
+        if not link or link in seen or (v.get("duration_s") or 0) > MAX_PICK_S:
+            continue
+        seen.add(link)
+        vid = link.rsplit("=", 1)[-1]
+        out.append({"url": link, "title": str(v.get("title") or "")[:160], "channel": str(v.get("channel") or "")[:80],
+                    "duration_s": v.get("duration_s"), "cover": f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"})
+    return out
+
+
+async def offer(query: str, who: str = "owner", mood: str = "") -> dict:
+    """Search YouTube for what he asked and put the results before him to tick (a skill: no AI)."""
+    q = query.strip()
+    if not q:
+        raise MusicError("mau lagu apa?")
+
+    async def run():
+        found = await asyncio.wait_for(asyncio.to_thread(media_tools.youtube_search, q, PICK_RESULTS + 6), 30)
+        opts = song_options(found)[:PICK_RESULTS]
+        if not opts:
+            raise RuntimeError("lagunya tidak ketemu di YouTube")
+        await db.pool().execute("UPDATE music_picks SET status = 'expired', updated_at = now() WHERE status = 'open'")   # one list at a time
+        pid = await db.pool().fetchval("INSERT INTO music_picks (query, options, created_by) VALUES ($1, $2, $3) RETURNING id", q, opts, who)
+        await hub.broadcast({"type": "notify", "title": "Pilih lagunya", "text": f"{len(opts)} lagu untuk \"{q}\" — centang yang mau diputar.",
+                             "kind": "info", "route": f"#/musik?pilih={pid}"})
+        await hub.broadcast({"type": "needs"})
+        await _log("music", mood, q, f"daftar {len(opts)} lagu")
+        return {"pick": pid, "count": len(opts), "options": opts}
+    r = await master.run(master.Job("musik", "pilihan", f"daftar lagu: {q}", trigger="owner", skill=run))
+    if r["status"] != "done":
+        raise MusicError(r.get("error") or "daftar lagu tidak bisa dibuat")
+    return r["result"]
+
+
+async def open_pick() -> dict | None:
+    await db.pool().execute("UPDATE music_picks SET status = 'expired', updated_at = now() WHERE status = 'open' AND created_at < now() - interval '6 hours'")
+    r = await db.pool().fetchrow("SELECT * FROM music_picks WHERE status = 'open' ORDER BY id DESC LIMIT 1")
+    return dict(r) if r else None
+
+
+async def choose(pick_id: int, idxs: list[int], who: str = "owner") -> dict:
+    """The ticked songs: made MP3 one by one in the background (the first played as soon as it is ready), all kept in his playlist."""
+    row = await db.pool().fetchrow("SELECT * FROM music_picks WHERE id = $1 AND status = 'open'", pick_id)
+    if not row:
+        raise MusicError("daftar lagu ini sudah tidak berlaku")
+    opts = row["options"]
+    chosen = [opts[i] for i in dict.fromkeys(idxs) if isinstance(i, int) and 0 <= i < len(opts)]
+    if not chosen:
+        raise MusicError("centang minimal satu lagu")
+    await db.pool().execute("UPDATE music_picks SET status = 'working', chosen = $2, updated_at = now() WHERE id = $1", pick_id, chosen)
+    await hub.broadcast({"type": "needs"})
+    _bg.add(t := asyncio.create_task(_process(pick_id, chosen, who)))
+    t.add_done_callback(_bg.discard)
+    return {"ok": True, "count": len(chosen), "converter": bool(settings.mp3_converter_url)}
+
+
+_bg: set = set()
+
+
+async def _process(pick_id: int, chosen: list[dict], who: str) -> None:
+    from . import musiclib
+
+    async def run():
+        results, played = [], False
+        for i, song in enumerate(chosen):
+            try:
+                if settings.mp3_converter_url:
+                    m = await musiclib.convert_link(song["url"], song["title"], song["channel"])
+                    if not played:
+                        await media_tools._show_song(m, "converter")
+                        played = True
+                    results.append({"title": song["title"], "ok": True, "media": m["url"]})
+                else:
+                    if not played:   # no converter yet: the official YouTube player plays it (its terms: visible, not extracted)
+                        await media_tools._show("video", {"url": song["url"], "title": song["title"], "channel": song["channel"]},
+                                                f"Memutar {song['title']}"[:200], "jarvis")
+                        played = True
+                    results.append({"title": song["title"], "ok": True, "youtube": True})
+                await playlists.add([{"title": song["title"], "artist": song["channel"]}], None, "pilihan", who)
+            except Exception as e:
+                results.append({"title": song["title"], "ok": False, "error": str(e)[:160]})
+            await db.pool().execute("UPDATE music_picks SET results = $2, updated_at = now() WHERE id = $1", pick_id, results)
+            await hub.broadcast({"type": "notify", "title": f"Lagu {i + 1}/{len(chosen)}", "kind": "info", "route": "#/musik",
+                                 "text": (f"✓ {song['title']}" if results[-1]["ok"] else f"✗ {song['title']}: {results[-1]['error']}")[:160]})
+        ok = sum(1 for r in results if r["ok"])
+        await db.pool().execute("UPDATE music_picks SET status = 'done', updated_at = now() WHERE id = $1", pick_id)
+        await hub.broadcast({"type": "notify", "title": "Lagu pilihanmu siap", "kind": "info", "route": "#/musik",
+                             "text": f"{ok} dari {len(chosen)} lagu {'jadi MP3' if settings.mp3_converter_url else 'diputar lewat YouTube'} dan masuk playlist."})
+        return {"ok": ok, "total": len(chosen)}
+    r = await master.run(master.Job("musik", "konversi-pilihan", f"jadikan MP3 {len(chosen)} lagu pilihan", trigger="owner", skill=run))
+    if r["status"] != "done":
+        await db.pool().execute("UPDATE music_picks SET status = 'done', updated_at = now() WHERE id = $1", pick_id)
+        await hub.broadcast({"type": "notify", "title": "Lagu pilihan gagal diproses", "kind": "warn", "route": "#/musik", "text": str(r.get("error"))[:160]})
+
+
+async def dismiss(pick_id: int) -> bool:
+    return (await db.pool().execute("UPDATE music_picks SET status = 'dismissed', updated_at = now() WHERE id = $1 AND status = 'open'", pick_id)).endswith("1")
+
+
 async def state() -> dict:
     s = await appsettings.get("music")
     now = datetime.now(WIB)
@@ -78,7 +189,7 @@ async def state() -> dict:
     mood, why = usual_mood(plays, home.slot_of(now), now.weekday(), list(s["moods"]))
     recent = [dict(r) for r in await db.pool().fetch("SELECT mood, query, title, at FROM media_log WHERE kind = 'music' ORDER BY id DESC LIMIT 10")]
     return {"now": stage.desk_player(), "moods": s["moods"], "usual": {"mood": mood, "why": why, "slot": home.slot_of(now)},
-            "recent": recent, "playlists": await playlists.all_(), "converter": bool(settings.mp3_converter_url)}
+            "recent": recent, "playlists": await playlists.all_(), "converter": bool(settings.mp3_converter_url), "pick": await open_pick()}
 
 
 @habits.action("music.mood", "Putar musik sesuai mood yang biasa")
@@ -162,8 +273,24 @@ async def api_state(device: dict = Depends(owner)):
 
 @router.post(API + "/play")
 async def api_play(body: PlayIn, device: dict = Depends(owner)):
+    """What he asks for becomes a list to tick (owner 2026-10-31); the habits still play by themselves (play())."""
     try:
-        return await play(body.mood, body.query, "owner")
+        s = await appsettings.get("music")
+        if body.mood and body.mood not in s["moods"]:
+            raise MusicError(f"mood tidak dikenal: {body.mood}")
+        return await offer(s["moods"][body.mood] if body.mood else body.query, "owner", body.mood)
+    except MusicError as e:
+        raise HTTPException(409, str(e))
+
+
+class ChooseIn(BaseModel):
+    choose: list[int] = Field(min_length=1, max_length=10)
+
+
+@router.post(API + "/picks/{pick_id}")
+async def api_choose(pick_id: int, body: ChooseIn, device: dict = Depends(owner)):
+    try:
+        return await choose(pick_id, body.choose, "owner")
     except MusicError as e:
         raise HTTPException(409, str(e))
 

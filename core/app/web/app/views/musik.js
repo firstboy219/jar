@@ -2,6 +2,7 @@
 // — whatever starts plays in the app's player bar; the morning habit offers his usual mood.
 import { $, get, header, html, icon, loading, on, post, put, render, toast } from '../core.js';
 import { laneChip } from '../ui.js';
+import { itemCard, needActions } from '../needsui.js';
 
 const MOOD_ICON = { fokus: 'bulb', semangat: 'bolt', olahraga: 'heart', santai: 'coffee', tidur: 'moon' };
 let st = null;
@@ -15,11 +16,12 @@ export default {
     const u = s.usual;
     root.innerHTML = String(html`${header('Musik', { sub: s.now ? `diputar: ${s.now.title}` : '' })}
       <div class="scr">
+        ${s.pick ? itemCard({ kind: 'lagu', id: s.pick.id, title: `Pilih lagu: ${s.pick.query}`, sub: `${s.pick.options.length} hasil YouTube · centang yang mau diputar`, icon: 'music', options: s.pick.options }) : ''}
         <button class="card violet" data-act="mood" data-m="${u.mood}" style="text-align:left;cursor:pointer"><span class="k violet">Untuk jam segini</span>
-          <span class="ttl" style="font-size:20px">${icon(MOOD_ICON[u.mood] || 'music', 20)} ${u.mood}</span><span class="small">${u.why} · ketuk untuk putar</span></button>
+          <span class="ttl" style="font-size:20px">${icon(MOOD_ICON[u.mood] || 'music', 20)} ${u.mood}</span><span class="small">${u.why} · ketuk untuk memilih lagunya</span></button>
         <div class="g3">${Object.keys(s.moods).map((m) => html`<button class="tile" data-act="mood" data-m="${m}" style="padding:14px 8px;display:flex;flex-direction:column;align-items:center;gap:6px;background:var(--s1);border:1px solid var(--bd);border-radius:14px;cursor:pointer">
           ${icon(MOOD_ICON[m] || 'music', 22)}<span style="font-size:13px">${m}</span></button>`)}</div>
-        <form class="cmd" id="mq" style="display:flex"><input name="q" placeholder="Cari lagu, penyanyi, atau suasana…" style="flex:1"><button class="ib sm" data-act="search" aria-label="Putar">${icon('play', 18)}</button></form>
+        <form class="cmd" id="mq" style="display:flex"><input name="q" placeholder="Cari lagu atau penyanyi — kamu pilih dari daftarnya…" style="flex:1"><button class="ib sm" data-act="search" aria-label="Putar">${icon('play', 18)}</button></form>
         <form class="card" id="mp3f" style="gap:8px"><span class="k cyan">YouTube / YouTube Music → MP3</span>
           <div class="row" style="gap:8px"><input name="url" inputmode="url" placeholder="Tempel link lagu (music.youtube.com / youtu.be)" style="flex:1;min-width:0">
             <button class="btn sm" data-act="mp3" ${s.converter ? '' : 'disabled'}>Jadikan MP3</button></div>
@@ -40,8 +42,9 @@ export default {
     return on('stage', (e) => { if (['music', 'audio', 'video'].includes(e.panel)) setTimeout(render, 300); });
   },
   actions: {
-    async mood(b) { toast(`Mencari musik ${b.dataset.m}…`); const r = await post('/api/v1/app/music/play', { mood: b.dataset.m }); toast(`▶ ${r.playing || 'diputar'}`); },
-    async search(b, e) { e?.preventDefault(); const q = new FormData($('#mq')).get('q'); if (!q) return; toast('Mencari…'); const r = await post('/api/v1/app/music/play', { query: q }); toast(`▶ ${r.playing || 'diputar'}`); },
+    ...needActions,   // ticking the songs (and Batal) right here
+    async mood(b) { toast(`Mencari lagu ${b.dataset.m}…`); const r = await post('/api/v1/app/music/play', { mood: b.dataset.m }); toast(`${r.count} lagu — centang yang mau diputar`); render(); },
+    async search(b, e) { e?.preventDefault(); const q = new FormData($('#mq')).get('q'); if (!q) return; toast('Mencari di YouTube…'); const r = await post('/api/v1/app/music/play', { query: q }); toast(`${r.count} lagu — centang yang mau diputar`); render(); },
     async playlist(b) { const r = await post('/api/v1/app/music/playlist', { name: b.dataset.n }); toast(`▶ ${r.song?.title || r.playing || 'diputar'}`); },
     async mp3(b, e) {
       e?.preventDefault();

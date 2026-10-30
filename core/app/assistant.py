@@ -340,7 +340,7 @@ TOOLS = [
             "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "play_music",
-        "description": "Cari lagu/musik berlisensi bebas lalu putar di HP pemilik.",
+        "description": "Cari lagu di YouTube dan kirim daftarnya ke pemilik untuk dicentang; yang dicentang dijadikan MP3 lalu diputar.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "judul, artis, genre, atau suasana"}},
                        "required": ["query"]}}},
     {"type": "function", "function": {
@@ -665,9 +665,14 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                                        "say": "Isi chat ini akan diproses model cloud. Boleh?"})
                 return json.dumps(await drafts.make(screen_text, str(a.get("instruction") or ""), private=private),
                                   ensure_ascii=False)
-            case "play_music":
-                from . import media_tools
-                return json.dumps(await media_tools.play(str(a.get("query") or "")), ensure_ascii=False)
+            case "play_music":   # a list he ticks first (owner 2026-10-31), then the ticked ones become MP3s
+                from . import musik
+                try:
+                    r = await musik.offer(str(a.get("query") or ""), actor)
+                except musik.MusicError as e:
+                    return json.dumps({"error": str(e)}, ensure_ascii=False)
+                return json.dumps({"daftar": r["count"], "lagu": [o["title"] for o in r["options"][:5]],
+                                   "say": "Daftar lagunya sudah kukirim — centang yang mau diputar di aplikasi, lalu kujadikan MP3."}, ensure_ascii=False)
             case "playlist_add":
                 from . import playlists
                 songs = []
@@ -1249,16 +1254,14 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             r = await _meeting("stop", {})
             return r.get("say") or f"Maaf, {r['error']}."
         case "play_music":
-            r = await media_tools.play(a["query"])
-            if r.get("playing") and r.get("source") == "YouTube":
-                return f"Oke, kuputar {r['playing']} di layar, lewat YouTube."
-            if r.get("playing") and r.get("format") == "MP3":
-                return f"Oke, kuputar {r['playing']} dari {r['artist']}, sudah kuunduh sebagai MP3."
-            if r.get("playing"):
-                return f"Oke, kuputar {r['playing']} dari {r['artist']}."
-            gap = await perf.capability_gap("musik", f"putar lagu {a['query']}", str(r.get("error") or ""))
-            return (f"Maaf, {a['query']} belum bisa kuputar: {r.get('error')}."
-                    + (" Aku akan mencari cara sendiri supaya lain kali bisa, nanti kulaporkan." if gap else ""))
+            from . import musik
+            try:
+                r = await musik.offer(a["query"], "owner")
+            except musik.MusicError as e:   # nothing found: JARVIS looks for a way by itself (once a day), as before
+                gap = await perf.capability_gap("musik", f"putar lagu {a['query']}", str(e))
+                return (f"Maaf, {a['query']} belum bisa kuputar: {e}."
+                        + (" Aku akan mencari cara sendiri supaya lain kali bisa, nanti kulaporkan." if gap else ""))
+            return f"Ada {r['count']} lagu untuk \"{a['query']}\" — centang yang mau diputar di aplikasi (Butuh kamu atau menu Musik), lalu kujadikan MP3."
         case "chart":
             from . import charts, playlists
             try:

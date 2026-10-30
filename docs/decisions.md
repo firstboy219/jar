@@ -1541,6 +1541,15 @@ menentukan berat/ringan/non-AI)".
   agent reads a screen the app barely describes from its picture, hands the next steps to the heavy brain when the screen stops changing or
   after 15 steps, and a failure keeps its last steps. Two date checks compared a UTC date with today in WIB (tonight's story, today's
   calendar) and missed between 00:00 and 07:00 WIB.
+- **Songs are picked, then made MP3** (owner 2026-10-31: "setiap minta putarkan lagu, usahakan kasih list ke saya lalu saya diminta pilih
+  mana saja yg saya ceklis, lalu kamu proses untuk convert dari YouTube music ke mp3"): a request for music — the chat, the Musik search,
+  a mood — searches YouTube and puts up to ten songs (no compilations) before him on "Butuh kamu", the Musik page and a notice; the ticked
+  ones are made MP3 one by one in the background through his converter, the first played as soon as it is ready, every one kept in his
+  playlist, with a notice per song; until the converter runs, the first plays in the official YouTube player. The morning habit still
+  plays by itself. A mission's question that asks him to act on a page (a robot check, a sign-in) shows "Buka misi · Ambil alih" and
+  "Sudah, lanjutkan" instead of a text box, and questions nobody waits for any more (mission over; no mission and two hours old) close.
+  The phone agent that goes back and forth between screens it has just seen hands over to the heavy brain and is told to finish with
+  what it has seen.
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

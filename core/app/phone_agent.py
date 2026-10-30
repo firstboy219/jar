@@ -500,6 +500,7 @@ async def _loop(task_id, app, a, goal, progress, emit, obs, *, max_steps: int = 
 SPARSE_LABELS = 6     # fewer readable labels than this in the app: the screen is looked at as a picture too
 STUCK_STEPS = 3       # the screen unchanged this many steps in a row: the heavy brain takes the next steps
 HEAVY_AFTER = 15      # still not done after this many steps: the heavy brain takes over
+LOOP_STEPS = 3        # back and forth between screens it has just seen this often: the heavy brain takes over
 
 
 def sparse(obs: dict) -> bool:
@@ -508,7 +509,7 @@ def sparse(obs: dict) -> bool:
 
 
 async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started, trace, history, system) -> tuple[str, dict]:
-    slips, still, pictures, heavy, blind = 0, 0, {}, False, 0
+    slips, still, pictures, heavy, blind, seen, loops = 0, 0, {}, False, 0, [], 0
     for step in range(1, max_steps + 1):
         if time.monotonic() - started > MAX_MINUTES * 60:
             raise PhoneError(f"lebih dari {MAX_MINUTES} menit — dihentikan supaya HP tidak dikendalikan terlalu lama")
@@ -517,6 +518,8 @@ async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started,
             history.append("(pemilik mengetik PIN/OTP sendiri)")
             continue
         now = screen_text(obs)
+        loops = loops + 1 if now in seen[-4:-1] else 0   # back on a screen it just left (Aset ↔ Beranda ↔ Aset …)
+        seen.append(now)
         picture = ""
         if in_app(obs, app) and sparse(obs):   # the app draws its own screen: read the picture of it (once per screen)
             if now not in pictures:
@@ -534,14 +537,18 @@ async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started,
             if blind >= 3:   # neither the accessibility tree nor the picture says anything: stop instead of tapping blind for 45 steps
                 raise PhoneError(f"layar {a['label']} tidak bisa dibaca JARVIS: aplikasinya tidak menjelaskan isi layarnya ke aksesibilitas dan "
                                  "melindungi tangkapan layarnya (biasa di aplikasi keuangan)")
-        if not heavy and (still >= STUCK_STEPS or step > HEAVY_AFTER):
+        if not heavy and (still >= STUCK_STEPS or loops >= LOOP_STEPS or step > HEAVY_AFTER):
             heavy = True
-            history.append(f"{step - 1}. (otak berat mengambil alih: {'layar tidak berubah' if still >= STUCK_STEPS else 'sudah banyak langkah'})")
+            why = "layar tidak berubah" if still >= STUCK_STEPS else "bolak-balik di halaman yang sama" if loops >= LOOP_STEPS else "sudah banyak langkah"
+            history.append(f"{step - 1}. (otak berat mengambil alih: {why})")
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"TUGAS DARI PEMILIK: {goal}\n\nLANGKAH SEBELUMNYA:\n" + ("\n".join(history[-10:]) or "(belum ada)")
                      + f"\n\nLAYAR SAAT INI (langkah {step}/{max_steps}):\n{now}"
                      + (f"\n\nTEKS PADA GAMBAR LAYAR (aplikasi ini tidak menjelaskan layarnya; ketuk dengan nomor elemen terdekat, atau gulir):\n{picture}" if picture else "")
                      + ("\n\nLayar TIDAK berubah beberapa langkah: jangan ulangi aksi yang sama — coba tab/menu lain, gulir, kembali, atau 'lihat_gambar'." if still >= 2 else "")
+                     + ("\n\nKamu BOLAK-BALIK di halaman yang sudah kamu lihat. Bila yang dicari sudah terlihat (di layar ini atau sebelumnya), panggil "
+                        "'selesai' SEKARANG dengan data yang ada — boleh sebagian, sebut yang tidak terlihat. Bila belum terlihat, jangan kembali ke halaman "
+                        "tadi: gulir ke bawah, ketuk satu item untuk detailnya, atau 'lihat_gambar'." if loops >= 2 else "")
                      + "\n\nPanggil satu alat."}]
         call = None
         for attempt in range(2):
