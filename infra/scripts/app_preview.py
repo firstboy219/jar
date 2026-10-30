@@ -171,6 +171,10 @@ async def seed_money(p):
         {"nama": "Bitcoin", "kode": "BTC", "jenis": "kripto", "jumlah": 0.0072, "nilai": 9870000, "untung_pct": -4.3, "harga": 1370000000},
         {"nama": "Reksa Dana Pasar Uang", "kode": "", "jenis": "reksa_dana", "jumlah": 0, "nilai": 2500000, "untung_pct": 1.9, "harga": 0}]}') RETURNING id""")
     await p.execute("""INSERT INTO settings_kv (key, value) VALUES ('app:invest', '{"targets": {"emas": 40, "saham_as": 30, "kripto": 15, "reksa_dana": 15}}')""")
+    await p.execute("""INSERT INTO invest_proposals (snapshot_id, data, status, chosen, decided_by, decided_at, result, created_at) VALUES ($1, $2, 'done', 'A', 'device:HP', now() - interval '7 days', $3, now() - interval '7 days')""",
+                    sid, {"opsi": [{"id": "A", "judul": "Tambah emas & reksa dana", "aksi": [{"jenis": "beli", "aset": "Emas", "nominal": 700000}, {"jenis": "beli", "aset": "Reksa Dana Pasar Uang", "nominal": 300000}]}],
+                          "budget": {"pot": "Investasi", "amount": 1500000, "spent": 0, "left": 1500000}},
+                    {"berhasil": [{"jenis": "beli", "aset": "Emas", "nominal": 700000, "harga": 1655000}, {"jenis": "beli", "aset": "Reksa Dana Pasar Uang", "nominal": 300000}], "batal": []})
     await p.execute("""INSERT INTO invest_proposals (snapshot_id, data) VALUES ($1, '{"ringkasan": "Emas sudah 50% portofolio (target 40%) setelah naik 4% sebulan; Bitcoin turun 4% dan masih di bawah target 15%. Rupiah melemah 0,8%.",
         "lane": "berat", "kondisi": ["Emas di atas target alokasi", "Bitcoin terkoreksi 4% sepekan", "S&P 500 naik 1,2% sebulan"],
         "opsi": [{"id": "A", "judul": "Seimbangkan: tambah reksa dana & Bitcoin", "aksi": [{"jenis": "beli", "aset": "Reksa Dana Pasar Uang", "nominal": 1000000}, {"jenis": "beli", "aset": "Bitcoin", "nominal": 500000}], "alasan": "Mendekatkan ke target tanpa menjual emas yang sedang naik.", "risiko": "Bitcoin bisa turun lagi", "disarankan": true},

@@ -220,6 +220,11 @@ async def create_event(title: str, start: datetime, end: datetime, location: str
                                                "location": {"displayName": location}, "body": {"contentType": "Text", "content": body}})
 
 
+async def update_event_location(event_id: str, location: str) -> dict:
+    """A meeting moved to another room: only its location changes (the attendees get Outlook's own update)."""
+    return await graph("PATCH", f"/me/events/{event_id}", {"location": {"displayName": location[:200]}})
+
+
 async def _exec_send(detail: dict) -> dict:
     """The approval executor: the owner pressed Kirim on a draft in the app."""
     await send_draft(detail["draft_id"])

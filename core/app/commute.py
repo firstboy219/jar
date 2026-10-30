@@ -221,9 +221,36 @@ async def order_ride(trip_id: int, car: bool = False) -> dict:
         goal = (f"Pesan GoCar dari lokasi sekarang ke kantor" if car else f"Pesan GoRide dari lokasi sekarang ke Stasiun {p['from']['name']}")
     else:
         goal = (f"Pesan GoCar dari lokasi sekarang ke rumah" if car else f"Pesan GoRide dari Stasiun {p['to']['name']} ke rumah")
-    r = await master.run(master.Job("perjalanan", "pesan-ojek", goal, trigger="habit", phone={"app": "gojek", "goal": goal}, title=goal))
-    await _event(trip_id, "ride", f"{goal} — {r.get('status')}")
+    r = await master.run(master.Job("perjalanan", "pesan-ojek", goal, trigger="habit", phone={"app": "gojek", "goal": goal}, title=goal,
+                                    on_done="commute:_ride_done", data={"trip": trip_id, "goal": goal}))
+    await _event(trip_id, "ride", f"{goal} — {r.get('status')}", {"task_id": r.get("task_id")} if r.get("task_id") else None)
+    if r["status"] == "failed":
+        await _event(trip_id, "ride_failed", f"GoRide belum terpesan: {(r.get('error') or '')[:200]}", {"goal": goal, "error": (r.get("error") or "")[:300]})
+        await _broadcast_trip(trip_id)
     return r
+
+
+async def _ride_done(run_id: int, result: dict) -> None:
+    """The phone finished ordering: a ride that did not happen is shown on the trip (with what got done) so he can finish it in Gojek."""
+    d = result.get("data") or {}
+    trip_id = d.get("trip")
+    if not trip_id:
+        return
+    text = (result.get("text") or "").strip()
+    if result.get("ok"):
+        await _event(trip_id, "ride_ok", f"GoRide terpesan{': ' + text[:160] if text else ''}", {"task_id": result.get("task_id")})
+    else:
+        await _event(trip_id, "ride_failed", f"GoRide belum terpesan: {text[:200] or 'aplikasi berhenti'}", {"goal": d.get("goal"), "error": text[:300], "task_id": result.get("task_id")})
+        await hub.broadcast({"type": "notify", "title": "GoRide belum terpesan", "text": "Buka Gojek untuk melanjutkan, atau pesan ulang.", "kind": "warn", "route": "#/berubah"})
+    await _broadcast_trip(trip_id)
+
+
+def ride_status(events: list[dict]) -> dict | None:
+    """The latest ride attempt of a trip: ordered, failed (and not dismissed), or None. Pure."""
+    for e in reversed(events or []):
+        if e.get("kind") in ("ride_ok", "ride_failed", "ride_dismissed"):
+            return None if e["kind"] == "ride_dismissed" else {"ok": e["kind"] == "ride_ok", "text": e.get("text", ""), "at": e.get("at"), **(e.get("data") or {})}
+    return None
 
 
 async def trip_view(trip_id: int) -> dict:
@@ -232,7 +259,7 @@ async def trip_view(trip_id: int) -> dict:
     er = await errands() if t["direction"] == "back" else []
     drv = next((e.get("data") for e in reversed(t["events"] or []) if e.get("kind") == "driver"), None)
     return {"id": t["id"], "direction": t["direction"], "status": t["status"], "plan": t["plan"], "chosen": t["chosen"], "events": t["events"],
-            "steps": steps(t["direction"], t["plan"], t["chosen"], er) if t["chosen"] else [], "errands": er, "driver": drv}
+            "steps": steps(t["direction"], t["plan"], t["chosen"], er) if t["chosen"] else [], "errands": er, "driver": drv, "ride": ride_status(t["events"])}
 
 
 PLATE = re.compile(r"\b([A-Z]{1,2}\s?\d{1,4}\s?[A-Z]{1,3})\b")
@@ -632,3 +659,19 @@ async def api_switch(trip_id: int, body: ChooseIn, device: dict = Depends(owner)
 @router.post(API + "/trip/{trip_id}/tell-home")
 async def api_tell_home(trip_id: int, device: dict = Depends(owner)):
     return await tell_home(trip_id)
+
+
+@router.post(API + "/trip/{trip_id}/ride")
+async def api_ride_again(trip_id: int, device: dict = Depends(owner)):
+    """His tap on "Pesan ulang" (a feature tap in the app: no admin password, the phone rules stay)."""
+    if not await db.pool().fetchval("SELECT 1 FROM commute_trips WHERE id = $1 AND status = 'active'", trip_id):
+        raise HTTPException(404)
+    r = await order_ride(trip_id)
+    return {"status": r["status"], "task_id": r.get("task_id")}
+
+
+@router.post(API + "/trip/{trip_id}/ride/dismiss")
+async def api_ride_dismiss(trip_id: int, device: dict = Depends(owner)):
+    await _event(trip_id, "ride_dismissed", "dibatalkan pemilik")
+    await _broadcast_trip(trip_id)
+    return {"ok": True}

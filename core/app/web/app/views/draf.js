@@ -5,6 +5,7 @@ import { pick, upload } from '../upload.js';
 import { laneChip } from '../ui.js';
 
 const STYLES = [['kamu', 'Gayaku'], ['formal', 'Formal'], ['singkat', 'Singkat'], ['english', 'English']];
+let rec = null;
 let cur = { id: null, item: null, style: 'kamu', lane: null };
 
 // #/draf with no message: every reply drafted (waiting for Kirim first), and the ones sent this week.
@@ -38,7 +39,7 @@ export default {
           <p class="sub" style="white-space:pre-wrap;max-height:320px;overflow:auto">${it.body}</p></details>
         <div class="chips">${STYLES.map(([v, l]) => html`<button class="chip ${cur.style === v ? 'on' : ''}" data-act="style" data-v="${v}">${l}</button>`)}</div>
         <label class="field">Mau bilang apa? (opsional)<input id="ins" placeholder="mis. setuju, tapi minta mundur ke Jumat" maxlength="600"></label>
-        <button class="btn" data-act="write">${icon('bolt', 16)} ${it.draft?.body ? 'Tulis ulang' : 'Tulis draf'}</button>
+        <button class="btn" data-act="voice" id="vbtn">${icon('mic', 16)} Ubah dengan suara</button><button class="btn" data-act="write">${icon('bolt', 16)} ${it.draft?.body ? 'Tulis ulang' : 'Tulis draf'}</button>
         <label class="field">Draf<textarea id="body" style="min-height:260px" placeholder="Draf akan muncul di sini…">${it.draft?.body || ''}</textarea></label>
         ${cur.lane ? html`<span class="small">Ditulis oleh ${laneChip(cur.lane)} lewat alur master${it.draft?.context ? ` · konteks: email ini${it.draft.context.samples ? `, ${it.draft.context.samples} contoh gayamu` : ''}${it.draft.context.instruction ? ', arahanmu' : ''}` : ''}</span>
           ${(it.draft?.context?.earlier || []).length || (it.draft?.context?.fact_list || []).length ? html`<details><summary class="small">Yang dipakai</summary>
@@ -53,6 +54,23 @@ export default {
   },
   actions: {
     style(b) { cur.style = b.dataset.v; for (const c of document.querySelectorAll('[data-act=style]')) c.classList.toggle('on', c === b); },
+    async voice(b) {   // tap to start, tap again to stop: the recording becomes the instruction
+      if (rec) { rec.stop(); return; }
+      let stream;
+      try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return toast('Mikrofon tidak diizinkan.', true); }
+      const chunks = [];
+      rec = new MediaRecorder(stream);
+      rec.ondataavailable = (e) => chunks.push(e.data);
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop()); rec = null; b.innerHTML = String(html`${icon('mic', 16)} Ubah dengan suara`);
+        const blob = new Blob(chunks, { type: chunks[0]?.type || 'audio/webm' });
+        toast('Mendengarkan arahanmu…');
+        const [a] = await upload([new File([blob], 'arahan.webm', { type: blob.type })]);
+        const d = await post(`/api/v1/app/inbox/item/${cur.id}/voice`, { attachment_id: a.id, style: cur.style });
+        toast(`“${d.heard}”`); cur.lane = d.lane; render();
+      };
+      rec.start(); b.textContent = '■ Selesai bicara';
+    },
     async write() {
       toast('Menulis draf…');
       const d = await post(`/api/v1/app/inbox/item/${cur.id}/draft`, { style: cur.style, instruction: $('#ins').value.trim() });

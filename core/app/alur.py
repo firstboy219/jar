@@ -39,9 +39,14 @@ def weak_points(jobs: list[dict]) -> list[dict]:
 
 async def view(hours: int = 24) -> dict:
     live = [dict(r) for r in await db.pool().fetch(
-        """SELECT id, feature, action, goal, trigger, lane, why, status, task_id, brain_version, started_at,
-                  EXTRACT(EPOCH FROM (now() - started_at))::float AS seconds, steps -> -1 AS last_step
-           FROM flow_runs WHERE status IN ('routing', 'running', 'waiting') AND started_at > now() - interval '3 hours' ORDER BY id DESC LIMIT 30""")]
+        """SELECT f.id, f.feature, f.action, f.goal, f.trigger, f.lane, f.why, f.status, f.task_id, f.brain_version, f.started_at,
+                  EXTRACT(EPOCH FROM (now() - f.started_at))::float AS seconds, f.steps -> -1 AS last_step, jsonb_array_length(f.steps) AS steps_n,
+                  (SELECT coalesce(sum(u.cost_usd), 0)::float FROM llm_usage u WHERE u.session_id = 'flow-' || f.id) AS cost_now,
+                  t.progress AS task_progress
+           FROM flow_runs f LEFT JOIN tasks t ON t.id = f.task_id
+           WHERE f.status IN ('routing', 'running', 'waiting') AND f.started_at > now() - interval '3 hours' ORDER BY f.id DESC LIMIT 30""")]
+    for r in live:
+        r["path"] = ["router", "hermes", r["lane"] or "…"]
     st = await db.pool().fetch(
         """SELECT coalesce(lane, 'routing') AS lane, count(*) AS n, count(*) FILTER (WHERE status = 'failed') AS failed,
                   count(*) FILTER (WHERE status = 'done') AS ok, coalesce(sum(cost_usd), 0)::float AS cost,
@@ -60,8 +65,42 @@ async def view(hours: int = 24) -> dict:
         f["ok_pct"] = round(100 * f["ok"] / f["runs"]) if f["runs"] else None
         f["no_ai_pct"] = round(100 * f["no_ai"] / f["runs"]) if f["runs"] else None
         f["avg_s"] = round(f.pop("secs") or 0, 1)
+    triggers = {r["trigger"]: r["n"] for r in await db.pool().fetch(
+        "SELECT trigger, count(*) AS n FROM flow_runs WHERE started_at > now() - make_interval(hours => $1) GROUP BY 1", hours)}
+    rt = await db.pool().fetchrow(
+        """SELECT avg(EXTRACT(EPOCH FROM ((steps->0->>'at')::timestamptz - started_at)))
+                    FILTER (WHERE jsonb_array_length(steps) > 0 AND (steps->0->>'at')::timestamptz - started_at BETWEEN interval '0' AND interval '2 minutes')::float AS router_s,
+                  count(*) FILTER (WHERE lane IS NOT NULL) AS decided,
+                  count(*) FILTER (WHERE steps::text LIKE '%dinaikkan ke otak berat%' OR steps::text LIKE '%AI mengambil alih%') AS changed,
+                  count(*) FILTER (WHERE steps::text LIKE '%"tool": "hp"%') AS phone, count(*) FILTER (WHERE steps::text LIKE '%"tool": "browser"%') AS browser
+           FROM flow_runs WHERE started_at > now() - make_interval(hours => $1)""", hours)
+    memory = {"skills": await db.pool().fetchval("SELECT count(DISTINCT name) FROM skill_drafts WHERE status = 'published'") if await _has("skill_drafts") else 0,
+              "routines": await db.pool().fetchval("SELECT count(*) FROM routines WHERE status = 'active'") if await _has("routines") else 0,
+              "used": stations.get("skill", {}).get("runs", 0)}
+    queue = {"routing": await db.pool().fetchval("SELECT count(*) FROM flow_runs WHERE status = 'routing'"),
+             "workers": await db.pool().fetchval("SELECT count(*) FROM tasks WHERE status = 'queued'")}
     return {"hours": hours, "total": total, "stations": stations, "live": live, "recent": await master.recent(40),
-            "day": await master.summary(1), "week": await master.summary(7), "jobs": feats, "weak": weak_points(feats)}
+            "day": await master.summary(1), "week": await master.summary(7), "jobs": feats, "weak": weak_points(feats),
+            "triggers": triggers, "router": {"avg_s": round(rt["router_s"] or 0, 2),
+                                             "right_pct": round(100 * (1 - rt["changed"] / rt["decided"])) if rt["decided"] else None},
+            "tools": {"hp": rt["phone"], "browser": rt["browser"]}, "memory": memory, "queue": queue}
+
+
+async def _has(table: str) -> bool:
+    return bool(await db.pool().fetchval("SELECT to_regclass($1)", table))
+
+
+async def replay(day: str) -> dict:
+    """A day of the flow to play back: every run with its minute, lane, job and outcome."""
+    from datetime import date as _date, datetime, timedelta
+    from .location import WIB
+    d = _date.fromisoformat(day)
+    t0 = datetime(d.year, d.month, d.day, tzinfo=WIB)
+    rows = await db.pool().fetch(
+        """SELECT id, feature, action, lane, status, trigger, EXTRACT(EPOCH FROM (started_at - $1))::int AS t,
+                  EXTRACT(EPOCH FROM (coalesce(finished_at, started_at) - started_at))::float AS secs
+           FROM flow_runs WHERE started_at >= $1 AND started_at < $2 ORDER BY started_at LIMIT 3000""", t0, t0 + timedelta(days=1))
+    return {"day": day, "runs": [dict(r) for r in rows]}
 
 
 async def run_detail(run_id: int) -> dict | None:
@@ -90,6 +129,14 @@ async def thin() -> int:
 @router.get(API)
 async def api_view(hours: int = 24, device: dict = Depends(owner)):
     return await view(max(1, min(hours, 168)))
+
+
+@router.get(API + "/replay")
+async def api_replay(day: str, device: dict = Depends(owner)):
+    try:
+        return await replay(day[:10])
+    except ValueError:
+        raise HTTPException(422, "tanggal tidak dimengerti")
 
 
 @router.get(API + "/{run_id}")

@@ -1,6 +1,6 @@
 // Di jalan / Rencana berubah (mockups 11 & 24): the live trip — each leg with its time, what JARVIS did (reminders, the GoRide it ordered),
 // and when the plan changed because the owner was still at the station after his train left.
-import { get, go, header, html, icon, loading, on, post, render, sheet, toast } from '../core.js';
+import { get, go, header, html, icon, loading, on, openApp, post, render, sheet, toast } from '../core.js';
 import { rupiah } from '../lib.js';
 
 const hm = (s) => (s || '').replace(':', '.');
@@ -29,6 +29,10 @@ export default {
       <div class="scr">
         ${replans.length ? html`<div class="card amber"><span class="k amber">Rencana berubah</span>${replans.map((e) => html`<p class="sub">${e.at.slice(11, 16)} ${e.text}</p>`)}
           <div class="btns"><button class="btn" data-act="alts">${icon('train', 16)} Opsi lain</button><button class="btn" data-act="tellHome">${icon('chat', 16)} Kabari rumah</button></div></div>` : ''}
+        ${t.ride && !t.ride.ok ? html`<div class="card red"><span class="k" style="color:var(--red-t)">GoRide belum terpesan</span>
+          <span class="small">✓ Gojek dibuka di HP</span><span class="small">✕ ${t.ride.error || t.ride.text}</span>
+          <div class="btns"><button class="btn primary" data-act="openGojek">Buka Gojek, lanjutkan</button><button class="btn" data-act="rideAgain">Pesan ulang</button><button class="btn ghost" data-act="rideDismiss">Batal</button></div></div>` : ''}
+        ${t.ride?.ok ? html`<span class="small t-green2">${icon('check', 12)} ${t.ride.text}</span>` : ''}
         ${o.delay_min ? html`<div class="card red"><span class="ttl">KRL tertahan ±${o.delay_min} menit</span><span class="small">Perkiraan tiba bergeser${o.ride && t.direction === 'back' ? `; GoRide dipesan ${hm(o.ride.order_at)}` : ''}.</span></div>` : ''}
         ${d ? html`<div class="card green"><div class="row sb"><span class="ttl">${icon('car', 16)} ${d.driver || 'Driver'}${d.plate ? ` · ${d.plate}` : ''}</span><span class="mono">${d.eta_min ? `${d.eta_min} mnt` : ''}</span></div>
           <span class="small">${{ coming: 'menuju lokasimu', arrived: 'sudah sampai — temui driver', riding: 'dalam perjalanan', done: 'selesai' }[d.state] || ''}</span></div>` : ''}
@@ -55,6 +59,9 @@ export default {
       await post(`/api/v1/app/commute/trip/${trip.id}/switch`, { index: Number(v) });
       toast('Rencana diganti'); render();
     },
+    openGojek() { openApp('gojek', 'Gojek'); },
+    async rideAgain() { const r = await post(`/api/v1/app/commute/trip/${trip.id}/ride`); toast(r.status === 'failed' ? 'Belum bisa memesan' : 'Memesan ulang di HP…'); render(); },
+    async rideDismiss() { await post(`/api/v1/app/commute/trip/${trip.id}/ride/dismiss`); render(); },
     async tellHome() {
       const r = await post(`/api/v1/app/commute/trip/${trip.id}/tell-home`);
       if (r.sent) return toast(`Terkirim ke ${r.to}`);

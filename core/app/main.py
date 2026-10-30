@@ -19,7 +19,7 @@ import json
 import re
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
@@ -601,6 +601,16 @@ async def canvases_open(c: CanvasIn, device: dict = Depends(owner_device_auth)):
 async def canvas_live(context: str = "utama", device: dict = Depends(device_auth)):
     """The desk: stations (what each worker is doing, with the page it is on), n8n, latest requests, storage (ADR-051)."""
     return jsonable(await live.snapshot(context[:80]))
+
+
+async def _turn_meta(session_id: str, since: datetime, seconds: float) -> dict:
+    """What one chat turn took: how long, which model(s), what it cost (the gateway's own records for this session)."""
+    try:
+        r = await db.pool().fetchrow("SELECT count(*) AS calls, coalesce(sum(cost_usd), 0)::float AS cost, max(model) AS model FROM llm_usage WHERE session_id = $1 AND at >= $2",
+                                     session_id, since)
+        return {"seconds": round(seconds, 1), "calls": r["calls"], "cost": round(r["cost"], 5), "model": r["model"]}
+    except Exception:
+        return {"seconds": round(seconds, 1)}
 
 
 @app.websocket("/api/v1/canvas/live/ws")
@@ -1213,12 +1223,13 @@ async def ws(websocket: WebSocket):
             async def emit(event: dict) -> None:
                 await send({**event, "session_id": cmd.session_id}, local_voice)
             try:
+                t0, at0 = time.monotonic(), datetime.now(timezone.utc)
                 turn = await chat.handle(cmd.user_command, cmd.session_id, actor=f"device:{device['name']}",
                                          device_id=device["id"], emit=emit, location=cmd.location, screen=cmd.screen,
                                          image_source=cmd.image_source, stt=cmd.stt, speak_live="say" in caps,
                                          screen_text=cmd.screen_text or "", attachment_ids=cmd.attachments, audio=audio)
                 await send({"type": "reply", "text": turn.reply, "route": turn.route, "spoken": turn.spoken,
-                            "session_id": cmd.session_id}, local_voice)
+                            "session_id": cmd.session_id, "meta": await _turn_meta(cmd.session_id, at0, time.monotonic() - t0)}, local_voice)
             except (WebSocketDisconnect, RuntimeError):
                 pass  # socket gone mid-turn; the task is cancelled below anyway
             except Exception:

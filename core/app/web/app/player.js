@@ -23,6 +23,15 @@ function bar() {
   return el;
 }
 
+const mmss = (t) => (Number.isFinite(t) ? `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}` : '–:––');
+
+// elapsed / duration and the seek bar follow the song without repainting the whole bar
+function tick() {
+  if (!audio) return;
+  const t = $('#ptime'); if (t) t.textContent = `${mmss(audio.currentTime)} / ${mmss(audio.duration)}`;
+  const r = $('#pseek'); if (r && document.activeElement !== r) { r.max = String(Math.floor(audio.duration || 0)); r.value = String(Math.floor(audio.currentTime)); }
+}
+
 function paint() {
   const el = bar();
   if (!cur) { el.hidden = true; document.body.classList.remove('has-player'); return; }
@@ -34,7 +43,8 @@ function paint() {
     ${yt && open ? html`<div class="pv"><iframe src="/embed/youtube/${yt[1]}?play=1" title="${cur.title}" allow="autoplay; encrypted-media; fullscreen" allowfullscreen></iframe></div>` : ''}
     <div class="pb">
       ${cur.cover_url ? html`<img src="${cur.cover_url}" alt="">` : html`<span class="ico">${icon(cur.panel === 'video' ? 'video' : 'music', 18)}</span>`}
-      <div class="grow" style="min-width:0"><div class="pt">${cur.title || 'Diputar'}</div><div class="small pa">${cur.artist || ''}${cur.playlist ? ` · ${cur.playlist.index + 1}/${cur.playlist.total}` : ''}</div></div>
+      <div class="grow" style="min-width:0"><div class="pt">${cur.title || 'Diputar'}</div><div class="small pa">${cur.artist || ''}${cur.playlist ? ` · ${cur.playlist.index + 1}/${cur.playlist.total}` : ''}${audio ? html` · <span class="mono" id="ptime">${mmss(audio.currentTime)} / ${mmss(audio.duration)}</span>` : ''}</div>
+        ${audio ? html`<input type="range" id="pseek" min="0" max="${Math.floor(audio.duration || 0)}" value="${Math.floor(audio.currentTime)}" style="width:100%;height:14px" aria-label="Posisi lagu">` : ''}</div>
       ${cur.playlist ? html`<button class="ib sm" data-pl="prev" aria-label="Sebelumnya">${icon('back', 18)}</button>` : ''}
       ${yt ? html`<button class="ib sm" data-pl="toggle" aria-label="${open ? 'Tutup video' : 'Buka video'}">${icon(open ? 'down' : 'play', 18)}</button>`
            : html`<button class="ib sm" data-pl="play" aria-label="${playing ? 'Jeda' : 'Putar'}">${icon(playing ? 'pause' : 'play', 18)}</button>`}
@@ -58,6 +68,8 @@ async function load(autoplay) {
   audio.addEventListener('ended', () => { send({ type: 'stage_event', id: cur?.id, event: 'ended' }); paint(); });
   audio.addEventListener('play', paint);
   audio.addEventListener('pause', paint);
+  audio.addEventListener('timeupdate', tick);
+  audio.addEventListener('loadedmetadata', paint);
   if (autoplay) audio.play().catch(() => paint());
   paint();
 }
@@ -78,6 +90,7 @@ export function startPlayer() {
     take({ id: e.id, panel: e.panel, title: p.title, artist: p.artist || p.channel, url: p.url, cover_url: p.cover_url || p.thumbnail_url, playlist: p.playlist }, true);
   });
   get('/api/v1/app/music').then((s) => { if (s.now) take(s.now, false); }).catch(() => {});
+  document.addEventListener('change', (e) => { if (e.target.id === 'pseek' && audio) audio.currentTime = Number(e.target.value); });
   document.addEventListener('click', async (e) => {
     const b = e.target.closest('[data-pl]');
     if (!b || !cur) return;

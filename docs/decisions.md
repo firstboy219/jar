@@ -1455,6 +1455,18 @@ menentukan berat/ringan/non-AI)".
   brain's models, pinned shortcuts, drafts/results/changed-plan in the catalog. Every new process runs through `master.run`.
 - **More guarded by the admin password** (E): loosening the investment guard (a higher limit, a wider price guard, no password) and putting a
   brain version live or rolling one back — drafting and evaluating a version need none.
-- **Not built** (no reliable source or out of scope for now): booking cinema seats, a live KRL delay feed (held trains are inferred from the
-  trip's own timing), video speed/subtitle/PiP controls, a desktop three-pane cockpit, and a full router/model editor (models are chosen in
-  Komposisi AI on the admin site; Bengkel shows them and how each did).
+- **Second audit, batches F–G**: a fresh pass over the 48 screens found wiring bugs (a mission's plan, the Qur'an's repeat, the /trend route)
+  and more missing controls; built: API keys saved only with the admin password and their expiry warned, stock alerts and payouts per channel,
+  strategy missions, a bekam clinic search (Hermes, contacts nobody), fare estimates on Gojek approvals, drafts that name what they used,
+  notice a requested file and take a spoken instruction, receipts from email as spending (never twice), habits on arriving/leaving/meetings,
+  the workshop proposing its own fixes weekly and testing every draft (only better ones go to 10%), week-on-week job numbers, the flow's
+  inputs/router/tools/memory/queue and a day replayed, every step's model/tokens/cost or "no AI", the investment execution screen (checks,
+  orders, waiting for his PIN, "Buka Pluang"), a meeting paused (nothing kept) or made confidential mid-way, a chat turn's time and cost and
+  suggestions from the answer, a mission paused, routine steps and what skills saved, a failed ride finished in Gojek, "do it for me" in
+  approved apps (never Pluang: trades only through Investasi), one answer to email + WhatsApp, a room change put on the Outlook calendar.
+  The APK can open only the approved apps on the owner's tap (`openApp`), and the alarm shows the subuh time.
+- **Not built** (no reliable source, or out of scope for now): booking cinema seats and other days' schedules (the source shows today and
+  presales only), a live KRL delay/crowding/platform feed (held trains are inferred from the trip's own timing), casting to a TV or picking a
+  speaker, video speed/subtitle/PiP controls, highlighting the target on the guided screen, receipts from the phone's gallery, OAuth API
+  sources, a desktop three-pane cockpit, and a full router/model editor (models are chosen in Komposisi AI on the admin site; Bengkel shows
+  them and how each did).

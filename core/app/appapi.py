@@ -138,6 +138,25 @@ async def app_mission(task_id: int, device: dict = Depends(owner)):
     return jsonable(t)
 
 
+@router.post(API + "/missions/{task_id}/pause")
+async def app_mission_pause(task_id: int, device: dict = Depends(owner)):
+    """Jeda: the worker is told to keep its hands off the browser (the owner's wheel) until he lets it carry on."""
+    from . import live
+    try:
+        return await live.take(task_id, "utama", actor(device))
+    except live.ControlError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post(API + "/missions/{task_id}/resume")
+async def app_mission_resume(task_id: int, device: dict = Depends(owner)):
+    from . import live
+    try:
+        return await live.release(task_id, "utama", actor(device), False)
+    except live.ControlError as e:
+        raise HTTPException(409, str(e))
+
+
 # ---------- what is open on the desk: the "Halaman aktif" ----------
 
 @router.get(API + "/pages")
@@ -296,12 +315,38 @@ async def app_memory(device: dict = Depends(owner)):
     week = datetime.now(timezone.utc) - timedelta(days=7)
     new = [{"kind": "rutin", "id": r["id"], "name": r["name"], "app": r["app"], "steps": r["steps"], "params": r["params"]} for r in rts
            if r["updated_at"] > week and (r["runs"] or 0) <= 3]
-    new += [{"kind": "skill", "id": s["id"], "name": s["name"], "status": s["status"]} for s in skills if s["created_at"] > week]
+    new += [{"kind": "skill", "id": s["id"], "name": s["name"], "status": s["status"], "approval_id": s["approval_id"]} for s in skills if s["created_at"] > week]
     return jsonable({"routines": rts, "skills": skills, "prefs": prefs, "new": new[:6],
                      "counts": {"skills": len([s for s in skills if s.get("cap_status") == "active" or s["status"] == "published"]) + len([r for r in rts if r["status"] == "active"]),
                                 "memories": len(mems)},
                      "no_ai_pct": flow.get("no_ai_pct"), "routine_auto_pct": round(100 * auto / (auto + ai)) if auto + ai else None,
-                     "flow": flow})
+                     "flow": flow, "saved_usd": await saved_this_month()})
+
+
+async def saved_this_month() -> float:
+    """What the work done without AI this month would have cost with it: each job's runs as a skill × what that job costs when it
+    thinks (its own average, else the average thinking run)."""
+    r = await db.pool().fetchrow(
+        """WITH ai AS (SELECT feature, action, avg(cost_usd) AS c FROM flow_runs WHERE lane IN ('ringan', 'berat') AND cost_usd > 0
+                                                                        AND started_at > now() - interval '60 days' GROUP BY 1, 2),
+                avg_all AS (SELECT coalesce(avg(cost_usd), 0) AS c FROM flow_runs WHERE lane = 'ringan' AND cost_usd > 0 AND started_at > now() - interval '60 days')
+           SELECT coalesce(sum(coalesce(ai.c, (SELECT c FROM avg_all))), 0)::float AS saved
+           FROM flow_runs f LEFT JOIN ai ON ai.feature = f.feature AND ai.action = f.action
+           WHERE f.lane = 'skill' AND f.status = 'done' AND f.started_at > date_trunc('month', now())""")
+    return round(r["saved"] or 0, 4)
+
+
+@router.get(API + "/memory/routine/{routine_id}")
+async def app_routine_steps(routine_id: int, device: dict = Depends(owner)):
+    """A learned phone routine, step by step, in words (what it opens, taps, types — the parts that change are named)."""
+    row = await db.pool().fetchrow("SELECT id, name, app, params, steps, runs, ok_runs, status FROM routines WHERE id = $1", routine_id)
+    if not row:
+        raise HTTPException(404)
+    words = {"open": "Buka", "tap": "Ketuk", "type": "Ketik", "wait": "Tunggu", "scroll": "Gulir", "back": "Kembali", "read": "Baca", "if": "Bila",
+             "goto": "Lompat ke", "ai": "Tanya AI", "ask": "Tanya pemilik", "done": "Selesai"}
+    steps = [{"n": i + 1, "op": st.get("op"), "text": f"{words.get(st.get('op'), st.get('op'))} {st.get('target') or st.get('text') or st.get('app') or st.get('value') or ''}".strip()}
+             for i, st in enumerate(row["steps"] or []) if isinstance(st, dict)]
+    return jsonable({**{k: row[k] for k in ("id", "name", "app", "params", "runs", "ok_runs", "status")}, "steps": steps})
 
 
 # ---------- Kontrol: health, budget, where the owner is, the brains ----------

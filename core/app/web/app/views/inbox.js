@@ -43,9 +43,14 @@ function itemRow(it) {
               : html`<button class="chip cyan" data-go="#/draf/${it.id}">${icon('text', 13)} Draf balasan</button>`}
         <button class="chip" data-act="state" data-id="${it.id}" data-s="done">${icon('check', 13)} Selesai</button>
         <button class="chip" data-act="snooze" data-id="${it.id}">${icon('clock', 13)} Nanti</button>
+        ${it.room ? html`<div class="row sb" style="gap:6px"><span class="small t-amber2">${icon('pin', 12)} “${it.room.title}” pindah ke ${it.room.room}${it.room.old ? ` (tadinya ${it.room.old})` : ''}</span>
+          <button class="btn sm" data-act="room" data-ev="${it.room.event_id}" data-room="${it.room.room}">Perbarui kalender</button></div>` : ''}
         ${it.job_reply ? html`<a class="chip amber" href="#/karier?tab=undangan">${icon('job', 13)} balasan wawancara: ${{ pending: 'menunggu jeda', sent: 'terkirim', draft: 'draf', cancelled: 'batal', failed: 'gagal' }[it.job_reply] || it.job_reply}</a>` : ''}
       </div></div></div>`;
 }
+
+// a matter that came by email and by WhatsApp: one answer for both
+const both = (c) => { const email = c.items.find((i) => i.source === 'outlook' || i.source === 'gmail'); const wa = c.items.find((i) => i.source === 'whatsapp'); return email && wa ? { email, wa } : null; };
 
 function card(c, tone) {
   const head = c.items[0];
@@ -53,7 +58,8 @@ function card(c, tone) {
     <div class="row sb"><span class="ttl">${c.topic || head.sender}</span><span class="row" style="gap:4px">${c.sources.map((s) => html`<span title="${SRC[s]?.[0]}">${icon(SRC[s]?.[1] || 'mail', 14, `var(--${SRC[s]?.[2] || 'tx2'})`)}</span>`)}</span></div>
     ${head.reason ? html`<span class="small" style="color:var(--tx)">${head.reason}</span>` : (head.triage === 'new' ? html`<span class="small">baru masuk — sedang dipilah</span>` : '')}
     ${c.items.slice(0, 4).map(itemRow)}
-    ${c.items.length > 4 ? html`<span class="small">+${c.items.length - 4} pesan lain di urusan ini</span>` : ''}</div>`;
+    ${c.items.length > 4 ? html`<span class="small">+${c.items.length - 4} pesan lain di urusan ini</span>` : ''}
+    ${both(c) ? html`<button class="btn sm" data-act="replyBoth" data-e="${both(c).email.id}" data-w="${both(c).wa.id}" data-who="${head.sender}">${icon('chat', 14)} Balas keduanya</button>` : ''}</div>`;
 }
 
 export default {
@@ -111,6 +117,14 @@ export default {
       speak(`${n.length} urusan butuh kamu. ` + n.slice(0, 6).map((c, i) => `${i + 1}. ${c.topic || c.items[0].sender}: ${c.items[0].reason || c.items[0].subject || c.items[0].snippet}`).join('. '));
     },
     async saveFamily(b, e) { e?.preventDefault(); await put('/api/v1/app/settings/inbox', { family: new FormData($('#famf')).get('family').split(',').map((x) => x.trim()).filter(Boolean) }); toast('Tersimpan'); render(); },
+    async room(b) { const r = await post('/api/v1/app/inbox/room', { event_id: Number(b.dataset.ev), room: b.dataset.room }); toast(`Kalender: ${r.title} → ${r.room}`); render(); },
+    async replyBoth(b) {
+      const v = await sheet(String(html`<form><span class="ttl">Balas ${b.dataset.who} di WhatsApp & email</span><label class="field">Pesan<textarea name="text" required maxlength="2000"></textarea></label>
+        <span class="small">WhatsApp langsung terkirim; email jadi draf untuk kamu periksa lalu Kirim.</span><div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Kirim & buat draf</button></div></form>`));
+      if (!v?.text) return;
+      const r = await post('/api/v1/app/inbox/both', { email_id: Number(b.dataset.e), wa_id: Number(b.dataset.w), text: v.text });
+      toast(`WhatsApp terkirim ke ${r.wa?.to || b.dataset.who} — periksa draf emailnya`); location.hash = `#/draf/${r.draft.item}`;
+    },
     async wa(b) { const r = await post(`/api/v1/app/inbox/item/${b.dataset.id}/reply`, { text: b.dataset.text }); toast(`Terkirim ke ${r.to || 'WhatsApp'}`); render(); },
     async wacustom(b) {
       const v = await sheet(String(html`<form><label class="field">Balasan WhatsApp<textarea name="text" required maxlength="2000"></textarea></label>

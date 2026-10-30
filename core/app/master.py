@@ -174,8 +174,8 @@ def parse_json(text: str):
     raise ValueError("jawaban AI bukan JSON")
 
 
-async def _step(run_id: int, stage: str, text: str, **cols) -> None:
-    step = {"at": datetime.now(timezone.utc).isoformat(), "stage": stage, "text": text[:300]}
+async def _step(run_id: int, stage: str, text: str, extra: dict | None = None, **cols) -> None:
+    step = {"at": datetime.now(timezone.utc).isoformat(), "stage": stage, "text": text[:300], **(extra or {})}
     sets = "".join(f", {k} = ${i + 3}" for i, k in enumerate(cols))
     await db.pool().execute(f"UPDATE flow_runs SET steps = steps || $2::jsonb{sets} WHERE id = $1", run_id, [step], *cols.values())
     await hub.broadcast({"type": "flow", "run": run_id, "stage": stage, "text": text[:300], **{k: v for k, v in cols.items() if k in ("lane", "status")}})
@@ -196,6 +196,8 @@ async def _think(job: Job, lane: str, run_id: int) -> tuple[Any, str | None]:
     model = (data.get("jarvis_route") or {}).get("model")
     if not text.strip():
         raise FlowError("AI tidak menjawab")
+    u = data.get("usage") or {}
+    await _step(run_id, "jawab", f"{model or lane} menjawab", extra={"model": model, "tokens": u.get("total_tokens"), "cost": u.get("cost"), "lane": lane})
     return (parse_json(text) if job.json_out else text.strip()), model
 
 
@@ -280,6 +282,7 @@ async def run(job: Job) -> dict:
         if lane == "skill" and not job.phone:
             try:
                 result = await job.skill()
+                await _step(run_id, "skill", "cara tetap selesai", extra={"lane": "skill", "no_ai": True})
                 await _finish(run_id, "done", result)
                 return {"run_id": run_id, "status": "done", "lane": "skill", "why": why, "result": result}
             except SkillMiss as e:
@@ -305,7 +308,7 @@ async def run(job: Job) -> dict:
         await db.pool().execute("UPDATE flow_runs SET status = 'waiting', task_id = $2, on_done = $3, data = $4 WHERE id = $1",
                                 run_id, task_id, job.on_done, _jsonish(job.data) or {})
         _pending[run_id] = job
-        await _step(run_id, "lane", f"misi #{task_id} dimulai")
+        await _step(run_id, "lane", f"misi #{task_id} dimulai", extra={"tool": "hp" if job.phone else "browser", "lane": "hermes"})
         return {"run_id": run_id, "status": "waiting", "lane": lane, "why": why, "task_id": task_id}
     except Exception as e:
         log.warning("flow %s %s:%s failed: %s", run_id, job.feature, job.action, e)

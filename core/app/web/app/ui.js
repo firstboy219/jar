@@ -31,7 +31,8 @@ export const fmtNum = (v) => (typeof v === 'number' ? (Math.abs(v) >= 1000 ? Mat
 export function resultView(data, text = '') {
   if (!data || !Object.keys(data).length) return text ? html`<div class="card"><p style="white-space:pre-wrap">${text}</p></div>` : '';
   return html`
-    ${data.ringkasan ? html`<div class="card green"><span class="k green">Kesimpulan</span><p>${data.ringkasan}</p></div>` : ''}
+    ${data.ringkasan ? html`<div class="card green"><span class="k green">Kesimpulan</span><p>${data.ringkasan}</p>
+      ${(data.tautan || []).length || data.keyakinan ? html`<span class="small">${(data.tautan || []).length ? `${data.tautan.length} sumber` : ''}${(data.tautan || []).length && data.keyakinan ? ' · ' : ''}${data.keyakinan ? `keyakinan ${data.keyakinan}` : ''}</span>` : ''}</div>` : ''}
     ${(data.grafik || []).map((g) => html`<div class="card"><span class="k muted">${g.judul || 'Grafik'}</span>${g.jenis === 'line' ? columns(g.label, g.nilai, g.satuan, false) : bars(g.label, g.nilai, g.satuan)}</div>`)}
     ${(data.tabel || []).map((t) => html`<div class="sec"><span>${t.judul || ''}</span></div><div class="tblbox"><table class="tbl"><thead><tr>${t.kolom.map((c) => html`<th scope="col">${c}</th>`)}</tr></thead>
       <tbody>${t.baris.map((r) => html`<tr>${r.map((c) => html`<td>${c}</td>`)}</tr>`)}</tbody></table></div>`)}

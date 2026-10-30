@@ -171,6 +171,14 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
             }
         }
     }
+    /** One of the approved apps opened on the owner's tap ("Buka Pluang", "Buka Gojek, lanjutkan"); false when it is not installed. */
+    @JavascriptInterface fun openApp(name: String?): Boolean {
+        val pkg = OPENABLE_APPS[name.orEmpty()] ?: return false
+        val intent = view.context.packageManager.getLaunchIntentForPackage(pkg) ?: return false
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        view.post { view.context.startActivity(intent) }
+        return true
+    }
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */
     @JavascriptInterface fun location(): String {
         val app = view.context.applicationContext as JarvisApp
@@ -178,6 +186,12 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
         return org.json.JSONObject().put("lat", loc.lat).put("lon", loc.lon).put("accuracy_m", loc.accuracyM ?: 0.0).toString()
     }
 }
+
+/** The apps the page may open (the same approved list the phone agent works in, ADR-087); nothing else can be launched from the page. */
+internal val OPENABLE_APPS = mapOf(
+    "gojek" to "com.gojek.app", "gopay" to "com.gojek.gopay", "pluang" to "com.EmasDigi", "kopikenangan" to "com.kopikenangan",
+    "qpon" to "com.qpon.platform", "jobstreet" to "com.jobstreet.jobstreet",
+)
 
 internal fun appUrl(serverUrl: String, token: String): String =
     serverUrl.trim().trimEnd('/') + "/app/#t=" + Uri.encode(token) + "&app=1"

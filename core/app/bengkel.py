@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import audit, db, hub
+from . import appclock, audit, db, hub
 from .appauth import actor, owner, require_password
 
 log = logging.getLogger("jarvis-core")
@@ -184,6 +184,24 @@ async def jobs(days: int = 30) -> list[dict]:
     return out
 
 
+async def metrics(job: str, days: int = 7, offset_days: int = 0) -> dict:
+    """How a job did over `days` (ending `offset_days` ago): success, failures, share without AI, how often the light brain had to hand
+    over to the heavy one, cost per day, and how long it took (median, slowest tenth)."""
+    feature, _, action = job.partition(":")
+    r = await db.pool().fetchrow(
+        """SELECT count(*) AS runs, count(*) FILTER (WHERE status = 'done') AS ok, count(*) FILTER (WHERE status = 'failed') AS failed,
+                  count(*) FILTER (WHERE lane = 'skill') AS no_ai, count(*) FILTER (WHERE steps::text LIKE '%dinaikkan ke otak berat%') AS escalated,
+                  coalesce(sum(cost_usd), 0)::float AS cost,
+                  percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (WHERE finished_at IS NOT NULL) AS p50,
+                  percentile_cont(0.9) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at))) FILTER (WHERE finished_at IS NOT NULL) AS p90
+           FROM flow_runs WHERE feature = $1 AND action = $2
+             AND started_at > now() - make_interval(days => $3::int + $4::int) AND started_at <= now() - make_interval(days => $4::int)""", feature, action, days, offset_days)
+    n = r["runs"] or 0
+    pct = (lambda x: round(100 * x / n) if n else None)
+    return {"runs": n, "ok_pct": pct(r["ok"]), "fail_pct": pct(r["failed"]), "no_ai_pct": pct(r["no_ai"]), "right_brain_pct": (100 - pct(r["escalated"])) if n else None,
+            "cost_per_day": round(r["cost"] / days, 4), "p50_s": round(float(r["p50"] or 0), 1), "p90_s": round(float(r["p90"] or 0), 1)}
+
+
 async def job_view(job: str) -> dict:
     feature, _, action = job.partition(":")
     hist = [dict(r) for r in await db.pool().fetch("SELECT * FROM brain_versions WHERE job = $1 ORDER BY id DESC LIMIT 30", job)]
@@ -196,7 +214,8 @@ async def job_view(job: str) -> dict:
     samples = await db.pool().fetchval("SELECT count(*) FROM flow_samples WHERE feature = $1 AND action = $2", feature, action) if job else 0
     active, canary = await _versions(job)
     return {"job": job, "history": hist, "built_in": base, "recent": recent, "samples": samples,
-            "active": active, "canary": canary, "global": await global_cfg() if not job else None}
+            "active": active, "canary": canary, "global": await global_cfg() if not job else None,
+            "metrics": await metrics(job) if job else None, "metrics_prev": await metrics(job, 7, 7) if job else None}
 
 
 async def propose(job: str, words: str, who: str) -> dict:
@@ -280,7 +299,8 @@ async def evaluate(version_id: int, limit: int = 4) -> dict:
         results.append({"run_id": s["run_id"], "a": a[:2000], "b": b[:2000], "winner": winner, "why": str((r.get("result") or {}).get("alasan") or "")[:240]})
     score = {"A": sum(1 for x in results if x.get("winner") == "A"), "B": sum(1 for x in results if x.get("winner") == "B"),
              "seri": sum(1 for x in results if x.get("winner") == "seri")}
-    ev = {"samples": results, "score": score, "verdict": "lebih baik" if score["B"] > score["A"] else ("lebih buruk" if score["B"] < score["A"] else "setara")}
+    ev = {"samples": results, "score": score, "verdict": "lebih baik" if score["B"] > score["A"] else ("lebih buruk" if score["B"] < score["A"] else "setara"),
+          "worse": score["A"], "at": time.time()}   # cases where the new version did worse than the old
     await db.pool().execute("UPDATE brain_versions SET eval = $2 WHERE id = $1", version_id, ev)
     return ev
 
@@ -333,6 +353,75 @@ async def models(days: int = 7) -> dict:
     return {"lanes": lanes, "usage": usage, "days": days}
 
 
+# ---------- JARVIS proposing its own improvements ----------
+
+SELF_MAX = 3
+
+
+async def self_propose() -> list[dict]:
+    """Once a week the weak points of the flow (often failing, slow, costly) get a proposed fix written by the heavy brain — drafts only:
+    nothing changes until he tests and deploys them (with his password)."""
+    from . import alur
+    v = await alur.view(168)
+    out = []
+    for w in v["weak"]:
+        if len(out) >= SELF_MAX or w["kind"] == "bisa-skill":
+            continue
+        if await db.pool().fetchval("SELECT 1 FROM brain_versions WHERE job = $1 AND created_by = 'jarvis' AND created_at > now() - interval '14 days'", w["job"]):
+            continue   # one proposal per job per fortnight
+        words = {"gagal": "Pekerjaan ini sering gagal; ubah supaya lebih andal (lihat kegagalan terakhir).",
+                 "lambat": "Pekerjaan ini terlalu lambat; buat lebih cepat tanpa menurunkan mutu (jalur lebih ringan atau jawaban lebih pendek).",
+                 "mahal": "Pekerjaan ini mahal; turunkan biayanya tanpa menurunkan mutu."}.get(w["kind"], w["text"])
+        try:
+            d = await propose(w["job"], f"{words} Temuan: {w['text']}", "jarvis")
+        except BrainError as e:
+            log.info("self-propose %s: %s", w["job"], e)
+            continue
+        out.append({"id": d["id"], "job": w["job"], "kind": w["kind"]})
+    if out:
+        await hub.broadcast({"type": "notify", "title": f"JARVIS mengusulkan {len(out)} perbaikan cara kerja", "text": ", ".join(o["job"] for o in out)[:160],
+                             "kind": "info", "route": "#/bengkel"})
+    return out
+
+
+def _sunday() -> str:
+    from datetime import datetime
+    from .location import WIB
+    return "03:15" if datetime.now(WIB).weekday() == 6 else ""
+
+
+@appclock.daily(_sunday, "brain.self_propose")
+async def _weekly_self() -> None:
+    from . import master
+    await master.run(master.Job("bengkel", "usul-sendiri", "usulkan perbaikan untuk titik lemah alur", trigger="schedule", skill=self_propose))
+
+
+async def test_all(who: str) -> dict:
+    """Every draft waiting (his and JARVIS' own): replayed on real inputs; the ones that do better go to 10% of runs, the rest stay drafts."""
+    drafts = await db.pool().fetch("SELECT id, job FROM brain_versions WHERE status = 'draft' AND job <> '' AND created_at > now() - interval '30 days' ORDER BY id")
+    done = []
+    for d in drafts:
+        if await db.pool().fetchval("SELECT 1 FROM brain_versions WHERE job = $1 AND status = 'canary'", d["job"]):
+            done.append({"id": d["id"], "job": d["job"], "result": "sudah ada uji lain"})
+            continue
+        try:
+            ev = await evaluate(d["id"])
+        except BrainError as e:
+            done.append({"id": d["id"], "job": d["job"], "result": str(e)[:120]})
+            continue
+        if ev["verdict"] == "lebih baik":
+            await deploy(d["id"], "canary", who, 10)
+            done.append({"id": d["id"], "job": d["job"], "result": "dipasang 10%", "worse": ev["worse"]})
+        else:
+            done.append({"id": d["id"], "job": d["job"], "result": f"tidak dipasang ({ev['verdict']})", "worse": ev["worse"]})
+    return {"tested": done}
+
+
+async def drafts() -> list[dict]:
+    rows = await db.pool().fetch("SELECT id, job, note, request, created_by, created_at, eval FROM brain_versions WHERE status = 'draft' AND job <> '' ORDER BY id DESC LIMIT 20")
+    return [dict(r) for r in rows]
+
+
 # ---------- API ----------
 
 class ProposeIn(BaseModel):
@@ -360,7 +449,14 @@ def _job(job: str) -> str:
 
 @router.get(API)
 async def api_jobs(device: dict = Depends(owner)):
-    return {"jobs": await jobs(), "global": await job_view("")}
+    return {"jobs": await jobs(), "global": await job_view(""), "drafts": await drafts()}
+
+
+@router.post(API + "/drafts/test-all")
+async def api_test_all(body: PasswordIn, device: dict = Depends(owner)):
+    """Test every draft and put the better ones on 10% — a deploy, so his password."""
+    await require_password(device, body.password, "brain:test_all")
+    return await test_all(actor(device))
 
 
 @router.get(API + "/models")

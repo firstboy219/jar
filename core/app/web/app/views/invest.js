@@ -1,6 +1,7 @@
 // Investasi (mockup 39): what JARVIS read from Pluang (total, cash, each asset, the mix against his targets), the heavy brain's view of the
 // market, three options (one is always "hold") — his pick, with the admin password, is carried out in Pluang by JARVIS (he types the PIN).
-import { $, discuss, get, header, html, icon, loading, on, post, put, render, toast } from '../core.js';
+import { $, discuss, get, header, html, icon, loading, on, openApp, post, put, render, toast } from '../core.js';
+import { liveFrame } from '../ui.js';
 import { withPassword } from '../needsui.js';
 import { rupiah } from '../lib.js';
 import { laneChip } from '../ui.js';
@@ -28,19 +29,53 @@ function settingsForm(st) {
     <button class="btn" data-act="saveSettings">Simpan</button><span class="small">${icon('lock', 12)} Menaikkan batas atau melonggarkan pengaman harga butuh password admin.</span></form></details>`;
 }
 
+// Eksekusi (mockup 31): his pick being carried out in Pluang — the checks passed before the app was opened, each order, the phone's live
+// steps (and when it waits for his PIN), the result with the post-trade price check.
+async function execScreen(root) {
+  root.innerHTML = String(html`${header('Eksekusi di Pluang')}<div class="scr">${loading()}</div>`);
+  const { exec: x } = await get('/api/v1/app/invest/exec');
+  if (!x) { root.innerHTML = String(html`${header('Eksekusi di Pluang')}<div class="scr"><div class="card"><p class="sub">Belum ada pilihan yang dijalankan.</p><a class="btn" href="#/invest">Ke Investasi</a></div></div>`); return null; }
+  const m = x.task_id ? await get(`/api/v1/app/missions/${x.task_id}`).catch(() => null) : null;
+  const st = m?.station;
+  const waitingPin = x.status === 'running' && /PIN|OTP/i.test(st?.thought || '');
+  const res = x.result || {};
+  root.innerHTML = String(html`${header('Eksekusi di Pluang', { sub: `${x.option.id || ''}. ${x.option.judul}` })}
+    <div class="scr">
+      ${waitingPin ? html`<div class="card amber"><span class="k amber">${icon('lock', 14)} Menunggu PIN-mu</span><p class="sub">Pluang meminta PIN. Ketik sendiri di HP — JARVIS tidak pernah mengetiknya, lalu lanjut otomatis.</p>
+        <button class="btn primary" data-act="openPluang">Buka Pluang</button></div>` : ''}
+      <div class="card"><span class="k">Pemeriksaan sebelum transaksi</span>${x.checks.map((c) => html`<div class="row sb" style="font-size:13px;padding:2px 0">
+        <span>${c.ok === false ? '✕' : c.ok == null ? '–' : '✓'} ${c.label}</span><span class="small" style="color:var(--${c.ok === false ? 'red' : 'mu'}${c.ok === false ? '-t' : ''})">${c.detail}</span></div>`)}</div>
+      <div class="card"><span class="k">Order</span>${x.option.aksi.length ? x.option.aksi.map((a) => { const ok = (res.berhasil || []).find((b) => (b.aset || '').toLowerCase() === a.aset.toLowerCase());
+        const no = (res.batal || []).find((b) => (b.aset || '').toLowerCase() === a.aset.toLowerCase());
+        return html`<div class="row sb" style="font-size:14px"><span>${ok ? '✓' : no ? '✕' : x.status === 'running' ? '…' : '·'} ${a.jenis === 'beli' ? 'Beli' : 'Jual'} ${a.aset}</span><span class="mono">${rupiah(a.nominal)}${ok?.harga ? ` @ ${rupiah(Number(ok.harga))}` : ''}</span></div>${no ? html`<span class="small t-amber2">${no.alasan}</span>` : ''}`; }) : html`<span class="small">Tahan — tanpa transaksi.</span>`}</div>
+      ${st ? html`<div class="card violet"><div class="row sb"><span class="k violet">Di HP sekarang</span>${x.status === 'running' ? html`<span class="dot violet live"></span>` : ''}</div>
+        ${st.has_frame ? html`<img id="frame" alt="layar HP" style="width:100%;border-radius:10px;background:#000">` : ''}
+        ${(st.steps || []).slice(-6).map((t) => html`<span class="small">• ${typeof t === 'string' ? t : t.text || ''}</span>`)}${st.thought ? html`<span class="small t-amber2">${st.thought}</span>` : ''}</div>` : ''}
+      ${(res.peringatan || []).length ? html`<div class="card red"><span class="k">Periksa</span>${res.peringatan.map((w) => html`<span class="small">⚠ ${w}</span>`)}</div>` : ''}
+      ${x.status === 'done' ? html`<div class="card green"><span class="k green">Selesai</span><span class="small">${(res.berhasil || []).length} order berhasil · tercatat di Gaji (kategori investasi)</span></div>`
+        : x.status === 'failed' ? html`<div class="card red"><span class="small">${res.catatan || 'Tidak jadi — tidak ada yang dibeli/dijual.'}</span></div>` : ''}
+      <div class="btns"><button class="btn" data-act="openPluang">${icon('right', 16)} Buka Pluang</button>${x.task_id ? html`<a class="btn" href="#/misi/${x.task_id}">Lihat langsung</a>` : ''}</div>
+    </div>`);
+  const img = root.querySelector('#frame');
+  const stop = img && x.task_id ? liveFrame(img, x.task_id, 1500) : null;
+  const t = x.status === 'running' ? setInterval(() => render(), 5000) : null;
+  return () => { stop?.(); if (t) clearInterval(t); };
+}
+
 const KIND = { emas: 'Emas', saham_as: 'Saham AS', kripto: 'Kripto', reksa_dana: 'Reksa dana', lainnya: 'Lainnya' };
 let cur = null;
 
 export default {
   tab: 'beranda',
   feature: 'invest',
-  async render(root) {
+  async render(root, route) {
+    if (route?.params?.[0] === 'eksekusi') return execScreen(root);
     root.innerHTML = String(html`${header('Investasi')}<div class="scr">${loading()}</div>`);
     const s = cur = await get('/api/v1/app/invest');
     const snap = s.snapshot?.data, p = s.proposal;
     root.innerHTML = String(html`${header('Investasi', { sub: s.snapshot ? `Pluang · dibaca ${new Date(s.snapshot.at).toLocaleString('id-ID', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : 'Pluang' })}
       <div class="scr">
-        ${s.running ? html`<a class="card violet" href="#/misi/${s.running.task_id}" style="text-decoration:none"><div class="row sb"><span class="k violet">${s.running.action === 'eksekusi' ? 'Menjalankan pilihanmu di Pluang' : 'Membaca Pluang di HP'}</span><span class="dot violet live"></span></div>
+        ${s.running ? html`<a class="card violet" href="${s.running.action === 'eksekusi' ? '#/invest/eksekusi' : `#/misi/${s.running.task_id}`}" style="text-decoration:none"><div class="row sb"><span class="k violet">${s.running.action === 'eksekusi' ? 'Menjalankan pilihanmu di Pluang' : 'Membaca Pluang di HP'}</span><span class="dot violet live"></span></div>
           <span class="small">Ketuk untuk melihat langsung. ${s.running.action === 'eksekusi' ? 'Ketik PIN-mu sendiri saat diminta.' : 'Tidak ada yang dibeli/dijual.'}</span></a>` : ''}
         ${snap ? html`<div class="card"><div class="row sb"><span class="k">Portofolio</span><span class="mono" style="font-size:20px">${rupiah(snap.total, true)}</span></div>
             <span class="small">kas ${rupiah(snap.kas, true)}</span>
@@ -79,8 +114,10 @@ export default {
       const r = await withPassword(`${o.id}. ${o.judul}`, (password) => post(`/api/v1/app/invest/proposal/${cur.proposal.id}/choose`, { option: o.id, password }),
         { kicker: 'Investasi', button: o.aksi.length ? 'Kerjakan di Pluang' : 'Tahan', note: what || 'Tanpa transaksi.' });
       if (!r) return;
-      toast(r.hold ? 'Oke, ditahan dulu' : 'JARVIS membuka Pluang — ketik PIN saat diminta'); render();
+      toast(r.hold ? 'Oke, ditahan dulu' : 'JARVIS membuka Pluang — ketik PIN saat diminta');
+      if (r.hold) render(); else location.hash = '#/invest/eksekusi';
     },
+    openPluang() { openApp('pluang', 'Pluang'); },
     discuss() {
       const p = cur.proposal.data;
       discuss(`Soal pilihan investasi minggu ini (${p.ringkasan}) — opsi: ${p.opsi.map((o) => `${o.id}. ${o.judul}`).join('; ')}. Aku mau diskusi dulu sebelum memilih: mana yang paling cocok untukku dan kenapa?`);

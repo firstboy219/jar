@@ -3,6 +3,7 @@
 import { $, get, header, host, html, icon, on, post, render, send, speak, toast } from '../core.js';
 import { pick, upload } from '../upload.js';
 import { clock } from '../lib.js';
+import { resultView } from '../ui.js';
 
 const SKEY = 'jarvis_app_session';
 const sid = () => {
@@ -11,7 +12,8 @@ const sid = () => {
   return s;
 };
 
-let log, typing, bubble = null, files = [];
+let log, typing, bubble = null, files = [], count = 0, topic = '';
+const paintSub = () => { const el = document.querySelector('.hdr-t .s'); if (el) el.textContent = topic ? `${topic.slice(0, 40)} · ingat ${count} pesan` : `ingat ${count} pesan`; };
 const bars = new Map();
 const ROUTE = { core: 'perintah langsung · tanpa AI', assistant: 'otak percakapan', blocked: 'ditahan', silent: '' };
 
@@ -27,10 +29,26 @@ function chips(list) {   // quick replies under JARVIS' last answer
 function reportCard(ev) {
   const m = document.createElement('div');
   m.className = 'msg jarvis card';
-  m.innerHTML = String(html`<span class="k violet">${icon('check', 13)} Hasil misi</span><span class="sub" style="white-space:pre-wrap">${ev.text}</span>
+  m.innerHTML = String(html`<span class="k violet">${icon('check', 13)} Hasil misi</span><span class="sub" style="white-space:pre-wrap">${ev.text}</span><div class="rdata"></div>
     <div class="row" style="gap:6px;flex-wrap:wrap">${ev.task_id ? html`<a class="chip" href="#/misi/${ev.task_id}">Buka laporan</a>` : ''}<button class="chip" data-act="readText" data-v="${ev.text}">${icon('speaker', 13)} Bacakan</button></div>`);
   log.append(m);
   m.scrollIntoView({ block: 'end' });
+  if (ev.task_id) {   // the structured result (table, chart, links) right in the conversation
+    get(`/api/v1/app/missions/${ev.task_id}`).then((t) => {
+      if (t.result?.data) { m.querySelector('.rdata').innerHTML = String(resultView(t.result.data, '')); m.scrollIntoView({ block: 'end' }); }
+    }).catch(() => {});
+  }
+}
+
+/** Next steps the answer itself suggests: a price to watch, a date to keep, a list to save, a question to answer. */
+export function suggestions(text) {
+  const t = String(text || ''), out = [];
+  if (/\?\s*$/.test(t.trim())) out.push(['Ya', 'quick', 'Ya.'], ['Tidak', 'quick', 'Tidak.']);
+  if (/Rp\s?[\d.]{3,}/.test(t)) out.push(['Pantau harganya', 'quick', 'Jadwalkan pantau harga ini tiap hari dan kabari aku kalau turun.']);
+  if (/\b(\d{1,2}[./:]\d{2}|besok|lusa|senin|selasa|rabu|kamis|jumat|sabtu|minggu|\d{1,2}\s+(jan|feb|mar|apr|mei|jun|jul|agu|sep|okt|nov|des))/i.test(t)) out.push(['Ingatkan aku', 'quick', 'Ingatkan aku soal ini pada waktunya.']);
+  if ((t.match(/^\s*(?:[-•*]|\d+[.)])\s+/gm) || []).length >= 3) out.push(['Simpan ke Catatan', 'toTask', t]);
+  if (/https?:\/\//.test(t)) out.push(['Ringkas sumbernya', 'quick', 'Buka sumber yang kamu sebut dan ringkas isinya.']);
+  return out.slice(0, 3);
 }
 
 function add(role, text, at) {
@@ -107,6 +125,8 @@ export default {
       const { messages } = await get(`/api/v1/app/chat/history?session_id=${encodeURIComponent(sid())}`);
       if (!messages.length) add('sys', 'Tanya, minta, atau ajak ngobrol apa saja. Pekerjaan panjang jadi misi yang bisa kamu pantau.');
       for (const m of messages) add(m.role === 'user' ? 'user' : 'jarvis', m.content, m.created_at);
+      count = messages.length; topic = (messages.find((m) => m.role === 'user')?.content || '').split('\n')[0];
+      paintSub();
     } catch { add('sys', 'Riwayat belum bisa dimuat.'); }
     $('#chatf', root).addEventListener('submit', (e) => { e.preventDefault(); const i = $('#chatin', root); if (say(i.value)) i.value = ''; });
     const pending = sessionStorage.getItem('jarvis_app_pending');
@@ -121,8 +141,12 @@ export default {
         if (!mine(ev)) return;
         if (ev.text) {
           if (!bubble) bubble = add('jarvis', ev.text); else bubble.textContent = ev.text;
-          if (ROUTE[ev.route]) { const s = document.createElement('span'); s.className = 'small'; s.textContent = ROUTE[ev.route]; s.style.display = 'block'; bubble.append(s); }
-          chips([['Ringkas', 'quick', 'Ringkas jawabanmu tadi jadi 2 kalimat.'], ['Lebih detail', 'quick', 'Jelaskan lebih detail.'], ['Bacakan', 'readText', ev.text], ['Jadikan tugas', 'toTask', ev.text]]);
+          const meta = ev.meta || {};
+          const line = [ROUTE[ev.route], meta.model && meta.model.split('/').pop(), meta.seconds != null && `${String(meta.seconds).replace('.', ',')} dtk`,
+            meta.cost ? `$${meta.cost < 0.01 ? meta.cost.toFixed(4) : meta.cost.toFixed(3)}` : ''].filter(Boolean).join(' · ');
+          if (line) { const s = document.createElement('span'); s.className = 'small'; s.textContent = line; s.style.display = 'block'; bubble.append(s); }
+          chips([...suggestions(ev.text), ['Ringkas', 'quick', 'Ringkas jawabanmu tadi jadi 2 kalimat.'], ['Lebih detail', 'quick', 'Jelaskan lebih detail.'], ['Bacakan', 'readText', ev.text], ['Jadikan tugas', 'toTask', ev.text]].slice(0, 6));
+          count += 1; paintSub();
         }
         bubble = null; setTyping('');
       }),

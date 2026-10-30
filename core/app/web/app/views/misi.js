@@ -62,7 +62,9 @@ function detailView(t) {
       <h1 class="big" style="font-size:22px">${t.title}</h1>
       <div class="row wrap" style="gap:6px">${laneChip(lane, t.runtime_note)}${t.model_used ? html`<span class="tag">${t.model_used.split('/').pop()}</span>` : ''}<span class="tag">${dur(t.seconds)}</span>${t.cost ? html`<span class="tag">${usd(t.cost)}</span>` : ''}</div>
       ${t.runtime_note ? html`<p class="small" style="margin:0">Hermes: ${t.runtime_note}</p>` : ''}
-      ${t.station?.has_frame || t.station?.browsing ? html`<div class="livebox"><div class="bar2"><span class="dot red live"></span>LANGSUNG · ${t.station.page_title || t.station.url || 'browser'}</div><img id="frame" alt="Layar langsung misi"></div>` : ''}
+      ${t.station?.has_frame || t.station?.browsing ? html`<div class="livebox"><div class="bar2"><span class="dot red live"></span>LANGSUNG · ${t.station.page_title || t.station.url || 'browser'}</div><img id="frame" alt="Layar langsung misi" data-act="zoom" style="cursor:zoom-in"></div>
+        <div class="btns">${t.status === 'running' ? html`<button class="btn sm" data-act="${t.station.paused ? 'resume' : 'pause'}">${t.station.paused ? html`${icon('play', 14)} Lanjutkan` : html`${icon('stop', 14)} Jeda`}</button>` : ''}<button class="btn sm" data-act="zoom">Perbesar</button></div>
+        ${t.station.paused ? html`<span class="small t-amber2">Dijeda — JARVIS diam sampai kamu lanjutkan.</span>` : ''}` : ''}
       ${t.station?.thought ? html`<div class="card violet"><span class="k violet">Sedang dipikirkan</span><p class="sub">${t.station.thought}</p></div>` : ''}
       ${steps.length ? html`<div class="sec"><span>Rencana · diatur Hermes</span><span class="small" style="text-transform:none;letter-spacing:0">${doneSteps}/${steps.length}${left != null ? ` · sisa ±${Math.max(1, left)} mnt` : ''}</span></div><div class="steps">${steps.map((s, i) => html`<div class="step"><div class="rail"><span class="n ${i < doneSteps ? 'done' : (i === doneSteps && t.status === 'running' ? 'now' : '')}">${i < doneSteps ? icon('check', 13) : ''}</span>${i < steps.length - 1 ? html`<span class="ln"></span>` : ''}</div><div class="body"><span style="font-size:14px;${i < doneSteps ? 'color:var(--tx2)' : ''}">${s}</span></div></div>`)}</div>` : ''}
       ${live.length ? html`<details class="card" ${t.status === 'running' ? 'open' : ''}><summary class="small">Langkah terakhir (${live.length})</summary><div style="display:flex;flex-direction:column;gap:4px;margin-top:8px">${live.slice(-8).map((s) => html`<span class="small">• ${s.text || s.label || s.name || JSON.stringify(s)}</span>`)}</div></details>` : ''}
@@ -132,6 +134,16 @@ export default {
     },
     async runProject(b) { await post(`/api/v1/projects/${b.dataset.id}/run`); toast('Proyek dijalankan sekarang'); render(); },
     async stop() { await post(`/api/v1/workers/${currentId}/stop`); toast('Misi dihentikan.'); render(); },
+    async pause() { await post(`/api/v1/app/missions/${currentId}/pause`); toast('Dijeda'); render(); },
+    async resume() { await post(`/api/v1/app/missions/${currentId}/resume`); toast('Dilanjutkan'); render(); },
+    zoom() {   // the live screen full size, still live
+      const w = document.createElement('div');
+      w.style.cssText = 'position:fixed;inset:0;z-index:60;background:#000d;display:flex;align-items:center;justify-content:center;padding:8px';
+      w.innerHTML = '<img alt="Layar langsung misi" style="max-width:100%;max-height:100%;object-fit:contain">';
+      document.body.append(w);
+      const stopZoom = liveFrame(w.querySelector('img'), currentId, 1200);
+      w.addEventListener('click', () => { stopZoom(); w.remove(); });
+    },
     async start() { await post(`/api/v1/workers/${currentId}/start`); toast('Misi dimulai lagi.'); render(); },
     async say() {
       const r = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:12px"><span class="k cyan">Arahkan misi</span>

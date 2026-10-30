@@ -26,6 +26,7 @@ function jobScreen(v, job) {
         ${v.canary ? html`<span class="small t-amber2">Sedang diuji pada ${v.canary.canary_pct}% jalan (versi #${v.canary.id}):</span>${cfgView(v.canary.config, job)}` : ''}
         ${b ? html`<span class="small">cara bawaan: ${b.runs} jalan, ${b.runs ? Math.round(100 * b.ok / b.runs) : '–'}% berhasil (30 hr)</span>` : ''}
         ${v.active || v.canary ? html`<button class="btn danger sm" data-act="rollback">Batalkan perubahan terakhir</button>` : ''}</div>
+      ${v.metrics ? metricTable(v.metrics, v.metrics_prev) : ''}
       <form class="card violet" id="pf"><span class="k violet">Ubah dengan kata-kata</span>
         <textarea name="words" class="inp" required minlength="5" placeholder="${job ? 'mis. selalu sebut tenggat dan jawab lebih singkat; pakai otak berat untuk ini' : 'mis. pindahkan ke otak berat lebih cepat bila otak ringan sering gagal'}"></textarea>
         <button class="btn primary" data-act="propose">${icon('bolt', 16)} Susun perubahan (otak berat)</button></form>
@@ -34,7 +35,7 @@ function jobScreen(v, job) {
           ${draft.note ? html`<span class="small">Alasan: ${draft.note}</span>` : ''}
           <div class="btns">${job ? html`<button class="btn" data-act="evaluate" data-id="${draft.id}">Uji ulang pada contoh nyata</button>` : ''}
             ${job ? html`<button class="btn amber" data-act="deploy" data-id="${draft.id}" data-m="canary">Pasang 10%</button>` : ''}<button class="btn primary" data-act="deploy" data-id="${draft.id}" data-m="all">Pasang semua</button></div>
-          ${evalRes ? html`<div class="card" style="background:var(--bg)"><div class="row sb"><span class="ttl">Hasil uji: versi baru ${evalRes.verdict}</span><span class="mono">B ${evalRes.score.B} · A ${evalRes.score.A} · seri ${evalRes.score.seri}</span></div>
+          ${evalRes ? html`<div class="card" style="background:var(--bg)"><div class="row sb"><span class="ttl">Hasil uji: versi baru ${evalRes.verdict}${evalRes.worse ? html` · <span class="t-amber2">${evalRes.worse} kasus memburuk</span>` : ''}</span><span class="mono">B ${evalRes.score.B} · A ${evalRes.score.A} · seri ${evalRes.score.seri}</span></div>
             ${evalRes.samples.map((s, i) => html`<details><summary class="small">Contoh ${i + 1}: ${s.error ? `gagal (${s.error})` : s.winner === 'B' ? 'baru lebih baik' : s.winner === 'A' ? 'lama lebih baik' : 'setara'} — ${s.why || ''}</summary>
               ${s.a ? html`<span class="small">Lama:</span><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:160px;overflow:auto">${s.a}</pre><span class="small">Baru:</span><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:160px;overflow:auto">${s.b}</pre>` : ''}</details>`)}</div>` : ''}</div>` : ''}
       ${job ? html`<details class="card"><summary class="small">Atur manual</summary><form id="mf" style="display:flex;flex-direction:column;gap:8px">
@@ -66,6 +67,17 @@ function models(m) {
     <span class="small">Ganti model di jar1 → Komposisi AI. Semua lewat OpenRouter; isi sensitif hanya ke model berbayar.</span></details>`;
 }
 
+// the job's numbers this week against last week
+function metricTable(a, b) {
+  const rows = [['Berhasil', 'ok_pct', '%', true], ['Gagal', 'fail_pct', '%', false], ['Otak tepat (tanpa dinaikkan)', 'right_brain_pct', '%', true], ['Tanpa AI', 'no_ai_pct', '%', true],
+    ['Biaya / hari', 'cost_per_day', '$', false], ['Waktu (median)', 'p50_s', 's', false], ['Waktu (10% terlama)', 'p90_s', 's', false]];
+  const fmt = (v, u) => (v == null ? '–' : u === '$' ? usd(v) : u === 's' ? `${String(v).replace('.', ',')} dtk` : `${v}%`);
+  return html`<div class="card"><div class="row sb"><span class="k">Angka 7 hari</span><span class="small">${a.runs} jalan · minggu lalu ${b?.runs ?? 0}</span></div>
+    <div class="tblbox"><table class="tbl"><thead><tr><th scope="col">Ukuran</th><th scope="col">Minggu ini</th><th scope="col">Minggu lalu</th></tr></thead><tbody>
+    ${rows.map(([l, k, u, up]) => { const x = a[k], y = b?.[k]; const better = x != null && y != null && x !== y ? ((x > y) === up) : null;
+      return html`<tr><td>${l}</td><td class="mono" style="${better == null ? '' : `color:var(--${better ? 'green' : 'amber'}-t)`}">${fmt(x, u)}</td><td class="mono">${fmt(y, u)}</td></tr>`; })}</tbody></table></div></div>`;
+}
+
 let cur = { job: null };
 
 export default {
@@ -86,6 +98,11 @@ export default {
       <div class="scr">
         <a class="card violet" href="#/bengkel/global" style="text-decoration:none"><span class="k violet">Ambang Hermes</span>${cfgView(d.global.global, '')}</a>
         ${models(m)}
+        ${d.drafts.length ? html`<div class="card cyan"><div class="row sb"><span class="k cyan">Usulan menunggu · ${d.drafts.length}</span><button class="btn sm primary" data-act="testAll">Uji semua & terapkan 10%</button></div>
+          ${d.drafts.map((x) => html`<a class="row sb" href="#/bengkel/${x.job}" style="gap:8px;text-decoration:none;color:inherit;padding:4px 0">
+            <span class="grow" style="min-width:0"><span style="font-size:13px">${x.job.replace(':', ' · ')}</span><br><span class="small">${x.created_by === 'jarvis' ? '🤖 usulan JARVIS' : 'usulanmu'} · ${(x.note || x.request || '').slice(0, 90)}</span></span>
+            ${x.eval ? html`<span class="tag ${x.eval.verdict === 'lebih baik' ? 'green' : x.eval.verdict === 'lebih buruk' ? 'red' : ''}">${x.eval.verdict}</span>` : html`<span class="tag">belum diuji</span>`}</a>`)}
+          <span class="small">Hanya yang lebih baik di uji ulang yang dipasang ke 10% jalan; dipantau dan dibatalkan otomatis bila memburuk.</span></div>` : ''}
         <div class="list">${d.jobs.map((j) => html`<a class="li click" href="#/bengkel/${j.job}"><div class="grow" style="min-width:0">
           <div class="row sb"><span style="font-size:14px">${j.feature} · ${j.action}</span><span class="mono small">${j.runs}×</span></div>
           <div class="row" style="gap:6px">${laneChip(j.lane)}<span class="small">${j.ok_pct ?? '–'}% berhasil · ${j.avg_s} dtk</span>${j.versions.map((s) => html`<span class="tag ${ST[s][1]}">${ST[s][0]}</span>`)}</div></div>${icon('right', 16)}</a>`)}</div>
@@ -115,6 +132,12 @@ export default {
       if (!ok) return;
       toast(all ? 'Dipakai penuh' : 'Dipasang untuk 10% jalan — dipantau otomatis');
       draft = null; evalRes = null; render();
+    },
+    async testAll() {
+      const r = await withPassword('Uji semua usulan & terapkan yang lebih baik ke 10%', (password) => post('/api/v1/app/brain/drafts/test-all', { password }),
+        { kicker: 'Ubah cara kerja otak', button: 'Uji & terapkan', note: 'Diuji ulang pada masukan nyata; bisa beberapa menit.' });
+      if (!r) return;
+      toast(`${r.tested.filter((x) => x.result === 'dipasang 10%').length} dipasang 10% dari ${r.tested.length} usulan`); render();
     },
     async rollback() {
       const ok = await withPassword('Batalkan perubahan terakhir', (password) => post(`/api/v1/app/brain/${encodeURIComponent(cur.job)}/rollback`, { password }),

@@ -133,6 +133,13 @@ let current = null, cleanup = null;
 export function view(name, mod) { views.set(name, mod); }
 export function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 
+/** Open one of the approved apps on the phone (Pluang, Gojek, …); on the web, say where to do it. */
+export function openApp(name, label = name) {
+  if (host.has('openApp') && host.call('openApp', name)) return true;
+  toast(host.has('openApp') ? `${label} belum terpasang di HP ini.` : `Buka ${label} di HP-mu.`, true);
+  return false;
+}
+
 /** Talk it over with JARVIS: Obrolan opens and the question (with what it is about) is sent. */
 export function discuss(text) { sessionStorage.setItem('jarvis_app_pending', text); go('#/obrolan'); }
 export function back() { if (history.length > 1) history.back(); else go('#/'); }

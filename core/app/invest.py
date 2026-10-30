@@ -301,6 +301,34 @@ async def _exec_done(run_id: int, result: dict) -> None:
                          if ok and isinstance(got, dict) else (result.get("text") or "")[:200]})
 
 
+async def exec_view() -> dict | None:
+    """The pick being carried out (or the last one): the checks it passed before Pluang was opened, the mission on the phone, the result."""
+    row = await db.pool().fetchrow("SELECT * FROM invest_proposals WHERE chosen IS NOT NULL ORDER BY decided_at DESC NULLS LAST, id DESC LIMIT 1")
+    if not row:
+        return None
+    p = dict(row)
+    opt = next((o for o in p["data"]["opsi"] if o["id"] == p["chosen"]), None) or {"judul": p["chosen"], "aksi": []}
+    s = await appsettings.get("invest")
+    buy = sum(a["nominal"] for a in opt["aksi"] if a["jenis"] == "beli")
+    budget = p["data"].get("budget")
+    snap = await db.pool().fetchval("SELECT data FROM invest_snapshots WHERE id = $1", p["snapshot_id"]) or {"aset": []}
+    priced = {a["nama"].lower(): a.get("harga") for a in snap.get("aset") or []}
+    checks = [
+        {"label": "Password admin", "ok": bool(p["decided_by"]), "detail": f"disetujui {p['decided_by'] or '-'}"},
+        {"label": f"Batas Rp{int(s['limit']):,}".replace(",", "."), "ok": buy <= float(s["limit"]), "detail": f"pembelian Rp{int(buy):,}".replace(",", ".")},
+        {"label": "Anggaran investasi bulan ini", "ok": (buy <= budget["left"]) if budget else None,
+         "detail": (f"sisa Rp{int(budget['left']):,}".replace(",", ".") if budget else "tidak ada pos investasi di Gaji")},
+        {"label": f"Pengaman harga ±{s['price_guard_pct']}%", "ok": None if (unpriced := [a["aset"] for a in opt["aksi"] if not priced.get(a["aset"].lower())]) else True,
+         "detail": (f"tanpa harga acuan: {', '.join(unpriced)} — dicek dari ringkasan sebelum konfirmasi" if unpriced
+                    else "harga saat dibaca dikirim ke HP; dibatalkan bila bergeser")},
+        {"label": "Tanpa top-up / tarik saldo", "ok": True, "detail": "aturan tetap aplikasi"},
+        {"label": "PIN diketik kamu", "ok": True, "detail": "JARVIS berhenti di layar PIN"},
+    ]
+    task_id = await db.pool().fetchval("SELECT task_id FROM flow_runs WHERE id = $1", p["exec_run_id"]) if p.get("exec_run_id") else None
+    return {"proposal": p["id"], "status": p["status"], "option": opt, "checks": checks, "task_id": task_id, "result": p.get("result"),
+            "decided_at": p.get("decided_at")}
+
+
 async def _due() -> str:
     s = await appsettings.get("invest")
     return s["check_at"] if datetime.now(WIB).weekday() == DAYS.get(str(s["check_day"]).lower(), 0) else ""
@@ -348,6 +376,11 @@ class ChooseIn(BaseModel):
 @router.get(API)
 async def api_state(device: dict = Depends(owner)):
     return await state()
+
+
+@router.get(API + "/exec")
+async def api_exec(device: dict = Depends(owner)):
+    return {"exec": await exec_view()}
 
 
 @router.post(API + "/read")

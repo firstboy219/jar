@@ -35,7 +35,10 @@ function liveView(c, lv) {
     <div class="card red"><div class="row sb"><span class="row" style="gap:8px"><span class="dot red"></span><span class="k" style="color:var(--red-t)">${c.state === 'recording' ? 'Merekam' : 'Menyusun notulen…'}</span></span>
       <span class="mono" id="clk" style="font-size:22px">${c.state === 'recording' ? clock(c.started_at) : dur(c.duration_s)}</span></div>
       <span class="ttl">${c.title || 'Rapat'}</span><span class="small">${c.chunks} menit terkirim${c.confidential ? ' · rahasia: hanya transkrip' : ''}${lv?.topik ? ` · sedang membahas: ${lv.topik}` : ''}</span>
-      ${c.state === 'recording' ? html`<div class="btns"><button class="btn" data-act="mark">${icon('alert', 16)} Tandai penting</button><button class="btn danger" data-act="stop">${icon('stop', 16)} Selesai</button></div>` : ''}</div>
+      ${c.room || (c.participants || []).length ? html`<span class="small">${c.room ? `${icon('pin', 12)} ${c.room}` : ''}${c.room && c.participants?.length ? ' · ' : ''}${(c.participants || []).length ? `${c.participants.length} peserta: ${c.participants.slice(0, 6).join(', ')}${c.participants.length > 6 ? '…' : ''}` : ''}</span>` : ''}
+      ${c.paused ? html`<span class="small t-amber2">Dijeda — yang dibicarakan sekarang tidak direkam.</span>` : ''}
+      ${c.state === 'recording' ? html`<div class="btns"><button class="btn" data-act="pause" data-on="${c.paused ? '' : '1'}">${c.paused ? html`${icon('play', 16)} Lanjut` : html`${icon('stop', 16)} Jeda`}</button><button class="btn" data-act="mark">${icon('alert', 16)} Tandai</button><button class="btn danger" data-act="stop">Selesai</button></div>
+        <label class="row" style="gap:8px;font-size:13px"><input type="checkbox" data-act="secret" ${c.confidential ? 'checked' : ''}> Rahasia — mulai sekarang tidak dikirim ke AI</label>` : ''}</div>
     ${(lv?.keputusan || []).length ? html`<div class="card green"><span class="k green">Keputusan sejauh ini</span>${lv.keputusan.map((k) => html`<span class="sub">• ${k}</span>`)}</div>` : ''}
     ${tasks.length ? html`<div class="card amber"><span class="k amber">Tugas</span>${tasks.map((t) => html`<div class="row sb"><span style="font-size:14px">${t.pemilik ? html`<b>Kamu</b>` : (t.siapa || '?')}: ${t.apa}</span><span class="mono small">${t.kapan || ''}</span></div>`)}</div>` : ''}
     ${!c.confidential && c.state === 'recording' ? html`<form class="card" id="askf"><label class="field">Tanya soal rapat ini<input name="q" placeholder="mis. tadi Sari bilang tenggatnya kapan?" required minlength="2"></label><button class="btn" data-act="ask">Tanya</button><div id="ans"></div></form>` : ''}
@@ -95,6 +98,8 @@ export default {
       if ((await sheet(String(html`<p>Selesaikan rekaman? Notulen lengkap disusun setelah ini.</p><div class="btns"><button class="btn" data-close="">Lanjut rekam</button><button class="btn danger" data-close="y">Selesai</button></div>`))) !== 'y') return;
       await post('/api/v1/meetings/stop-request'); toast('Rekaman dihentikan — menyusun notulen'); setTimeout(render, 2500);
     },
+    async pause(b) { const on = !!b.dataset.on; await post(`/api/v1/app/meeting/${cur.card.id}/pause`, { on }); toast(on ? 'Dijeda' : 'Merekam lagi'); render(); },
+    async secret(b) { const on = b.checked; await post(`/api/v1/app/meeting/${cur.card.id}/confidential`, { on }); toast(on ? 'Rahasia: transkrip saja, tanpa AI' : 'Tidak rahasia lagi'); render(); },
     async mark() { const c = cur?.card; if (!c) return; await post(`/api/v1/meetings/${c.id}/marks`, { t: Math.max(0, Date.now() / 1000 - c.started_at), note: 'penting' }); toast('Ditandai'); },
     async ask(b, e) {
       const f = $('#askf');

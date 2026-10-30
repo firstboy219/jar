@@ -303,6 +303,8 @@ async def listing(source: str | None = None, days: int = 3) -> dict:
     for r in rows:
         if r["id"] in jobs:
             r["job_reply"] = jobs[r["id"]]   # an interview invitation JARVIS answers (Karier)
+        if r["triage"] in ("needs", "fyi", "new") and room_change(f"{r.get('subject') or ''}. {r.get('snippet') or ''}"):
+            r["room"] = await room_offer(r)   # a meeting moved: offer to update the calendar
     needs = group([r for r in rows if r["triage"] in ("needs", "new")])
     fyi = group([r for r in rows if r["triage"] == "fyi"])
     ignored = [{"id": r["id"], "sender": r["sender"], "subject": r["subject"] or r["snippet"][:80], "source": r["source"]} for r in rows if r["triage"] == "ignore"][:40]
@@ -336,6 +338,29 @@ async def item(item_id: int) -> dict:
 
 
 # ---------- drafts and sending ----------
+
+ROOM_WORDS = re.compile(r"(?:ruang(?:an)?(?: rapat| meeting)?|room|lokasi(?: rapat)?)\s+(?:pindah|berubah|diganti|dipindah(?:kan)?|changed|moved)\s+(?:ke|menjadi|jadi|to)\s+"
+                        r"([A-Z0-9][\w .,'/-]{1,60}?)(?=[.,;!\n]|\s+(?:ya|yah|jam|pukul|mulai|tetap|karena)\b|$)", re.I)
+
+
+def room_change(text: str) -> str:
+    """The new room a message announces ("ruang rapat pindah ke Lt 5 Melati"), or "". Pure."""
+    m = ROOM_WORDS.search(text or "")
+    return m.group(1).strip() if m else ""
+
+
+async def room_offer(it: dict) -> dict | None:
+    """A message moving a meeting: the meeting on his calendar it most likely means (today/tomorrow, words of the subject in common)."""
+    room = room_change(f"{it.get('subject') or ''}. {it.get('body') or it.get('snippet') or ''}")
+    if not room:
+        return None
+    words = {w for w in re.findall(r"\w{4,}", (it.get("subject") or "").lower())} - {"ruang", "rapat", "meeting", "pindah", "ruangan"}
+    rows = await db.pool().fetch("SELECT id, ext_id, title, start_at, location FROM calendar_events WHERE source = 'outlook' AND start_at BETWEEN now() - interval '1 hour' AND now() + interval '2 days' ORDER BY start_at")
+    best = max(rows, key=lambda r: len(words & set(re.findall(r"\w{4,}", r["title"].lower()))), default=None)
+    if not best or (words and not words & set(re.findall(r"\w{4,}", best["title"].lower())) and len(rows) > 1):
+        return None
+    return {"room": room, "event_id": best["id"], "title": best["title"], "start_at": best["start_at"], "old": best["location"]}
+
 
 ATTACH_WORDS = re.compile(r"\b(lampir\w*|attach\w*|terlampir|mohon (dikirim|kirimkan)|kirimkan (file|dokumen|datanya)|invoice|faktur|struk|bukti (bayar|transfer|pembayaran)|"
                           r"(file|dokumen) (nya|tersebut))\b", re.I)
@@ -600,6 +625,72 @@ async def api_reply(item_id: int, body: TextIn, device: dict = Depends(owner)):
         return await wa_reply(item_id, body.text)
     except ValueError as e:
         _err(e)
+
+
+class BothIn(BaseModel):
+    email_id: int
+    wa_id: int
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class VoiceIn(BaseModel):
+    attachment_id: str = Field(min_length=8, max_length=64)
+    style: str = Field(default="kamu", max_length=20)
+
+
+@router.post(API + "/item/{item_id}/voice")
+async def api_voice(item_id: int, body: VoiceIn, device: dict = Depends(owner)):
+    """"Ubah dengan suara": his spoken instruction (recorded in the app) → text → the draft written again with it."""
+    from . import meeting_live, stt
+    if not attachments.meta(body.attachment_id):
+        raise HTTPException(404, "rekaman tidak ada")
+
+    async def hear():
+        pcm = await meeting_live._pcm(str(attachments._path(body.attachment_id) / "file"))
+        return (await stt.transcribe(pcm)).get("text", "").strip()
+    r = await master.run(master.Job("inbox", "arahan-suara", "dengar arahan pemilik untuk draf", skill=hear))
+    said = r.get("result") if r["status"] == "done" else ""
+    if not said:
+        raise HTTPException(409, "suaranya tidak terdengar — coba lagi")
+    try:
+        d = await draft(item_id, body.style, said)
+    except ValueError as e:
+        _err(e)
+    return {**d, "heard": said}
+
+
+class RoomIn(BaseModel):
+    event_id: int
+    room: str = Field(min_length=1, max_length=120)
+
+
+@router.post(API + "/room")
+async def api_room(body: RoomIn, device: dict = Depends(owner)):
+    """His tap on "Perbarui kalender": the meeting's room in Outlook (and here) becomes the new one."""
+    ev = await db.pool().fetchrow("SELECT ext_id, title FROM calendar_events WHERE id = $1 AND source = 'outlook'", body.event_id)
+    if not ev:
+        raise HTTPException(404)
+
+    async def change():
+        await outlook.update_event_location(ev["ext_id"], body.room)
+        await db.pool().execute("UPDATE calendar_events SET location = $2 WHERE id = $1", body.event_id, body.room)
+        return {"title": ev["title"], "room": body.room}
+    r = await master.run(master.Job("inbox", "ruang-rapat", f"perbarui ruang rapat {ev['title']}", skill=change))
+    if r["status"] != "done":
+        raise HTTPException(409, r.get("error") or "kalender tidak bisa diperbarui")
+    return r["result"]
+
+
+@router.post(API + "/both")
+async def api_both(body: BothIn, device: dict = Depends(owner)):
+    """One answer to a matter that came by email and WhatsApp: the WhatsApp reply goes now (his tap), the email gets the same words as a
+    draft to read and send (sending email is always his Kirim)."""
+    try:
+        wa = await wa_reply(body.wa_id, body.text)
+        d = await save_draft(body.email_id, body.text)
+    except ValueError as e:
+        _err(e)
+    return {"wa": wa, "draft": {"item": body.email_id, "body": d["body"]}}
 
 
 @router.post(API + "/item/{item_id}/snooze")

@@ -109,6 +109,27 @@ async def api_live(meeting_id: str, device: dict = Depends(owner)):
     return dict(m)
 
 
+class FlagIn(BaseModel):
+    on: bool
+
+
+@router.post(API + "/{meeting_id}/pause")
+async def api_pause(meeting_id: str, body: FlagIn, device: dict = Depends(owner)):
+    from . import meetings
+    from .appauth import actor
+    return {"paused": await meetings.set_paused(meeting_id, body.on, actor(device))}
+
+
+@router.post(API + "/{meeting_id}/confidential")
+async def api_confidential(meeting_id: str, body: FlagIn, device: dict = Depends(owner)):
+    from . import meetings
+    from .appauth import actor
+    try:
+        return {"confidential": await meetings.set_confidential(meeting_id, body.on, actor(device))}
+    except (meetings.MeetingError, ValueError) as e:
+        raise HTTPException(409, str(e))
+
+
 @router.post(API + "/{meeting_id}/ask")
 async def api_ask(meeting_id: str, body: AskIn, device: dict = Depends(owner)):
     """A question during the meeting, answered from what was said so far (after the meeting, the full transcript answers it)."""
