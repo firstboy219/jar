@@ -104,4 +104,9 @@ class StageTest {
         assertTrue(youtubeErrorText("error:150")!!.contains("tidak mengizinkan"))
         assertTrue(youtubeErrorText("error:5")!!.contains("kode 5"))
     }
+
+    @Test fun videoSpeedCyclesAndTheTvLink() {
+        assertEquals(1.25f, nextRate(1f)); assertEquals(1.5f, nextRate(1.25f)); assertEquals(2f, nextRate(1.5f)); assertEquals(0.75f, nextRate(2f)); assertEquals(1f, nextRate(0.75f))
+        assertEquals("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s", online.cosger.jarvis.media.MediaRoutes.webUrl("dQw4w9WgXcQ", 42))
+    }
 }

@@ -85,7 +85,8 @@ sealed interface ServerEvent {
     /** ADR-087: a feature's settings changed on the server (from the web or the app) — the phone re-reads what it keeps itself (the alarm). */
     data class SettingsChanged(val key: String) : ServerEvent { override val sessionId: String? = null }
     /** ADR-087 (Bimbing layar): a guidance session started / its next step / it ended. */
-    data class Guide(val id: Long, val mode: String, val goal: String, val text: String, val target: String, val status: String, val n: Int) : ServerEvent {
+    data class Guide(val id: Long, val mode: String, val goal: String, val text: String, val target: String, val status: String, val n: Int,
+                     val where: String = "", val total: Int = 0) : ServerEvent {
         override val sessionId: String? = null
     }
     /** ADR-087: the live trip (its next leg) for the ongoing notification; status done/cancelled clears it. */
@@ -204,7 +205,7 @@ object Protocol {
             "notify" -> ServerEvent.Notify(o.str("title"), o.str("text"), o.str("kind"), o.str("route"))
             "settings" -> ServerEvent.SettingsChanged(o.str("key"))
             "guide" -> ServerEvent.Guide(o["id"]?.jsonPrimitive?.longOrNull ?: 0, o.str("mode"), o.str("goal"), o.str("instruksi"), o.str("target"), o.str("status"),
-                o["n"]?.jsonPrimitive?.intOrNull ?: 0)
+                o["n"]?.jsonPrimitive?.intOrNull ?: 0, o.str("posisi"), o["total"]?.jsonPrimitive?.intOrNull ?: 0)
             "trip" -> ServerEvent.Trip(o["id"]?.jsonPrimitive?.longOrNull ?: 0, o.str("status"), o.str("title"), o.str("text"), o.str("route"), o.str("leg"), o.str("driver"))
             "owner_choice" -> ServerEvent.OwnerChoice(
                 o.long("id") ?: return null, o.str("status").ifEmpty { "open" }, o.str("title"), o.str("prompt"),

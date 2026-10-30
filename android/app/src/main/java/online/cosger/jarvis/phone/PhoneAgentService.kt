@@ -316,6 +316,49 @@ class PhoneAgentService : AccessibilityService() {
         }
     }
 
+    // ---------- the guide's frame around the button to tap (ADR-087 phase J) ----------
+
+    private var frame: android.view.View? = null
+    private val frameHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /** A frame drawn around [left, top, right, bottom] (screen pixels) with a small label; it lets touches through and goes after 8 s. */
+    fun highlight(left: Int, top: Int, right: Int, bottom: Int, label: String) {
+        clearHighlight()
+        val wm = getSystemService(WindowManager::class.java) ?: return
+        val pad = (6 * resources.displayMetrics.density).toInt()
+        val box = android.widget.FrameLayout(this).apply {
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setStroke((3 * resources.displayMetrics.density).toInt(), Color.rgb(34, 211, 238))
+                cornerRadius = 10 * resources.displayMetrics.density
+                setColor(Color.argb(40, 34, 211, 238))
+            }
+            if (label.isNotBlank()) addView(TextView(context).apply {
+                text = label.take(40); textSize = 11f; setTextColor(Color.WHITE); setBackgroundColor(Color.argb(220, 8, 145, 178)); setPadding(pad, 2, pad, 2)
+            }, android.widget.FrameLayout.LayoutParams(android.widget.FrameLayout.LayoutParams.WRAP_CONTENT, android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.START))
+        }
+        val lp = WindowManager.LayoutParams((right - left) + pad * 2, (bottom - top) + pad * 2 + (if (label.isNotBlank()) (16 * resources.displayMetrics.density).toInt() else 0),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, PixelFormat.TRANSLUCENT).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = left - pad
+            y = top - pad
+        }
+        runCatching { wm.addView(box, lp); frame = box }
+        frameHandler.postDelayed({ clearHighlight() }, 8_000)
+    }
+
+    fun clearHighlight() {
+        frameHandler.removeCallbacksAndMessages(null)
+        val f = frame ?: return
+        frame = null
+        runCatching { getSystemService(WindowManager::class.java)?.removeView(f) }
+    }
+
+    /** The app in front (for "Kerjakan untukku": the server checks it is one JARVIS may operate). */
+    fun foregroundPackage(): String = rootInActiveWindow?.packageName?.toString().orEmpty()
+
     // ---------- the banner: JARVIS is working, tap to stop ----------
 
     private fun showBanner(onStop: () -> Unit) {

@@ -607,12 +607,24 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             "start" -> startGuide(e.id, e.goal)
             "step" -> {
                 val done = e.status == "selesai"
-                online.cosger.jarvis.guide.GuideNotice.show(context, e.n, e.text, e.target, done)
+                online.cosger.jarvis.guide.GuideNotice.show(context, e.n, e.text, e.target, done, e.where, e.total)
                 if (e.text.isNotBlank()) speaker.say(e.text)
+                frameTarget(e.target)
                 if (done || e.status == "buntu") guideJob?.cancel()
             }
-            "stop" -> { guideJob?.cancel(); online.cosger.jarvis.guide.GuideNotice.clear(context) }
+            "stop" -> { guideJob?.cancel(); online.cosger.jarvis.guide.GuideNotice.clear(context); online.cosger.jarvis.phone.PhoneAgentService.instance?.clearHighlight() }
         }
+    }
+
+    @Volatile private var guideLines: List<ScreenText.Line> = emptyList()
+    @Volatile private var guideScale = 1f
+
+    /** A frame around the step's target on the screen (where the OCR saw those words), when JARVIS' accessibility service is on. */
+    private fun frameTarget(target: String) {
+        val svc = online.cosger.jarvis.phone.PhoneAgentService.instance ?: return
+        val line = ScreenText.findTarget(guideLines, target) ?: return svc.clearHighlight()
+        val k = guideScale
+        svc.highlight((line.left * k).toInt(), (line.top * k).toInt(), (line.right * k).toInt(), (line.bottom * k).toInt(), "ketuk ini")
     }
 
     private fun startGuide(id: Long, goal: String) {
@@ -625,15 +637,20 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 delay(GUIDE_LOOK_MS)
                 if (!screen.active.value) continue
                 val bmp = withContext(Dispatchers.Default) { runCatching { screen.latestBitmap() }.getOrNull() } ?: continue
-                val text = withTimeoutOrNull(2_500) { ScreenText.read(bmp) }.orEmpty()
+                val lines = withTimeoutOrNull(2_500) { ScreenText.readLines(bmp) }.orEmpty()
+                val text = ScreenText.arrange(lines.map { it.top to it.text })
                 val key = online.cosger.jarvis.guide.GuideNotice.key(text)
                 if (key.length < 12) continue          // a secure (black) screen or nothing to read
                 if (key != seen) { seen = key; continue }   // still changing: look again
                 if (key == sent) continue               // settled and already told
                 sent = key
+                guideLines = lines
+                guideScale = context.resources.displayMetrics.widthPixels.toFloat() / bmp.width.coerceAtLeast(1)
+                val app = online.cosger.jarvis.phone.PhoneAgentService.instance?.foregroundPackage().orEmpty()
                 runCatching {
                     console.post("/api/v1/app/guide/$id/step", kotlinx.serialization.json.buildJsonObject {
                         put("screen_text", kotlinx.serialization.json.JsonPrimitive(text.take(20_000)))
+                        if (app.isNotBlank()) put("app", kotlinx.serialization.json.JsonPrimitive(app))
                     })
                 }.onFailure { if (it.message.orEmpty().contains("sudah selesai")) cancel() }
             }

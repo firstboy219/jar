@@ -96,6 +96,16 @@
             android:configChanges="orientation|screenSize"
             android:theme="@style/Theme.Jarvis" />
         <activity
+            android:name=".media.VideoPipActivity"
+            android:exported="false"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=".pip"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout"
+            android:theme="@style/Theme.Jarvis" />
+        <activity
             android:name=".web.WebLoginActivity"
             android:exported="false"
             android:theme="@style/Theme.Jarvis" />

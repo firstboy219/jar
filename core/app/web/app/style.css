@@ -230,3 +230,16 @@ body.warm, body.warm #nav, body.warm .hdr, body.warm #dock { --bg: #0C0907; --s1
 body.has-player #view { padding-bottom: calc(220px + var(--safe-b)); }
 body[data-view="obrolan"] #player { bottom: calc(126px + var(--safe-b)); }
 @media (min-width: 1024px) { #player { left: auto; right: 24px; width: 380px; bottom: 80px; } }
+
+/* ADR-087 phase J: the desktop cockpit — navigation | the screen | what waits, what runs, the flow */
+#side { display: none; }
+@media (min-width: 1360px) {
+  #shell { grid-template-columns: 232px minmax(0, 1fr) 340px; }
+  #side:not([hidden]) { display: block; position: sticky; top: 0; height: 100vh; overflow: auto; border-left: 1px solid var(--s2); background: var(--bg); }
+  .side-in { display: flex; flex-direction: column; gap: 10px; padding: 18px 14px 40px; }
+  .side-in .sec { display: flex; justify-content: space-between; align-items: center; }
+  .side-in .card { padding: 10px 12px; }
+  #dock { right: 340px; }
+  .chatbar { right: 340px; }
+  #player { right: 364px; }
+}

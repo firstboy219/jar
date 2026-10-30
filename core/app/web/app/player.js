@@ -1,7 +1,7 @@
 // The app's player (ADR-087): whatever JARVIS puts on the stage as music, a sound or a video — from Musik, Video, a playlist, the chat —
 // plays here, in a bar above the dock (a video opens above it, in the official YouTube player served from JARVIS' own origin). The server
 // hears "ended"/"next"/"prev" back, so a playlist moves on by itself.
-import { $, api, embedded, get, html, icon, on, post, send } from './core.js';
+import { $, api, castTv, embedded, get, html, icon, on, pickSpeaker, pipVideo, post, send } from './core.js';
 
 const YT = /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
 let cur = null, audio = null, lastUrl = null, open = false, watch = null;
@@ -49,6 +49,8 @@ function paint() {
       ${yt ? html`<button class="ib sm" data-pl="toggle" aria-label="${open ? 'Tutup video' : 'Buka video'}">${icon(open ? 'down' : 'play', 18)}</button>`
            : html`<button class="ib sm" data-pl="play" aria-label="${playing ? 'Jeda' : 'Putar'}">${icon(playing ? 'pause' : 'play', 18)}</button>`}
       ${cur.playlist ? html`<button class="ib sm" data-pl="next" aria-label="Berikutnya">${icon('right', 18)}</button>` : ''}
+      ${yt ? html`<button class="ib sm" data-pl="pip" aria-label="Jendela kecil">${icon('pages', 16)}</button><button class="ib sm" data-pl="tv" aria-label="Ke TV">${icon('screen', 16)}</button>`
+           : html`<button class="ib sm" data-pl="speaker" aria-label="Pilih speaker / TV">${icon('speaker', 16)}</button>`}
       <button class="ib sm" data-pl="close" aria-label="Tutup pemutar">${icon('close', 16)}</button>
     </div>`);
 }
@@ -97,6 +99,11 @@ export function startPlayer() {
     const a = b.dataset.pl;
     if (a === 'play') { if (!audio) return; if (audio.paused) audio.play(); else audio.pause(); }
     else if (a === 'toggle') { open = !open; paint(); if (open) watchVideo(); else clearInterval(watch); }
+    else if (a === 'pip' || a === 'tv') {
+      const f = document.querySelector('#player iframe'); let t = 0;
+      try { t = JSON.parse(f?.contentWindow?.jv?.({ cmd: 'info' }) || '{}').t || 0; f?.contentWindow?.jv?.({ cmd: 'pause' }); } catch { /* not loaded */ }
+      (a === 'pip' ? pipVideo : castTv)(YT.exec(cur.url || '')[1], t);
+    } else if (a === 'speaker') { pickSpeaker(audio); }
     else if (a === 'next' || a === 'prev') { send({ type: 'stage_event', id: cur.id, event: a }); }
     else if (a === 'close') { audio?.pause(); send({ type: 'stage_event', id: cur.id, event: 'closed' }); post('/api/v1/app/music/stop').catch(() => {}); cur = null; open = false; paint(); }
   });

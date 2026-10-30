@@ -1489,6 +1489,19 @@ menentukan berat/ringan/non-AI)".
   (one call fills the goal's values), the model taking over where the page differs; commits are always reviewed. From the app (#/web),
   the chat (tool kerjakan_di_web) and features (cinema booking). A live run on public practice sites found the four robustness issues fixed
   here (empty/error pages, dialogs, new-tab links, identical buttons); a full real booking is left to the owner's own test.
-- **Not built**: casting to a TV or picking a speaker, video speed/subtitle/PiP controls, highlighting the target on the guided screen,
-  receipts from the phone's gallery, a desktop three-pane cockpit, and a full router/model editor (models are chosen in Komposisi AI on the
-  admin site; Bengkel shows them and how each did). Crowding/platform appear only when KCI's page says so; there is still no live train feed.
+- **Phase J** (owner 2026-10-30: "Lanjut dulu ke next phase sampai selesai"): receipts photographed or picked from the gallery (up to ten
+  at once) are read by the vision brain through the master flow and become spending (source `struk`), skipped when the same amount
+  within a day is already known from a notification or a statement; the YouTube player page takes speed (0.25–2×), subtitles (off / ID /
+  EN) and is driven in place by `jv()` (seek, speed, captions, the playing time) — the app shows speed and subtitle chips, a small window
+  (the APK's own picture-in-picture activity, a popup on the web), "Ke TV" (the YouTube app's own cast, else the system cast settings) and
+  "Speaker" (the system output switcher on Android 14, the media-output dialog on 11+, Bluetooth settings before that; the browser's
+  Remote Playback on the web); the guided screen frames the step's target — the phone reads the screen as text lines with their boxes,
+  finds the line the guide names and the accessibility service draws a frame over it for eight seconds (the notice says "Langkah n dari ±m"
+  and where to look); Bengkel edits each brain's models (main, backups, order, a test call) from the OpenRouter catalogue with prices and
+  how each did, with the admin password and the same rules as Komposisi AI (an expensive choice asks first); on a wide screen
+  (≥1360px) the app is a three-pane cockpit — the menu, the page, and a side pane with "Butuh kamu", running missions, pages and today's
+  flow, kept fresh by events.
+- **Not built**: a lock-screen media session (the player's controls live in the app and the notification-less PiP window); casting uses the
+  YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
+  (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
+  feed.

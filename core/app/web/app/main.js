@@ -51,6 +51,7 @@ if (!store.get()) $('#login').hidden = false;
 connect();
 render();
 startPlayer();
+import('./side.js').then((m) => m.startSide()).catch(() => {});
 // report the phone's place to the server while the page is open on the web (the APK reports it natively, in the background)
 if (!window.JarvisHost && navigator.geolocation && location.protocol === 'https:') {
   const send = () => navigator.geolocation.getCurrentPosition((p) => post('/api/v1/app/location', { lat: p.coords.latitude, lon: p.coords.longitude, accuracy_m: p.coords.accuracy }).catch(() => {}), () => {}, { maximumAge: 300000, timeout: 10000 });

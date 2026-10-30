@@ -1,7 +1,7 @@
 // Bengkel otak (mockup 47): how each job is done is a version he can change in words — the heavy brain writes the change, it is tried on the
 // job's recent real inputs (old vs new, judged blind), then rolled out to 10% first and promoted or rolled back automatically; any version can
 // be restored. Global: the thresholds Hermes decides by.
-import { $, get, header, html, icon, loading, post, render, toast } from '../core.js';
+import { $, get, header, html, icon, loading, post, put, render, sheet, toast } from '../core.js';
 import { withPassword } from '../needsui.js';
 import { laneChip } from '../ui.js';
 
@@ -56,15 +56,33 @@ function jobScreen(v, job) {
 const BRAIN = { ringan: ['Otak ringan', 'cyan'], berat: ['Otak berat', 'violet'], penglihatan: ['Mata (gambar)', 'amber'] };
 const usd = (c) => (c ? `$${c < 0.01 ? c.toFixed(4) : c.toFixed(2)}` : '$0');
 
+const price = (v) => (v == null ? '?' : v === 0 ? 'gratis' : `$${Number(v) < 1 ? Number(v).toFixed(2) : Number(v).toFixed(1)}`);
+
+// Which model each brain uses — changed right here (the admin password), the same rules as Komposisi AI — and how each model did this week.
+function editor(c) {
+  const row = (cat) => html`<div style="display:flex;flex-direction:column;gap:4px;padding:8px 0;border-bottom:1px solid var(--bd)">
+    <div class="row sb"><span class="tag ${BRAIN[cat.name]?.[1] || ''}">${BRAIN[cat.name]?.[0] || cat.title || cat.name}</span><span class="small">${cat.spent_usd ? `${usd(cat.spent_usd)} bulan ini · ` : ''}${cat.allow_free ? 'boleh gratis' : 'berbayar saja'}</span></div>
+    ${(cat.routes || []).map((r, i) => html`<div class="row sb" style="gap:6px"><span class="mono small" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60%">${['①', '②', '③', '④', '⑤'][i]} ${r.model}</span>
+      <span class="row" style="gap:4px"><span class="small">${price(r.price_in)}/${price(r.price_out)}</span>
+        ${i > 0 ? html`<button class="ib sm" data-act="routeUp" data-c="${cat.name}" data-i="${i}" aria-label="Naikkan">↑</button>` : ''}
+        ${(cat.routes || []).length > 1 ? html`<button class="ib sm" data-act="routeDel" data-c="${cat.name}" data-i="${i}" aria-label="Hapus">${icon('close', 12)}</button>` : ''}</span></div>`)}
+    <div class="row" style="gap:6px;flex-wrap:wrap"><button class="chip" data-act="pickModel" data-c="${cat.name}" data-r="utama">Ganti utama</button>
+      <button class="chip" data-act="pickModel" data-c="${cat.name}" data-r="cadangan">+ Cadangan</button><button class="chip" data-act="testModel" data-c="${cat.name}">Uji</button></div></div>`;
+  const main = c.categories.filter((x) => BRAIN[x.name]), rest = c.categories.filter((x) => !BRAIN[x.name] && !x.locked);
+  return html`${main.map(row)}${rest.length ? html`<details><summary class="small">Kategori lain (${rest.length})</summary>${rest.map(row)}</details>` : ''}
+    <span class="small">OpenRouter: ${c.openrouter.has_key ? (c.openrouter.balance_usd != null ? `saldo $${Number(c.openrouter.balance_usd).toFixed(2)}` : 'tersambung') : 'kunci belum ada'} · harga per 1 juta token (masuk/keluar). Mengganti model butuh password admin.</span>`;
+}
+
 // Which model each brain uses (picked in Komposisi AI on the admin site) and how each model did this week.
 function models(m) {
   return html`<details class="card"><summary class="ttl" style="cursor:pointer">${icon('layers', 14)} Model tiap otak</summary>
     ${Object.entries(m.lanes).map(([k, l]) => html`<div style="display:flex;flex-direction:column;gap:2px;padding:6px 0;border-bottom:1px solid var(--bd)">
       <div class="row sb"><span class="tag ${BRAIN[k]?.[1] || ''}">${BRAIN[k]?.[0] || k}</span><span class="small">${l.allow_free ? 'boleh model gratis' : 'berbayar saja'}</span></div>
       ${l.routes.length ? l.routes.map((r, i) => html`<span class="mono small">${i === 0 ? '①' : i === 1 ? '②' : '③'} ${r.model}</span>`) : html`<span class="small t-amber2">belum dipilih — atur di Komposisi AI</span>`}</div>`)}
+    ${comp ? editor(comp) : ''}
     ${m.usage.length ? html`<span class="small" style="margin-top:6px"><b>Dipakai ${m.days} hari terakhir</b></span>${m.usage.map((u) => html`<div class="row sb" style="font-size:12px"><span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:55%">${u.model}</span>
       <span class="small">${u.runs}× · ${u.ok_pct}% · ${u.avg_s ?? '–'} dtk · ${usd(u.cost)}</span></div>`)}` : ''}
-    <span class="small">Ganti model di jar1 → Komposisi AI. Semua lewat OpenRouter; isi sensitif hanya ke model berbayar.</span></details>`;
+    <span class="small">Semua lewat OpenRouter; isi sensitif hanya ke model berbayar.</span></details>`;
 }
 
 // the job's numbers this week against last week
@@ -78,7 +96,15 @@ function metricTable(a, b) {
       return html`<tr><td>${l}</td><td class="mono" style="${better == null ? '' : `color:var(--${better ? 'green' : 'amber'}-t)`}">${fmt(x, u)}</td><td class="mono">${fmt(y, u)}</td></tr>`; })}</tbody></table></div></div>`;
 }
 
-let cur = { job: null };
+let cur = { job: null }, comp = null;
+
+async function reorder(cat, change) {
+  const c = comp.categories.find((x) => x.name === cat);
+  const list = change((c.routes || []).map((r) => r.model));
+  const r = await withPassword(`Urutan model ${BRAIN[cat]?.[0] || cat}`, (password) => put('/api/v1/app/brain/routes', { category: cat, models: list, password }),
+    { kicker: 'Ganti model otak', button: 'Simpan', note: list.map((m, i) => `${i + 1}. ${m}`).join(' · ') });
+  if (r) { toast('Urutan disimpan'); render(); }
+}
 
 export default {
   tab: 'beranda',
@@ -93,7 +119,8 @@ export default {
       root.innerHTML = String(jobScreen(v, job === 'global' ? '' : job));
       return;
     }
-    const [d, m] = await Promise.all([get('/api/v1/app/brain'), get('/api/v1/app/brain/models')]);
+    const [d, m, c] = await Promise.all([get('/api/v1/app/brain'), get('/api/v1/app/brain/models'), get('/api/v1/app/brain/composition').catch(() => null)]);
+    comp = c;
     root.innerHTML = String(html`${header('Bengkel otak', { sub: 'ubah cara kerja tiap pekerjaan, uji, pasang bertahap' })}
       <div class="scr">
         <a class="card violet" href="#/bengkel/global" style="text-decoration:none"><span class="k violet">Ambang Hermes</span>${cfgView(d.global.global, '')}</a>
@@ -132,6 +159,36 @@ export default {
       if (!ok) return;
       toast(all ? 'Dipakai penuh' : 'Dipasang untuk 10% jalan — dipantau otomatis');
       draft = null; evalRes = null; render();
+    },
+    async pickModel(b) {
+      const cat = b.dataset.c, role = b.dataset.r;
+      const q = await sheet(String(html`<form><span class="ttl">${role === 'utama' ? 'Model utama' : 'Model cadangan'} · ${BRAIN[cat]?.[0] || cat}</span>
+        <label class="field">Cari model (nama/penyedia)<input name="q" placeholder="mis. deepseek, claude, gemini, qwen"></label>
+        <label class="row" style="gap:8px;font-size:13px"><input type="checkbox" name="free"> hanya yang gratis</label>
+        <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Cari</button></div></form>`));
+      if (q === null || q === undefined || q === '') return;
+      const r = await get(`/api/v1/app/brain/catalog?q=${encodeURIComponent(q.q || '')}&vision=${cat === 'penglihatan'}&free=${!!q.free}`);
+      const pickd = await sheet(String(html`<span class="ttl">${r.models.length} model</span><div style="display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto">
+        ${r.models.map((x) => html`<button class="card" data-close="${x.id}" style="text-align:left;cursor:pointer;padding:8px 10px"><div class="row sb"><span style="font-size:13px;font-weight:600">${x.name || x.id}</span><span class="small">${price(x.price_in)}/${price(x.price_out)}</span></div>
+          <span class="small mono">${x.id}</span><span class="small">${Math.round((x.context || 0) / 1000)}k konteks${x.tools ? ' · alat' : ''}${x.vision ? ' · gambar' : ''}${x.jarvis ? ` · di JARVIS ${x.jarvis.calls}× ${x.jarvis.ok_pct}% · ${Math.round(x.jarvis.p50_ms / 100) / 10} dtk` : ''}</span></button>`)}</div>
+        <button class="btn" data-close="">Batal</button>`));
+      if (!pickd) return;
+      const ok = await withPassword(`${BRAIN[cat]?.[0] || cat}: ${pickd}`, async (password) => {
+        let res = await put('/api/v1/app/brain/model', { category: cat, model: pickd, role, password });
+        if (res.needs_confirmation) {
+          if ((await sheet(String(html`<p>${res.say}</p><div class="btns"><button class="btn" data-close="">Batal</button><button class="btn amber" data-close="y">Tetap pakai</button></div>`))) !== 'y') return null;
+          res = await put('/api/v1/app/brain/model', { category: cat, model: pickd, role, password, confirmed: true });
+        }
+        return res;
+      }, { kicker: 'Ganti model otak', button: 'Pakai', note: 'Model dicoba sekali dulu sebelum dipakai.' });
+      if (ok) { toast(`${BRAIN[cat]?.[0] || cat}: ${ok.main || pickd}`); render(); }
+    },
+    async routeUp(b) { await reorder(b.dataset.c, (list) => { const i = Number(b.dataset.i); [list[i - 1], list[i]] = [list[i], list[i - 1]]; return list; }); },
+    async routeDel(b) { await reorder(b.dataset.c, (list) => list.filter((_, i) => i !== Number(b.dataset.i))); },
+    async testModel(b) {
+      toast('Menguji…');
+      const r = await post('/api/v1/composition/test', { category: b.dataset.c, text: 'Jawab satu kalimat: apa ibu kota Indonesia?' });
+      toast(r.ok ? `${r.route?.model || ''} · ${r.ms} ms: ${(r.text || '').slice(0, 60)}` : `Gagal: ${r.error}`, !r.ok);
     },
     async testAll() {
       const r = await withPassword('Uji semua usulan & terapkan yang lebih baik ke 10%', (password) => post('/api/v1/app/brain/drafts/test-all', { password }),

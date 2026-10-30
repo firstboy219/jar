@@ -18,6 +18,6 @@ docker run -d --name "$NET-core" --network "$NET" --network-alias core -e DATABA
 docker run -d --name "$NET-chrome" --network "$NET" --network-alias chrome chromedp/headless-shell:latest >/dev/null
 for i in $(seq 1 60); do docker exec "$NET-core" python -c "import httpx;httpx.get('http://localhost:8000/healthz').raise_for_status()" >/dev/null 2>&1 && break; sleep 1; done
 docker cp ../infra/scripts/app_preview.py "$NET-core":/tmp/app_preview.py
-docker exec -e PYTHONPATH=/srv -e DATABASE_URL="postgresql://postgres:test@$NET-db/jarvis" "$NET-core" python -u /tmp/app_preview.py "$@"
+docker exec -e PYTHONPATH=/srv -e DATABASE_URL="postgresql://postgres:test@$NET-db/jarvis" -e PREVIEW_W="${PREVIEW_W:-390}" -e PREVIEW_H="${PREVIEW_H:-844}" -e PREVIEW_WAIT="${PREVIEW_WAIT:-2.5}" "$NET-core" python -u /tmp/app_preview.py "$@"
 docker cp "$NET-core":/tmp/shots/. "$OUT"/
 echo "screenshots in $OUT"

@@ -1,5 +1,8 @@
 package online.cosger.jarvis.ui.stage
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.webkit.WebChromeClient
@@ -153,6 +156,9 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
     val yt = youtubeId(url)
     var reload by remember(url) { mutableIntStateOf(0) }
     var problem by remember(url) { mutableStateOf<String?>(null) }
+    var webRef by remember(url) { mutableStateOf<WebView?>(null) }
+    var rate by remember(url) { mutableStateOf(1f) }
+    var subtitles by remember(url) { mutableStateOf(false) }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
         if (yt != null) {
             val origin = actions.console.absolute("/").trimEnd('/')
@@ -184,9 +190,10 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
                         }
                         setBackgroundColor(android.graphics.Color.BLACK)
                         loadUrl(youtubeEmbedUrl(origin, yt, panel.autoplay))
+                        webRef = this
                     }
                 }, Modifier.fillMaxWidth().aspectRatio(16f / 9f), // no clip: a clipped video surface can stay black
-                    onRelease = { it.stopLoading(); it.destroy() })
+                    onRelease = { webRef = null; it.stopLoading(); it.destroy() })
             }
         } else {
             val player = rememberPlayer(url, actions, panel.autoplay)
@@ -202,6 +209,29 @@ fun VideoPanel(panel: Panel, actions: StageActions) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PanelButton("Putar di YouTube", primary = true) { openYoutube(context, "https://www.youtube.com/watch?v=$yt") }
                 PanelButton("Muat ulang") { reload++ }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {   // ADR-087 phase J: speed, subtitles, a small window, the TV, the speaker
+                PanelButton("${rate.toString().removeSuffix(".0").replace('.', ',')}×") {
+                    rate = nextRate(rate)
+                    webRef?.evaluateJavascript("jv({cmd:'rate',v:$rate})", null)
+                }
+                PanelButton(if (subtitles) "Sub: ID" else "Sub: mati") {
+                    subtitles = !subtitles
+                    webRef?.evaluateJavascript(if (subtitles) "jv({cmd:'cc',lang:'id'})" else "jv({cmd:'cc'})", null)
+                }
+                PanelButton("Kecil") {
+                    val view = webRef
+                    if (view == null) online.cosger.jarvis.media.VideoPipActivity.open(context, yt, 0)
+                    else view.evaluateJavascript("jv({cmd:'info'})") { raw ->
+                        val clean = (raw ?: "").replace("\\", "").replace("\"", "")   // {t:12.3,rate:1,…} once unquoted
+                        val t = Regex("\\{t:([0-9.]+)").find(clean)?.groupValues?.get(1)?.toDoubleOrNull()?.toInt() ?: 0
+                        view.evaluateJavascript("jv({cmd:'pause'})", null)
+                        online.cosger.jarvis.media.VideoPipActivity.open(context, yt, t)
+                    }
+                }
+                PanelButton("TV") { online.cosger.jarvis.media.MediaRoutes.castTv(context, yt, 0) }
+                PanelButton("Speaker") { online.cosger.jarvis.media.MediaRoutes.pickSpeaker(context) }
             }
         }
     }
@@ -243,3 +273,11 @@ fun GalleryPanel(panel: Panel) {
     }
 }
 
+/** The next playback speed when the speed button is tapped: 1 → 1.25 → 1.5 → 2 → 0.75 → 1. */
+internal fun nextRate(r: Float): Float = when {
+    r < 1f -> 1f
+    r < 1.25f -> 1.25f
+    r < 1.5f -> 1.5f
+    r < 2f -> 2f
+    else -> 0.75f
+}

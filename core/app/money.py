@@ -463,6 +463,65 @@ async def api_add(body: TxIn, device: dict = Depends(owner)):
     return {"id": tid}
 
 
+def clean_receipt(d: dict) -> dict | None:
+    """The eyes' reading of a receipt → {merchant, total, at (date/time text), items}; None when no total was read. Pure."""
+    total = to_number((d or {}).get("total"))
+    if not total or total <= 0 or total > 100_000_000:
+        return None
+    day = str((d or {}).get("tanggal") or "")[:10]
+    hm = str((d or {}).get("jam") or "")[:5]
+    return {"merchant": str((d or {}).get("toko") or "Struk")[:60], "total": total,
+            "day": day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else "", "time": hm if re.fullmatch(r"\d{2}:\d{2}", hm) else "",
+            "items": [str(x)[:60] for x in (d or {}).get("item") or []][:12], "method": str((d or {}).get("bayar") or "")[:30]}
+
+
+async def from_receipt(attachment_id: str) -> dict:
+    """A photo of a receipt (camera or the gallery): read by the brain's eyes, recorded as spending — unless the same amount was already
+    recorded around that time (a GoPay/bank notification or an email receipt), then only matched."""
+    import base64
+    from . import attachments
+    m = attachments.meta(attachment_id)
+    if not m or m["kind"] != "image":
+        raise MoneyError("kirim foto struknya (gambar)")
+    b64 = attachments.image_b64(attachment_id, 1600)
+    msgs = [{"role": "system", "content": ("Baca struk/nota belanja di foto. Jangan mengarang; null bila tidak terbaca. JSON: {\"toko\": \"\", \"total\": angka rupiah yang dibayar, "
+                                           "\"tanggal\": \"YYYY-MM-DD\", \"jam\": \"HH:MM\", \"item\": [\"nama barang\"], \"bayar\": \"tunai/GoPay/kartu/QRIS\"}")},
+            {"role": "user", "content": [{"type": "text", "text": "Struk ini."}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]
+    r = await master.run(master.Job("uang", "struk", "baca struk belanja dari foto", messages=msgs, vision=True, json_out=True, no_free=True, max_tokens=600))
+    if r["status"] != "done" or not isinstance(r["result"], dict):
+        raise MoneyError(r.get("error") or "struknya tidak terbaca")
+    rc = clean_receipt(r["result"])
+    if not rc:
+        raise MoneyError("total di struk tidak terbaca — foto lebih dekat & terang")
+    try:
+        at = datetime.fromisoformat(f"{rc['day']}T{rc['time'] or '12:00'}").replace(tzinfo=WIB) if rc["day"] else datetime.now(WIB)
+    except ValueError:
+        at = datetime.now(WIB)
+    twin = await db.pool().fetchrow("""SELECT id, merchant, source FROM money_tx WHERE direction = 'out' AND amount = $1
+                                        AND at BETWEEN $2::timestamptz - interval '1 day' AND $2::timestamptz + interval '1 day' LIMIT 1""", rc["total"], at)
+    if twin:
+        return {**rc, "duplicate": dict(twin), "lane": r.get("lane")}
+    tid = await _insert(at, rc["total"], "out", rc["merchant"], "struk", "Foto struk", f"struk:{attachment_id}", "; ".join(rc["items"])[:300])
+    if tid:
+        await check_pots()
+    return {**rc, "id": tid, "lane": r.get("lane")}
+
+
+class ReceiptIn(BaseModel):
+    attachment_ids: list[str] = Field(min_length=1, max_length=10)
+
+
+@router.post(API + "/receipts")
+async def api_receipts(body: ReceiptIn, device: dict = Depends(owner)):
+    out = []
+    for aid in body.attachment_ids:
+        try:
+            out.append({"attachment_id": aid, **await from_receipt(aid)})
+        except MoneyError as e:
+            out.append({"attachment_id": aid, "error": str(e)})
+    return {"receipts": out}
+
+
 @router.put(API + "/tx/{tx_id}")
 async def api_cat(tx_id: int, body: CatIn, device: dict = Depends(owner)):
     if body.category not in list(CATEGORIES) + ["lainnya"]:

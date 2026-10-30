@@ -193,6 +193,15 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
         view.post { online.cosger.jarvis.web.WebSessions.show(view.context, id, reason.orEmpty()) }
         return true
     }
+    /** A YouTube video in a small window over other apps (picture-in-picture); the official player stays visible (ADR-087 phase J). */
+    @JavascriptInterface fun pipVideo(id: String?, start: String?): Boolean {
+        val v = id.orEmpty().take(11)
+        if (!Regex("[A-Za-z0-9_-]{11}").matches(v)) return false
+        view.post { online.cosger.jarvis.media.VideoPipActivity.open(view.context, v, start?.toIntOrNull() ?: 0) }
+        return true
+    }
+    @JavascriptInterface fun pickSpeaker(): Boolean = online.cosger.jarvis.media.MediaRoutes.pickSpeaker(view.context)
+    @JavascriptInterface fun castTv(id: String?, start: String?): Boolean = online.cosger.jarvis.media.MediaRoutes.castTv(view.context, id.orEmpty().take(11), start?.toIntOrNull() ?: 0)
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */
     @JavascriptInterface fun location(): String {
         val app = view.context.applicationContext as JarvisApp

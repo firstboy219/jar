@@ -16,7 +16,7 @@ object GuideNotice {
     private const val CHANNEL = "jarvis_guide"
     private const val ID = 4030
 
-    fun show(context: Context, step: Int, text: String, target: String, done: Boolean) {
+    fun show(context: Context, step: Int, text: String, target: String, done: Boolean, where: String = "", total: Int = 0) {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Bimbingan layar", NotificationManager.IMPORTANCE_HIGH).apply {
             description = "Langkah berikutnya saat JARVIS membimbing"
@@ -25,12 +25,12 @@ object GuideNotice {
         val open = PendingIntent.getActivity(context, ID, Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(MainActivity.EXTRA_ROUTE, "#/bimbing"),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val title = if (done) "Selesai ✓" else if (step > 0) "Langkah $step" else "JARVIS membimbing"
+        val title = if (done) "Selesai ✓" else if (step > 0) ("Langkah $step" + if (total > step) " dari ±$total" else "") else "JARVIS membimbing"
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_help)
             .setContentTitle(title)
             .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(if (target.isNotBlank()) "$text\n→ \"$target\"" else text))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(if (target.isNotBlank()) "$text\n→ \"$target\"" + (if (where.isNotBlank()) " ($where)" else "") else text))
             .setOngoing(!done)
             .setAutoCancel(done)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

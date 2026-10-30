@@ -422,6 +422,47 @@ async def drafts() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ---------- the models each brain uses: chosen here too (ADR-087 phase J), the same rules as Komposisi AI on the admin site ----------
+
+MAIN_CATEGORIES = ("ringan", "berat", "penglihatan")
+
+
+async def composition_view() -> dict:
+    from . import composition
+    c = await composition.get()
+    cats = sorted(c["categories"], key=lambda x: (x["name"] not in MAIN_CATEGORIES, MAIN_CATEGORIES.index(x["name"]) if x["name"] in MAIN_CATEGORIES else 99, x["name"]))
+    keep = ("name", "title", "description", "routes", "budget_usd", "allow_free", "locked", "spent_usd", "worker")
+    return {"openrouter": {k: c["openrouter"].get(k) for k in ("has_key", "balance_usd", "working", "status")}, "preset": c.get("preset"),
+            "categories": [{k: x.get(k) for k in keep} for x in cats]}
+
+
+async def model_catalog(q: str = "", vision: bool = False, tools: bool = False, free: bool = False, sort: str = "termurah", limit: int = 40) -> dict:
+    from . import modelinsight, openrouter
+    models = await openrouter.catalog()
+    if models is None:
+        raise BrainError("daftar model OpenRouter belum bisa diambil")
+    found = openrouter.search(models, q[:80], free=True if free else None, vision=True if vision else None, tools=True if tools else None,
+                              sort=sort if sort in openrouter.SORTS else "termurah", limit=max(5, min(limit, 80)))
+    own = await modelinsight.usage(14)   # how each model JARVIS already used did: how often it worked, how fast
+    keep = ("id", "name", "context", "price_in", "price_out", "free", "tools", "vision")
+    return {"total": len(models), "models": [{k: m.get(k) for k in keep} | ({"jarvis": {k: own[m["id"]][k] for k in ("calls", "ok_pct", "p50_ms")}} if m["id"] in own else {})
+                                             for m in found]}
+
+
+class ModelIn(BaseModel):
+    category: str = Field(min_length=2, max_length=30)
+    model: str = Field(min_length=1, max_length=120)
+    role: str = Field(default="utama", pattern="^(utama|cadangan)$")
+    confirmed: bool = False
+    password: str = Field(default="", max_length=200)
+
+
+class RoutesIn(BaseModel):
+    category: str = Field(min_length=2, max_length=30)
+    models: list[str] = Field(min_length=1, max_length=5)
+    password: str = Field(default="", max_length=200)
+
+
 # ---------- API ----------
 
 class ProposeIn(BaseModel):
@@ -462,6 +503,44 @@ async def api_test_all(body: PasswordIn, device: dict = Depends(owner)):
 @router.get(API + "/models")
 async def api_models(device: dict = Depends(owner)):
     return await models()
+
+
+@router.get(API + "/composition")
+async def api_composition(device: dict = Depends(owner)):
+    return await composition_view()
+
+
+@router.get(API + "/catalog")
+async def api_catalog(q: str = "", vision: bool = False, tools: bool = False, free: bool = False, sort: str = "termurah", device: dict = Depends(owner)):
+    try:
+        return await model_catalog(q, vision, tools, free, sort)
+    except BrainError as e:
+        raise HTTPException(503, str(e))
+
+
+@router.put(API + "/model")
+async def api_set_model(body: ModelIn, device: dict = Depends(owner)):
+    """A brain's main or fallback model — a change to how JARVIS thinks for everything, so the admin password (like Komposisi AI)."""
+    from . import composition
+    await require_password(device, body.password, f"composition:{body.category}")
+    try:
+        r = await composition.set_model(body.category, body.model, actor(device), role=body.role, confirmed=body.confirmed)
+    except composition.CompositionError as e:
+        raise HTTPException(422, str(e))
+    invalidate()
+    return r
+
+
+@router.put(API + "/routes")
+async def api_routes(body: RoutesIn, device: dict = Depends(owner)):
+    """A brain's whole chain in order (the first answers, the rest take over when it fails)."""
+    from . import composition
+    await require_password(device, body.password, f"composition:{body.category}")
+    try:
+        await composition.update({"categories": {body.category: {"routes": [{"provider": "openrouter", "model": m} for m in body.models]}}}, actor(device))
+    except composition.CompositionError as e:
+        raise HTTPException(422, str(e))
+    return await composition_view()
 
 
 @router.get(API + "/{job}")

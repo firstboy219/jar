@@ -140,6 +140,29 @@ export function openApp(name, label = name) {
   return false;
 }
 
+/** A YouTube video in a small window that stays over other apps (the phone's picture-in-picture), or a pop-out window on the web. */
+export function pipVideo(id, t = 0) {
+  if (host.has('pipVideo') && host.call('pipVideo', id, String(Math.floor(t)))) return true;
+  window.open(`/embed/youtube/${id}?play=1&start=${Math.floor(t)}`, 'jarvis-pip', 'popup,width=480,height=270');
+  return true;
+}
+
+/** The phone's own speaker picker (Bluetooth, Cast speakers); on the web, the browser casts an <audio> itself. */
+export function pickSpeaker(audio) {
+  if (host.has('pickSpeaker') && host.call('pickSpeaker')) return true;
+  if (audio?.remote?.prompt) { audio.remote.prompt().catch(() => toast('Tidak ada speaker/TV yang ditemukan di jaringan ini.', true)); return true; }
+  toast('Pilih speaker dari HP-mu (aplikasi JARVIS) atau menu Cast di browser.', true);
+  return false;
+}
+
+/** To the TV: a YouTube video opens in the YouTube app (its Cast button), anything else in the phone's cast/mirroring settings. */
+export function castTv(id, t = 0) {
+  if (host.has('castTv') && host.call('castTv', id || '', String(Math.floor(t)))) return true;
+  if (id) { window.open(`https://www.youtube.com/watch?v=${id}&t=${Math.floor(t)}s`, '_blank', 'noopener'); toast('Tekan ikon Cast di YouTube untuk ke TV.'); return true; }
+  toast('Buka aplikasi JARVIS di HP untuk mengirim ke TV.', true);
+  return false;
+}
+
 /** Sign in to a site once, by himself, in the app's own browser on the phone (JARVIS then reads its pages; it never types the password). */
 export function openWeb(url) {
   if (host.has('openWeb') && host.call('openWeb', url)) return true;
@@ -182,12 +205,16 @@ document.addEventListener('click', async (e) => {
   if (act === 'back') return back();
   if (act === 'reload') return render();
   const mod = views.get(current?.name);
-  if (mod?.actions?.[act]) {
+  const fn = mod?.actions?.[act] || (a.closest('#side') ? globalActions[act] : null);   // the side pane's cards act wherever the owner is
+  if (fn) {
     e.preventDefault();
     a.disabled = true;
-    try { await mod.actions[act](a, e); } catch (err) { toast(err.message || String(err), true); } finally { a.disabled = false; }
+    try { await fn(a, e); } catch (err) { toast(err.message || String(err), true); } finally { a.disabled = false; }
   }
 });
+
+/** Actions of panes that live outside the current view (the desktop side pane). */
+export const globalActions = {};
 
 /** Read text aloud: the phone's own voice in the app, the browser's voice on the web. */
 export function speak(text) {

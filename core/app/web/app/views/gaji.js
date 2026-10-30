@@ -1,12 +1,13 @@
 // Gaji & pengeluaran (mockup 38): this pay period — spent against the salary, each pot of his allocation (80% warning), spending per
 // category, the latest transactions (recorded from GoPay/bank notifications; category fixable) — and next period's proposed allocation.
 import { $, del, get, header, html, icon, loading, on, post, put, render, sheet, toast } from '../core.js';
+import { pick, upload } from '../upload.js';
 import { rupiah } from '../lib.js';
 import { laneChip } from '../ui.js';
 
 let cur = null;
 const d = (s) => new Date(`${String(s).slice(0, 10)}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
-const SRC = { notif: 'notifikasi', manual: 'manual', jarvis: 'JARVIS', email: 'struk email' };
+const SRC = { notif: 'notifikasi', manual: 'manual', jarvis: 'JARVIS', email: 'struk email', struk: 'foto struk' };
 
 function setup(s) {
   return html`<form class="card cyan" id="setf"><span class="k cyan">Atur gaji</span>
@@ -62,7 +63,7 @@ export default {
         ${!s.plan ? html`<button class="btn block" data-act="plan">${icon('bolt', 16)} Susun alokasi gaji (otak berat)</button>` : ''}
         ${cats.length ? html`<div class="card"><span class="k">Per kategori</span>${cats.map(([k, v]) => html`<div class="row" style="font-size:13px"><span style="width:110px;color:var(--tx2)">${k}</span>
           <div class="bar grow" style="height:8px"><i style="width:${Math.round(100 * v / cats[0][1])}%"></i></div><span class="mono" style="min-width:70px;text-align:right">${rupiah(v, true)}</span></div>`)}</div>` : ''}
-        <span class="sec">Transaksi</span>
+        <div class="row sb"><span class="sec">Transaksi</span><button class="btn sm" data-act="receipt">${icon('camera', 14)} Struk dari foto/galeri</button></div>
         ${s.recent.length ? html`<div class="list">${s.recent.map((t) => html`<div class="li"><div class="grow"><div class="row sb"><span style="font-size:14px">${t.merchant}</span>
           <span class="mono" style="color:var(--${t.direction === 'in' ? 'green' : 'tx'})">${t.direction === 'in' ? '+' : '−'}${rupiah(t.amount)}</span></div>
           <div class="row sb small"><span>${new Date(t.at).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${t.app || SRC[t.source]}</span>
@@ -80,6 +81,16 @@ export default {
       await put('/api/v1/app/settings/money', { salary: Number(v.salary), payday: Number(v.payday), goals: v.goals || '', emergency_months: Number(v.emergency_months || 6),
         ...(em !== Number(cur?.settings?.emergency_saved || 0) ? { emergency_saved: em, emergency_at: new Date().toISOString().slice(0, 10) } : {}) });
       toast('Tersimpan'); render();
+    },
+    async receipt() {   // photos of receipts (camera or the gallery): read by JARVIS' eyes, recorded unless already there
+      const files = await pick({ accept: 'image/*', multiple: true });
+      if (!files.length) return;
+      toast(`Membaca ${files.length} struk…`);
+      const got = await upload(files);
+      const r = await post('/api/v1/app/money/receipts', { attachment_ids: got.map((f) => f.id) });
+      const ok = r.receipts.filter((x) => x.id), dup = r.receipts.filter((x) => x.duplicate), bad = r.receipts.filter((x) => x.error);
+      toast([ok.length && `${ok.length} dicatat`, dup.length && `${dup.length} sudah tercatat`, bad.length && `${bad.length} tidak terbaca: ${bad[0].error}`].filter(Boolean).join(' · '), !!bad.length && !ok.length);
+      render();
     },
     async plan() { toast('Otak berat menyusun alokasi…'); await post('/api/v1/app/money/plan'); render(); },
     async apply(b) {

@@ -15,14 +15,32 @@ import kotlin.coroutines.resume
 object ScreenText {
     private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    suspend fun read(bitmap: Bitmap): String = suspendCancellableCoroutine { cont ->
+    /** A line of text and where it is on the picture (ADR-087 phase J: the guide puts a frame around the button to tap). */
+    data class Line(val text: String, val left: Int, val top: Int, val right: Int, val bottom: Int)
+
+    suspend fun read(bitmap: Bitmap): String = arrange(readLines(bitmap).map { it.top to it.text })
+
+    suspend fun readLines(bitmap: Bitmap): List<Line> = suspendCancellableCoroutine { cont ->
         recognizer.process(InputImage.fromBitmap(bitmap, 0))
             .addOnSuccessListener { result ->
-                val lines = result.textBlocks.flatMap { b -> b.lines.map { it.boundingBox?.top to it.text } }
-                cont.resume(arrange(lines))
+                cont.resume(result.textBlocks.flatMap { b -> b.lines.mapNotNull { l -> l.boundingBox?.let { r -> Line(l.text, r.left, r.top, r.right, r.bottom) } } })
             }
-            .addOnFailureListener { cont.resume("") }
+            .addOnFailureListener { cont.resume(emptyList()) }
     }
+
+    /** The line the guide's target text is on: the same words, else the shortest line containing them, else the line most like them. Pure. */
+    fun findTarget(lines: List<Line>, target: String): Line? {
+        val t = norm(target)
+        if (t.length < 2) return null
+        lines.firstOrNull { norm(it.text) == t }?.let { return it }
+        lines.filter { norm(it.text).contains(t) }.minByOrNull { it.text.length }?.let { return it }
+        val words = t.split(' ').filter { it.length > 2 }.toSet()
+        if (words.isEmpty()) return null
+        return lines.map { it to norm(it.text).split(' ').count { w -> w in words } }.filter { it.second * 2 >= words.size && it.second > 0 }
+            .maxByOrNull { it.second }?.first
+    }
+
+    private fun norm(s: String) = s.lowercase().replace(Regex("[^\\p{L}\\p{N} ]"), " ").replace(Regex("\\s+"), " ").trim()
 
     /** Top-to-bottom reading order, status-bar noise dropped. Pure; unit-tested. */
     fun arrange(lines: List<Pair<Int?, String>>): String = lines
