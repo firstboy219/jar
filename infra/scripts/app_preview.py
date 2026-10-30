@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import socket
 import sys
 
@@ -245,11 +246,15 @@ async def main():
         await cdp(ws, "Page.navigate", {"url": f"http://{core}:8000/app/#t={token}"})
         await asyncio.sleep(4)
         os.makedirs("/tmp/shots", exist_ok=True)
-        for r in ROUTES:
-            await cdp(ws, "Runtime.evaluate", {"expression": f"location.hash = '#/{r}'"})
+        for r in ROUTES:   # "route!css selector" also taps that element once the page is there (a sheet, a menu)
+            route, _, tap = r.partition("!")
+            await cdp(ws, "Runtime.evaluate", {"expression": f"location.hash = '#/{route}'"})
             await asyncio.sleep(float(os.getenv("PREVIEW_WAIT", "2.5")))
+            if tap:
+                await cdp(ws, "Runtime.evaluate", {"expression": f"document.querySelector({json.dumps(tap)})?.click()"})
+                await asyncio.sleep(float(os.getenv("PREVIEW_WAIT", "2.5")))
             shot = await cdp(ws, "Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
-            name = r.replace("/", "_").replace("?", "_") or "beranda"
+            name = re.sub(r"[^\w-]+", "_", r).strip("_") or "beranda"
             with open(f"/tmp/shots/{name}.png", "wb") as f:
                 f.write(base64.b64decode(shot["data"]))
             errs = await cdp(ws, "Runtime.evaluate", {"expression": "document.querySelector('#view')?.innerText.slice(0, 160)", "returnByValue": True})

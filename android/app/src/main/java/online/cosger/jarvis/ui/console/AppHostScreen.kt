@@ -152,12 +152,19 @@ fun AppHostScreen(vm: JarvisViewModel, actions: AppHostActions) {
 
 /** The page's window to the phone. Only strings and booleans cross; nothing else of the app is exposed. */
 private class JarvisBridge(private val view: WebView, private val actions: AppHostActions) {
+    private val spokenTokens = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @JavascriptInterface fun talk() { view.post { actions.talk() } }
     @JavascriptInterface fun open(what: String?) { val w = what.orEmpty().take(80); view.post { actions.open(w) } }
     @JavascriptInterface fun version(): String = BuildConfig.VERSION_NAME
     /** The alarm settings just saved on the page → the phone's own clock (ADR-087). */
     @JavascriptInterface fun syncAlarm(json: String?) { online.cosger.jarvis.alarm.AlarmScheduler.save(view.context, json.orEmpty().take(2000)) }
     @JavascriptInterface fun speak(text: String?) { val t = text.orEmpty().take(6000); view.post { (view.context.applicationContext as JarvisApp).engine.speakText(t) } }
+    // the Qur'an's translation read by the phone's own voice; the page asks spoken(token) to move on to the next verse
+    @JavascriptInterface fun speakLocal(text: String?, token: String?) {
+        val t = text.orEmpty().take(6000); val k = token.orEmpty().take(40)
+        view.post { (view.context.applicationContext as JarvisApp).engine.speakLocal(t) { if (k.isNotEmpty()) spokenTokens.add(k) } }
+    }
+    @JavascriptInterface fun spoken(token: String?): Boolean = spokenTokens.remove(token.orEmpty())
     @JavascriptInterface fun stopSpeaking() { view.post { (view.context.applicationContext as JarvisApp).engine.stopSpeaking() } }
     /** Fingerprint approval (ADR-087): the page keeps the admin password here after a successful approval it typed … */
     @JavascriptInterface fun rememberPassword(pw: String?) { (view.context.applicationContext as JarvisApp).engine.settingsStore.setAdminSecret(pw) }

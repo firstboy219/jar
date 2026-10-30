@@ -1519,6 +1519,16 @@ menentukan berat/ringan/non-AI)".
   board (`/canvas/`), the phone's desk and "Galaksi 3D" screens, cards placed automatically for tasks / documents / shown things, the
   chat's canvas tool and the board API are gone; `/` and `/canvas/…` open the app. Kept: the workers' live screens and takeover
   (`/api/v1/canvas/live…`, used by the mission page) and the old board tables in the database (nothing reads them).
+- **Al-Qur'an: the translation read aloud and the context of a verse** (owner 2026-10-30: "tambahkan fitur untuk membaca terjemahan
+  juga (tapi membacanya jgn menggunakan AI) dan … context knp ayat itu diturunkan dan pada saat apa rasulullah Saw saat itu"): the
+  reader recites the murottal only, the murottal then the Kemenag translation, or the translation only, and reads one verse's translation
+  on its own — always the phone's own text-to-speech in the app (`speakLocal`, never the cloud voice even when one is chosen) or the
+  browser's speech elsewhere; no human recording of the Indonesian translation exists to use. "Konteks" on each verse: Makkiyah /
+  Madaniyah and where it came down (Kemenag), its place in the revelation order (Tanzil's chronology), the period of the mission and what
+  the Prophet ﷺ was going through then (fixed text from the standard sirah, marked as the period's general picture; Al-Falaq and An-Nas,
+  placed differently by Kemenag and the chronology, say the scholars differ), the Kemenag introduction of the surah and the Kemenag tafsir
+  of the verse word for word (equran.id, cached), and a short summary of its occasion (asbabun nuzul) drawn by the light brain through the
+  master flow from that tafsir only — when the tafsir names no occasion it says so — made once per verse and kept.
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

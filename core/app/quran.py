@@ -1,8 +1,15 @@
 """Al-Qur'an (ADR-087): the text, transliteration and the Kemenag translation from equran.id (cached here, never written by AI), where
 the owner read up to, his khatam progress and streak, murottal audio per verse, and reminders for his routine surahs (Al-Mulk at night,
-Al-Kahf on Friday) — the reminders go through the master flow as a fixed procedure."""
+Al-Kahf on Friday) — the reminders go through the master flow as a fixed procedure.
 
+The context of a verse (owner 2026-10-30): where and in which order its surah came down, the period of the Prophet's mission it belongs to
+and what he was going through then (fixed text, the standard sirah), the Kemenag introduction of the surah and the Kemenag tafsir of the
+verse word for word — and a short summary of its occasion (asbabun nuzul) drawn by the light brain from that tafsir ONLY: when the tafsir
+names no particular occasion the summary says so, it never fills the gap. The translation read aloud is the phone's own voice (app)."""
+
+import html as htmllib
 import logging
+import re
 from datetime import date, datetime, timedelta
 
 import httpx
@@ -88,6 +95,56 @@ LATIN = ("Al-Fatihah,Al-Baqarah,Ali 'Imran,An-Nisa',Al-Ma'idah,Al-An'am,Al-A'raf
          "Al-Kausar,Al-Kafirun,An-Nasr,Al-Lahab,Al-Ikhlas,Al-Falaq,An-Nas").split(",")
 
 
+# the order in which each surah came down (Tanzil's metadata, the standard Egyptian chronology), by surah number
+ORDER = [5, 87, 89, 92, 112, 55, 39, 88, 113, 51, 52, 53, 96, 72, 54, 70, 50, 69, 44, 45, 73, 103, 74, 102, 42, 47, 48, 49, 85, 84, 57, 75, 90, 58,
+         43, 41, 56, 38, 59, 60, 61, 62, 63, 64, 65, 66, 95, 111, 106, 34, 67, 76, 23, 37, 97, 46, 94, 105, 101, 91, 109, 110, 104, 108, 99, 107, 77, 2,
+         78, 79, 71, 40, 3, 4, 31, 98, 33, 80, 81, 24, 7, 82, 86, 83, 27, 36, 8, 68, 10, 35, 26, 9, 11, 12, 28, 1, 25, 100, 93, 14, 30, 16, 13, 32,
+         19, 29, 17, 15, 18, 114, 6, 22, 20, 21]
+# the periods of the mission by that order, and what the Prophet ﷺ was going through in each (the standard sirah; approximate years)
+PERIODS = [
+    (21, "Makkah awal", "±tahun 1–4 kenabian",
+     "Rasulullah saw baru menerima wahyu. Dakwah dimulai diam-diam kepada keluarga dan sahabat terdekat (Khadijah, Ali, Abu Bakar, Zaid), "
+     "lalu terang-terangan kepada kerabat dan penduduk Makkah. Pengikutnya masih sedikit; pokok ajarannya tauhid, hari akhir, dan akhlak."),
+    (60, "Makkah pertengahan", "±tahun 5–9 kenabian",
+     "Dakwah sudah terbuka dan penolakan Quraisy makin keras: ejekan, tuduhan, penyiksaan terhadap sahabat yang lemah, sebagian sahabat "
+     "hijrah ke Habasyah, dan Bani Hasyim diboikot di lembah Abu Thalib. Rasulullah saw bersabar dan terus menyeru."),
+    (86, "Makkah akhir", "±tahun 10–13 kenabian",
+     "Tahun kesedihan: Abu Thalib dan Khadijah wafat, Rasulullah saw ditolak di Thaif, lalu dimuliakan dengan Isra' Mi'raj. Orang-orang "
+     "Yatsrib berbaiat di Aqabah, dan kaum Muslimin bersiap hijrah ke Madinah."),
+    (98, "Madinah awal", "±tahun 1–5 Hijriah",
+     "Rasulullah saw membangun masyarakat Muslim di Madinah: masjid, persaudaraan Muhajirin–Anshar, Piagam Madinah, perubahan kiblat. "
+     "Terjadi Perang Badar dan Uhud; muncul golongan munafik dan ketegangan dengan sebagian Yahudi Madinah."),
+    (110, "Madinah pertengahan", "±tahun 5–8 Hijriah",
+     "Masa Perang Khandaq, Perjanjian Hudaibiyah, dan surat-surat dakwah kepada para raja. Hukum keluarga dan masyarakat dimantapkan, "
+     "dan Islam meluas ke kabilah-kabilah Arab."),
+    (114, "Madinah akhir", "±tahun 8–10 Hijriah",
+     "Fathu Makkah, Perang Hunain dan Tabuk, utusan kabilah datang masuk Islam, lalu Haji Wada'. Ajaran Islam disempurnakan menjelang "
+     "wafatnya Rasulullah saw."),
+]
+
+
+def period(order: int) -> dict:
+    """The period of the mission a surah of this revelation order belongs to. Pure."""
+    for last, name, years, nabi in PERIODS:
+        if order <= last:
+            return {"nama": name, "tahun": years, "nabi": nabi}
+    return {"nama": "", "tahun": "", "nabi": ""}
+
+
+def surah_period(tempat: str, order: int) -> dict:
+    """The period, unless Kemenag places the surah differently from the chronology (Al-Falaq, An-Nas): then the scholars' difference. Pure."""
+    if tempat and (tempat == "Mekah") != (order <= 86):
+        return {"nama": "Diperselisihkan", "tahun": "",
+                "nabi": f"Ulama berbeda pendapat apakah surah ini turun di Makkah atau Madinah; Kemenag menggolongkannya sebagai surah {tempat}."}
+    return period(order)
+
+
+def plain(text: str) -> str:
+    """equran.id's HTML (<i>, <br>, entities) as plain text. Pure."""
+    t = re.sub(r"<br\s*/?>|</p>", "\n", str(text or ""), flags=re.I)
+    return re.sub(r"[ \t]+", " ", htmllib.unescape(re.sub(r"<[^>]+>", "", t))).strip()
+
+
 async def surah_list() -> list[dict]:
     """The 114 surahs (equran.id, cached); when it cannot be reached yet, the built-in names and verse counts keep progress working."""
     try:
@@ -106,6 +163,81 @@ async def surah(nomor: int, qari: str = "05") -> dict:
             "audio_full": (d.get("audioFull") or {}).get(qari), "qari": QARI.get(qari, qari),
             "ayat": [{"n": int(a["nomorAyat"]), "arab": a["teksArab"], "latin": a["teksLatin"], "arti": a["teksIndonesia"],
                       "audio": (a.get("audio") or {}).get(qari), "juz": juz_of(d["nomor"], int(a["nomorAyat"]))} for a in d["ayat"]]}
+
+
+async def tafsir(nomor: int) -> dict:
+    """The Kemenag tafsir of a surah (equran.id), cached as fetched: {ayah: text}."""
+    row = await db.pool().fetchval("SELECT data FROM quran_tafsir WHERE nomor = $1", nomor)
+    if row:
+        return row
+    async with _client() as c:
+        r = await c.get(f"{EQURAN}/tafsir/{nomor}")
+        r.raise_for_status()
+        try:
+            d = r.json()["data"]
+            d["tafsir"][0]["teks"]
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise httpx.HTTPError("equran.id tidak mengirim tafsir") from None
+    data = {"deskripsi": plain(d.get("deskripsi")), "ayat": {str(int(t["ayat"])): plain(t["teks"]) for t in d.get("tafsir") or []}}
+    await db.pool().execute("INSERT INTO quran_tafsir (nomor, data) VALUES ($1, $2) ON CONFLICT (nomor) DO UPDATE SET data = EXCLUDED.data", nomor, data)
+    return data
+
+
+async def context(nomor: int, ayah: int) -> dict:
+    """Everything known about when and why a verse came down — no AI here (the summary is only read from the cache)."""
+    lst = await surah_list()
+    if not 1 <= nomor <= 114 or not 1 <= ayah <= lst[nomor - 1]["ayat"]:
+        raise ValueError("ayat tidak ada")
+    meta, order = lst[nomor - 1], ORDER[nomor - 1]
+    t = await tafsir(nomor)
+    summary = await db.pool().fetchval("SELECT data FROM quran_context WHERE surah = $1 AND ayah = $2", nomor, ayah)
+    return {"surah": {"nomor": nomor, "latin": meta["latin"], "tempat": meta["tempat"] or ("Madinah" if order > 86 else "Mekah"), "urutan": order,
+                      "periode": surah_period(meta["tempat"], order), "pengantar": t["deskripsi"]},
+            "ayah": ayah, "tafsir": t["ayat"].get(str(ayah), ""), "ringkasan": summary, "sumber": "Tafsir Kemenag RI (equran.id)"}
+
+
+CONTEXT_KEYS = ("sebab", "peristiwa", "waktu", "riwayat")
+
+
+def clean_context(d: dict) -> dict:
+    """The brain's reading of the tafsir, kept to its fields; 'ada' false when it found no particular occasion. Pure."""
+    out = {k: " ".join(str(d.get(k) or "").split())[:700] or None for k in CONTEXT_KEYS}
+    out["ada"] = bool(d.get("ada")) and bool(out["sebab"])
+    if not out["ada"]:
+        out["sebab"] = None
+    return out
+
+
+def context_messages(c: dict) -> list[dict]:
+    """The light brain's brief for a verse's occasion: the Kemenag introduction and tafsir, and nothing may be added to them. Pure."""
+    nomor, ayah = c["surah"]["nomor"], c["ayah"]
+    return [{"role": "system", "content": (
+        "Kamu membantu memahami konteks turunnya ayat Al-Qur'an HANYA dari teks Tafsir Kemenag yang diberikan. Jangan menambah riwayat, nama, "
+        "tempat, atau tahun yang tidak tertulis di teks itu. Bila teks tidak menyebut sebab turun (asbabun nuzul) khusus, isi ada=false dan "
+        "sebab=null. Bahasa Indonesia yang santun; tulis 'Rasulullah saw'. "
+        'JSON: {"ada": true/false, "sebab": "sebab turunnya ayat menurut teks, 1-3 kalimat, atau null", '
+        '"peristiwa": "apa yang sedang dialami/dilakukan Rasulullah saw saat itu menurut teks, atau null", '
+        '"waktu": "kapan/di mana menurut teks (mis. di Makkah sebelum hijrah), atau null", "riwayat": "perawi/sumber yang disebut teks, atau null"}')},
+        {"role": "user", "content": f"Surah {c['surah']['latin']} ({nomor}) ayat {ayah}. Tempat turun surah: {c['surah']['tempat']}.\n\n"
+                                    f"PENGANTAR SURAH (Kemenag):\n{c['surah']['pengantar'][:3000]}\n\nTAFSIR AYAT INI (Kemenag):\n{c['tafsir'][:9000]}"}]
+
+
+async def summarize(nomor: int, ayah: int) -> dict:
+    """The occasion of a verse, read from its Kemenag tafsir by the light brain (master flow), once — then kept."""
+    if cached := await db.pool().fetchval("SELECT data FROM quran_context WHERE surah = $1 AND ayah = $2", nomor, ayah):
+        return cached
+    c = await context(nomor, ayah)
+    if not c["tafsir"]:
+        raise ValueError("tafsir ayat ini belum tersedia")
+    msgs = context_messages(c)
+    r = await master.run(master.Job("quran", "konteks", f"konteks turun {c['surah']['latin']}:{ayah}", messages=msgs, json_out=True, max_tokens=900,
+                                    temperature=0.1))
+    if r["status"] != "done" or not isinstance(r["result"], dict):
+        raise ValueError(r.get("error") or "ringkasan gagal dibuat")
+    data = clean_context(r["result"])
+    await db.pool().execute("INSERT INTO quran_context (surah, ayah, data, run_id) VALUES ($1, $2, $3, $4) ON CONFLICT (surah, ayah) DO NOTHING",
+                            nomor, ayah, data, r.get("run_id"))
+    return data
 
 
 async def progress() -> dict:
@@ -207,6 +339,26 @@ async def api_surah(nomor: int, device: dict = Depends(owner)):
         return await surah(nomor, (await appsettings.get("quran"))["qari"])
     except ValueError as e:
         raise HTTPException(404, str(e))
+
+
+@router.get(API + "/context/{nomor}/{ayah}")
+async def api_context(nomor: int, ayah: int, device: dict = Depends(owner)):
+    try:
+        return await context(nomor, ayah)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except httpx.HTTPError:
+        raise HTTPException(503, "tafsir belum bisa diambil — coba lagi")
+
+
+@router.post(API + "/context/{nomor}/{ayah}/summary")
+async def api_context_summary(nomor: int, ayah: int, device: dict = Depends(owner)):
+    try:
+        return await summarize(nomor, ayah)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except httpx.HTTPError:
+        raise HTTPException(503, "tafsir belum bisa diambil — coba lagi")
 
 
 @router.post(API + "/read")

@@ -613,6 +613,9 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
     /** The page asked to read something aloud (the brief, a story, a greeting): the same voice JARVIS speaks with. */
     fun speakText(text: String) = speaker.say(text)
 
+    /** Always the phone's own voice, never a cloud (AI) voice — the Qur'an's translation (owner: "membacanya jgn menggunakan AI"). */
+    fun speakLocal(text: String, onDone: () -> Unit) = speaker.say(text, onDone, local = true)
+
     // ---------- Bimbing layar (ADR-087): while a guidance session runs, the shared screen is read here and sent when it changes ----------
 
     private var guideJob: Job? = null
