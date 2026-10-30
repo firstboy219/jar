@@ -15,8 +15,22 @@ object PhoneOps {
     private fun JsonObject.s(k: String) = this[k]?.jsonPrimitive?.contentOrNull.orEmpty()
     private fun JsonObject.i(k: String) = this[k]?.jsonPrimitive?.intOrNull
 
-    suspend fun handle(req: String, op: String, a: JsonObject, onStop: (Long) -> Unit): String {
+    suspend fun handle(context: android.content.Context, req: String, op: String, a: JsonObject, onStop: (Long) -> Unit): String {
         val answer: JsonObject = try {
+            if (op == "notif_reply") {   // ADR-087: a reply the owner sent from the app, through the messaging app's own notification reply
+                val thread = online.cosger.jarvis.notify.Conversations.find(a.s("title"))
+                    ?.takeIf { it.title.equals(a.s("title"), ignoreCase = true) || a.s("title").isBlank() }
+                    ?: throw PhoneOpException("percakapan \"${a.s("title")}\" tidak ada di notifikasi HP (buka WhatsApp sekali, lalu coba lagi)")
+                val ok = online.cosger.jarvis.notify.Conversations.reply(context, thread, a.s("text").take(2000))
+                if (!ok) throw PhoneOpException("notifikasi itu tidak bisa dibalas dari luar (sudah dibuka/dihapus)")
+                return buildJsonObject { put("type", "phone_result"); put("req", req); put("ok", true); put("title", thread.title) }.toString()
+            }
+            if (op == "yt_captions") {   // ADR-087: YouTube refuses the server; the phone reads the subtitles from its own connection
+                val got = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    YouTubeCaptions.fetch(a.s("video"), a.s("langs").split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("id", "en") })
+                }
+                return buildJsonObject { put("type", "phone_result"); put("req", req); got.forEach { (k, v) -> put(k, v) } }.toString()
+            }
             val svc = PhoneAgentService.instance
                 ?: throw PhoneOpException("Aksesibilitas JARVIS belum aktif di HP (Lainnya → Setelan HP → 5. Operasi aplikasi)")
             when (op) {

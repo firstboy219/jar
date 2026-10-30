@@ -367,7 +367,7 @@ async def test_media_is_validated_then_pushed(pool, monkeypatch):
 
 
 async def test_notification_triage_levels(pool, monkeypatch):
-    from app import config, hub, llm, notifications
+    from app import config, gateway, hub, notifications
     hub.reset()
     pushed = []
 
@@ -381,11 +381,12 @@ async def test_notification_triage_levels(pool, monkeypatch):
         '{"decisions": [{"id": 3, "decision": "urgent"}], "say": "Ada transaksi Rp4,5 juta dari BCA yang tidak biasa."}',
     ])
 
-    async def fake_complete(messages, **kw):
-        assert "482913" not in messages[1]["content"]  # OTP never reaches the model
-        return next(answers)
+    async def fake_complete(category, body, **kw):   # through the master flow (ADR-087), never a free endpoint
+        from app import modelrouter
+        assert "482913" not in body["messages"][1]["content"] and modelrouter.NO_FREE.get()  # OTP never reaches the model
+        return {"choices": [{"message": {"content": next(answers)}}]}
 
-    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(gateway, "complete", fake_complete)
     N = notifications.Notification
     for n in (N(app="WhatsApp", package="com.whatsapp", title="Budi", text="Rapat jadi jam 3", posted_at=1),
               N(app="Shopee", package="com.shopee", title="Flash sale!", text="Diskon 90%", posted_at=1)):
@@ -407,7 +408,7 @@ async def test_notification_triage_levels(pool, monkeypatch):
 
 
 async def test_quiet_hours_suppress_announcements(pool, monkeypatch):
-    from app import hub, llm, notifications
+    from app import gateway, hub, notifications
     hub.reset()
     pushed = []
 
@@ -417,14 +418,14 @@ async def test_quiet_hours_suppress_announcements(pool, monkeypatch):
     hub.register(phone)
     monkeypatch.setattr(notifications, "quiet_now", lambda now=None: True)
 
-    async def fake_complete(messages, **kw):
-        return '{"decisions": [{"id": 1, "decision": "announce"}], "say": "Ada pesan dari Ani."}'
+    async def fake_complete(category, body, **kw):
+        return {"choices": [{"message": {"content": '{"decisions": [{"id": 1, "decision": "announce"}], "say": "Ada pesan dari Ani."}'}}]}
 
-    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(gateway, "complete", fake_complete)
     await notifications.receive(notifications.Notification(app="WA", package="wa", title="Ani", text="hai", posted_at=1), None)
     notifications._pending.clear()
     r = await notifications.triage([{"id": 1, "app": "WA", "title": "Ani", "text": "hai"}])
-    assert r["level"] == "skip" and pushed == []
+    assert r["level"] == "skip" and [e for e in pushed if e["type"] != "flow"] == []   # the live flow view still sees the run
     hub.reset()
 
 
@@ -661,7 +662,7 @@ async def test_meeting_pipeline_with_local_engine(pool, monkeypatch, tmp_path):
     """Chunks → (fake) jarvis-ears transcription + diarization → minutes (fake model) → docx + report.
     A confidential meeting never touches a cloud engine or model — and gets no AI minutes (there is no local model, ADR-080)."""
     import httpx
-    from app import config, documents, llm, meetings, memory
+    from app import config, documents, gateway, meeting_live, meetings, memory
     monkeypatch.setattr(meetings, "ROOT", tmp_path / "meetings")
     monkeypatch.setattr(documents, "ROOT", tmp_path / "documents")
     monkeypatch.setattr(config.settings, "groq_api_key", "gsk_should_not_be_used")
@@ -678,18 +679,16 @@ async def test_meeting_pipeline_with_local_engine(pool, monkeypatch, tmp_path):
 
     private_flags = []
 
-    async def fake_complete(messages, **kw):
+    async def fake_complete(lane, body, **kw):   # any model call (the master flow's gateway) would land here
         private_flags.append(kw.get("private"))
-        if "NOTULEN" in messages[0]["content"]:
-            return ('{"ringkasan": "Persiapan UAT.", "keputusan": ["UAT Kamis"], '
-                    '"action_items": [{"siapa": "Opik", "apa": "siapkan data", "tenggat": "Kamis"}], "pertanyaan": [], "topik": ["UAT"]}')
-        return "Catatan: UAT, Opik siapkan data Kamis."
+        return {"choices": [{"message": {"content": "Catatan."}}]}
 
     async def no_index(*a, **k):
         return None
 
     monkeypatch.setattr(meetings, "_ears", fake_ears)
-    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(gateway, "complete", fake_complete)
+    monkeypatch.setattr(meeting_live, "on_chunk", no_index)
     monkeypatch.setattr(meetings, "_index", no_index)
     from app import composition
     await composition.update({"stt": "groq"}, "test")
@@ -1105,7 +1104,7 @@ async def test_sensitive_text_inside_an_attachment_keeps_the_turn_local(pool, mo
 async def test_meeting_gap_free_chunks_context_rename_and_abandoned_recordings(pool, monkeypatch, tmp_path):
     import os, time
     import httpx
-    from app import documents, llm, meetings, memory
+    from app import documents, gateway, meeting_live, meetings, memory
     monkeypatch.setattr(meetings, "ROOT", tmp_path / "meetings")
     monkeypatch.setattr(documents, "ROOT", tmp_path / "documents")
     monkeypatch.setattr(memory, "search", _no_memory)
@@ -1121,16 +1120,18 @@ async def test_meeting_gap_free_chunks_context_rename_and_abandoned_recordings(p
 
     prompts = []
 
-    async def fake_complete(messages, **kw):
+    async def fake_complete(lane, body, **kw):   # the minutes go through the master flow (ADR-087)
+        messages = body["messages"]
         prompts.append(messages[0]["content"])
         if "NOTULEN" in messages[0]["content"]:
-            return '{"ringkasan": "Bu Rina menyiapkan workflow.", "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}'
-        return "Catatan."
+            return {"choices": [{"message": {"content": '{"ringkasan": "Bu Rina menyiapkan workflow.", "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}'}}]}
+        return {"choices": [{"message": {"content": "Catatan."}}]}
 
     async def no_index(*a, **k):
         return None
     monkeypatch.setattr(meetings, "_ears", fake_ears)
-    monkeypatch.setattr(llm, "complete", fake_complete)
+    monkeypatch.setattr(gateway, "complete", fake_complete)
+    monkeypatch.setattr(meeting_live, "on_chunk", no_index)   # the live transcript has its own test
     monkeypatch.setattr(meetings, "_index", no_index)
     m = await meetings.create("UAT Autotoko", False, True, participants=["Bu Rina", "Opik"], agenda="Bahas workflow n8n")
     mid = str(m["id"])

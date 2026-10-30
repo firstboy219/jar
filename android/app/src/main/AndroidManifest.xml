@@ -14,6 +14,12 @@
     <!-- ADR-086: "JARVIS siaga" keeps the link to the server while the app is in the background -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Show things to JARVIS with the camera; agenda for situational awareness (both opt-in) -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -23,10 +29,17 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
 
     <!-- ADR-077: the apps JARVIS may open on the owner's phone (Android 11+ package visibility) -->
     <queries>
         <package android:name="com.gojek.app" />
+        <!-- ADR-087: the other apps JARVIS may operate (and GoPay's payment screen) must be visible to open them -->
+        <package android:name="com.gojek.gopay" />
+        <package android:name="com.kopikenangan" />
+        <package android:name="com.qpon.platform" />
+        <package android:name="com.EmasDigi" />
+        <package android:name="com.jobstreet.jobstreet" />
     </queries>
 
     <application
@@ -66,10 +79,34 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+        <!-- ADR-087: the morning alarm (rings from the phone's own clock, also after a reboot) -->
+        <receiver android:name=".alarm.AlarmReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <meta-data android:name="com.google.ar.core" android:value="optional" />
+        <activity
+            android:name=".measure.MeasureActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize"
+            android:theme="@style/Theme.Jarvis" />
+        <activity
+            android:name=".alarm.AlarmActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.Jarvis" />
         <service
             android:name=".StandbyService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|dataSync">
+            android:foregroundServiceType="specialUse|dataSync|location">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Menjaga koneksi asisten pribadi ke server pemiliknya agar laporan, persetujuan, dan perintah sampai saat aplikasi di latar belakang" />

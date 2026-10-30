@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#06090F">
+<meta name="robots" content="noindex">
+<title>JARVIS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;family=Space+Grotesk:wght@400;500;600&amp;family=Literata:opsz,wght@7..72,400;7..72,600&amp;family=Amiri:wght@400;700&amp;display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="shell">
+  <nav id="nav" aria-label="Navigasi utama">
+    <a href="#/" data-tab="beranda"><span class="ni" data-icon="home"></span><span>Sekarang</span></a>
+    <a href="#/misi" data-tab="misi"><span class="ni" data-icon="layers"></span><span>Misi</span></a>
+    <a href="#/obrolan" data-tab="obrolan"><span class="ni" data-icon="chat"></span><span>Obrolan</span></a>
+    <a href="#/catatan" data-tab="catatan"><span class="ni" data-icon="notes"></span><span>Catatan</span></a>
+    <a href="#/ingatan" data-tab="ingatan"><span class="ni" data-icon="db"></span><span>Ingatan</span></a>
+    <a href="#/fitur" data-tab="fitur" class="wide-only"><span class="ni" data-icon="grid"></span><span>Semua fitur</span></a>
+    <a href="#/kontrol" data-tab="kontrol" class="wide-only"><span class="ni" data-icon="gear"></span><span>Kontrol</span></a>
+  </nav>
+  <main id="view" tabindex="-1"></main>
+  <form id="dock" autocomplete="off">
+    <label class="cmd"><input id="cmd" name="q" placeholder="Minta apa saja, atau cari fitur…" enterkeyhint="send"><button class="ib sm" aria-label="Kirim"><span data-icon="send"></span></button></label>
+    <button type="button" id="micbtn" class="mic" aria-label="Bicara dengan JARVIS" data-native="talk"><span data-icon="mic"></span></button>
+  </form>
+</div>
+<div id="toasts" aria-live="polite"></div>
+<div id="login" hidden>
+  <form id="loginform" class="sheet login">
+    <h2>Masuk ke JARVIS</h2>
+    <p class="muted" id="loginmsg">Masukkan password admin untuk memakai aplikasi ini di browser.</p>
+    <input type="password" name="password" placeholder="Password admin" autocomplete="current-password" required>
+    <button class="btn primary">Masuk</button>
+  </form>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

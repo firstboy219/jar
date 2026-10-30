@@ -84,4 +84,10 @@ class SecureSettings(context: Context) {
     }
 
     fun newConversation() = update { it.copy(sessionId = UUID.randomUUID().toString()) }
+
+    /** ADR-087: the admin password kept for fingerprint approval of phone runs (encrypted here; released only after a strong biometric). */
+    fun adminSecret(): String? = prefs.getString("admin_secret", null)?.takeIf { it.isNotEmpty() }
+    fun setAdminSecret(value: String?) {
+        prefs.edit().apply { if (value.isNullOrEmpty()) remove("admin_secret") else putString("admin_secret", value.take(200)) }.apply()
+    }
 }

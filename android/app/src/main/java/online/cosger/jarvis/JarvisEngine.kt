@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -526,14 +529,19 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind, event.labels) }
             is ServerEvent.Approval -> _notice.value = "Butuh persetujuanmu: ${event.title} (menu Tugas & Persetujuan)"
             is ServerEvent.PhoneOp -> scope.launch {
-                socket.sendControl(online.cosger.jarvis.phone.PhoneOps.handle(event.req, event.op, event.args) { run ->
+                socket.sendControl(online.cosger.jarvis.phone.PhoneOps.handle(context, event.req, event.op, event.args) { run ->
                     socket.sendControl(Protocol.control("phone_stop", "run", run))
                 })
             }
             is ServerEvent.PhoneApproval -> onPhoneApproval(event)
             is ServerEvent.Notify -> online.cosger.jarvis.phone.ApprovalNotice.notice(
-                context, (event.title + event.text).hashCode(), event.title, event.text, urgent = event.kind == "choice" || event.kind == "phone")
+                context, (event.title + event.text).hashCode(), event.title, event.text, urgent = event.kind == "choice" || event.kind == "phone" || event.kind == "urgent",
+                route = event.route)
             is ServerEvent.OwnerChoice -> onOwnerChoice(event)
+            is ServerEvent.SettingsChanged -> if (event.key == "alarm") syncAlarm()
+            is ServerEvent.Trip -> if (event.status == "active" && event.title.isNotBlank()) online.cosger.jarvis.notify.TripNotice.show(context, event.title, event.text, event.route, event.leg, event.driver)
+                else if (event.status in setOf("done", "cancelled")) online.cosger.jarvis.notify.TripNotice.clear(context)
+            is ServerEvent.Guide -> onGuide(event)
             is ServerEvent.Transcript -> {
                 if (event.sessionId != null && event.sessionId != settings.value.sessionId) return
                 listener.setInterim("")
@@ -577,6 +585,61 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
             _choices.update { list -> list.filterNot { it.id == c.id } }
         }
     }
+
+    /** ADR-087: the morning alarm as the server keeps it → the phone's own clock (rings offline too). */
+    fun syncAlarm() {
+        if (!settings.value.isConfigured) return
+        scope.launch {
+            val spec = runCatching { console.get("/api/v1/app/settings/alarm") }.getOrNull() ?: return@launch
+            online.cosger.jarvis.alarm.AlarmScheduler.save(context, spec.toString())
+        }
+    }
+
+    /** The page asked to read something aloud (the brief, a story, a greeting): the same voice JARVIS speaks with. */
+    fun speakText(text: String) = speaker.say(text)
+
+    // ---------- Bimbing layar (ADR-087): while a guidance session runs, the shared screen is read here and sent when it changes ----------
+
+    private var guideJob: Job? = null
+
+    private fun onGuide(e: ServerEvent.Guide) {
+        when (e.mode) {
+            "start" -> startGuide(e.id, e.goal)
+            "step" -> {
+                val done = e.status == "selesai"
+                online.cosger.jarvis.guide.GuideNotice.show(context, e.n, e.text, e.target, done)
+                if (e.text.isNotBlank()) speaker.say(e.text)
+                if (done || e.status == "buntu") guideJob?.cancel()
+            }
+            "stop" -> { guideJob?.cancel(); online.cosger.jarvis.guide.GuideNotice.clear(context) }
+        }
+    }
+
+    private fun startGuide(id: Long, goal: String) {
+        online.cosger.jarvis.guide.GuideNotice.show(context, 0, "Bagikan layar, lalu buka aplikasinya: $goal", "", false)
+        guideJob?.cancel()
+        guideJob = scope.launch {
+            var seen = ""
+            var sent = ""
+            while (isActive) {
+                delay(GUIDE_LOOK_MS)
+                if (!screen.active.value) continue
+                val bmp = withContext(Dispatchers.Default) { runCatching { screen.latestBitmap() }.getOrNull() } ?: continue
+                val text = withTimeoutOrNull(2_500) { ScreenText.read(bmp) }.orEmpty()
+                val key = online.cosger.jarvis.guide.GuideNotice.key(text)
+                if (key.length < 12) continue          // a secure (black) screen or nothing to read
+                if (key != seen) { seen = key; continue }   // still changing: look again
+                if (key == sent) continue               // settled and already told
+                sent = key
+                runCatching {
+                    console.post("/api/v1/app/guide/$id/step", kotlinx.serialization.json.buildJsonObject {
+                        put("screen_text", kotlinx.serialization.json.JsonPrimitive(text.take(20_000)))
+                    })
+                }.onFailure { if (it.message.orEmpty().contains("sudah selesai")) cancel() }
+            }
+        }
+    }
+    fun stopSpeaking() = speaker.stop()
 
     fun refreshChoices() {
         if (!settings.value.isConfigured) return
@@ -672,5 +735,6 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         const val AUTO_MUTE_MS = 5 * 60_000L
         const val WAKE_IDLE_MS = 60_000L
         const val MIN_SCREEN_TEXT = 40
+        const val GUIDE_LOOK_MS = 1_500L
     }
 }

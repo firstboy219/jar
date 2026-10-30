@@ -167,10 +167,10 @@ async def _run(task_id: int, context: str) -> None:
         kind = row["kind"]
         await _announce(row, "running")
         # internal kinds carry their own instructions; the task number lets tools (ask_owner, documents) refer to it
-        brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind == "owner" else "")
+        brief = f"[tugas #{task_id}] " + (WORKER_BRIEF if kind in ("owner", "feature") else "")
         if kind == "owner" and row["category"] == "coding":
             brief += CODE_HABITS
-        if kind == "owner":  # what JARVIS can already do for this, and how well it has worked (Blueprint §6.2 F: reuse first)
+        if kind in ("owner", "feature"):  # what JARVIS can already do for this, and how well it has worked (Blueprint §6.2 F: reuse first)
             asked = row["instruction"].split(quick.CONTEXT_MARK)[0]
             if row["company_id"]:  # work for ONE company: its vault only, never another company's context (ADR-042)
                 from . import companies
@@ -293,6 +293,8 @@ async def _run(task_id: int, context: str) -> None:
             if row["kind"] == "owner":   # a project worker: the project moves on (next stage, the owner's pick, the end notice — ADR-079)
                 from . import project_flow
                 asyncio.create_task(project_flow.on_task_finished(task_id))
+            from . import master   # a job of the master flow (ADR-087): its run is closed and the feature gets the result
+            asyncio.create_task(master.on_task_finished(task_id))
 
 
 # OpenJarvis has no JARVIS tools (no memory, documents, n8n, approvals): it gets the task and what it can do, nothing about Hermes.
@@ -373,6 +375,8 @@ async def describe_image(image: str) -> str:
 
 async def _deliver(task_id: int, kind: str, title: str, result: str, session_id: str) -> None:
     """Where a finished worker's result goes, by purpose."""
+    if kind == "feature":   # an app feature's job (ADR-087): the master flow hands the result to the feature, nothing is spoken
+        return
     if kind == "situation":
         from . import awareness
         await awareness.on_situation(task_id, result)

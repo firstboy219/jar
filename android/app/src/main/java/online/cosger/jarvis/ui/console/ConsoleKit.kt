@@ -143,6 +143,22 @@ fun requireOwner(context: Context, reason: String, onOk: () -> Unit) {
     }).authenticate(info)
 }
 
+/** The kept admin password, released only after a strong biometric or the phone's own credential — never without (unlike requireOwner). */
+fun unlockSecret(context: Context, reason: String, secret: String?, done: (String) -> Unit) {
+    val activity = context.fragmentActivity()
+    val authenticators = if (Build.VERSION.SDK_INT >= 30)
+        BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+    else BiometricManager.Authenticators.BIOMETRIC_STRONG
+    if (secret == null || activity == null || BiometricManager.from(context).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) return done("")
+    val info = BiometricPrompt.PromptInfo.Builder().setTitle("Setujui operasi HP").setSubtitle(reason).apply {
+        if (Build.VERSION.SDK_INT >= 30) setAllowedAuthenticators(authenticators) else setNegativeButtonText("Ketik password")
+    }.build()
+    BiometricPrompt(activity, ContextCompat.getMainExecutor(context), object : BiometricPrompt.AuthenticationCallback() {
+        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = done(secret)
+        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) = done("")
+    }).authenticate(info)
+}
+
 @Composable
 fun rememberOwnerGate(): (String, () -> Unit) -> Unit {
     val context = LocalContext.current

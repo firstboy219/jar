@@ -1406,3 +1406,67 @@ the error log (Hermes tools broken by a shadowed helper — already fixed on 10-
   the background (Setelan HP → 6; on by default, "Matikan" in its notification).
 - **Bugs**: `n8n_draft_workflow` crashed on an empty model answer; a report for a task that no longer exists broke the worker (FK) — the
   report is kept without the link; tests that fake the phone now say it is connected.
+
+## ADR-087 — App v2: one front screen for everything, every process through the master flow (Blueprint v4 Fase 14)
+Owner (2026-10-29): build the 48-screen mockup for real — every feature connected to the backend, recurring data flowing (not dummy, not
+one-shot) — and "pastikan semua proses yang ada di mockup melewati alur master kita (router lalu Hermes, nextnya tergantung Hermes untuk
+menentukan berat/ringan/non-AI)".
+- **App v2**: one mobile-first web app at `/app/` (`core/app/web/app`, vanilla JS, no build step) — the front page (context-aware: time slot,
+  place, payday/weekend tags, learned shortcuts; every feature reachable from "Semua fitur" and the command dock) and every screen. The APK
+  shows it as its main screen in a WebView (`AppHostScreen`, `JarvisHost` bridge: talk, open native screens, location, speak, alarm sync);
+  native parts remain where only the phone can do it: the talk sheet and media player, the 04.00 alarm, the AR ruler (ARCore, optional),
+  screen-guide notifications, YouTube subtitles fetched from the phone (YouTube refuses the server), WhatsApp notification replies.
+- **The master flow** (`master.py`): every feature job is `master.run(Job)` — router (`router.parse` + capability search) → Hermes decides the
+  lane: `skill` (a fixed procedure, no AI) | `ringan` | `berat` | `hermes` (worker with tools, or a phone app via phone_agent; a learned routine
+  replays without AI). Learned from `flow_runs`: a light brain under 60% success over ≥5 runs → heavy; a skill failing 3× → AI; a failed light
+  answer escalates. `no_free` keeps personal content off free endpoints; `vision` uses the brain's eyes (`penglihatan`). Feature modules never
+  call a model themselves (a contract test enforces it); the legacy notification/Gmail triage and the meeting minutes were moved onto it.
+- **Features (waves 1–8)**: prayer times (Kemenag + offline calculation), Hijri calendar with sunnah fasts/bekam days, Qur'an reader with
+  progress & audio, morning brief (news, markets, weather, agenda); habits (time/arrive/leave, auto/ask/off, learned), places learned from the
+  location trail, door-to-door trips (KRL Comuline + GoRide ordering + replanning, midnight-safe), evening recap as tasks in Catatan; Perlu
+  perhatian (Outlook via device-code sign-in + Gmail + WhatsApp in one triaged list, errands for the trip home, drafts in his style, sending
+  only on his Kirim = an approval he decided), live meeting transcript with decisions/tasks/questions; businesses from their own APIs (sources
+  with vault-encrypted keys, JSON-path extraction, polling as a skill, alerts without AI, trends, heavy-brain strategy, Hermes opportunity
+  research, API-docs autofill); money (spending from GoPay/bank notifications, pay-period pots with 80% alerts, heavy-brain allocation), Pluang
+  (read on the phone, three options, execution only with the admin password + limit + price guard, PIN by the owner), coffee (Kopi Kenangan/Qpon
+  promos, offer, GoPay order with his PIN); music by learned mood, video understanding from subtitles, PDF tools, cinema schedule (jadwalnonton,
+  Hermes' browser as fallback), bedtime stories, measuring (AR or photo estimate), screen guidance; JobStreet (scheduled search via its API,
+  scoring against the CV, applying through the JobStreet app within his rules/daily limit, invitations matched from email and answered after a
+  5-minute undo window, interviews into the calendar).
+- **Live flow & brain workshop** (wave 7): `flow_runs` shown live (graph, steps, effectiveness per job); a job's way of working is a versioned
+  config (lane, extra prompt rule, length, temperature; global thresholds) written from his words by the heavy brain, replayed on real inputs
+  (`flow_samples`, not private ones) and judged blind, rolled out to 10% and promoted or rolled back automatically; every run records its version.
+- **Recurring work** (`appclock`): every feature registers its ticks (`@every`, `@daily`); a tick that has nothing to do starts no run; each
+  survives an empty database and no network (contract test). Old flow runs are thinned nightly.
+- **Safety kept**: phone runs from chat need the admin password (feature taps in the app and his schedules/habits do not); JARVIS never types
+  PIN/OTP/passwords and stops at those screens; only approved apps (now also Kopi Kenangan, Qpon, Pluang, JobStreet — with their payment
+  screens); no top-up/transfer/account changes; investment execution always asks the admin password (a wrong one is 422, not a lost login).
+- **Mockup audit and gap batches A–E** (wave 9): every one of the 48 mockup screens was checked against the code; what was missing was built,
+  each with tests. A: needs inline on the front page (route, the routine's track record, its rules), mission steps and time left, saving and
+  reading results, the scheduled tab, attachments and quick replies in chat, the admin password released by a strong fingerprint when the owner
+  opts in (kept encrypted on the phone only). B: the trip's driver (from Gojek notifications), a held train, errands on the way, alternatives,
+  "tell home", lock-screen notification actions. C: snoozed messages, a family filter, the ignored list, drafts with their context and Outlook
+  attachments, tasks that open their source, JobStreet "viewed" from the phone and interview prep the evening before. D: a calendar meeting
+  offers recording at the office, mosques on the way and prayers during the trip, a whole Hijri month, tables→Excel, translation, risky
+  clauses, signing, OCR of scanned PDFs, photo recognise/read/translate/paint, AR area and height, cinemas near the office, closing pages by
+  content, saving the playing song. E: the usual coffee learned from orders, the emergency fund and last period per pot, the salary's
+  investing pot in the analysis, one recommended option, a post-trade price-guard check, all businesses together, the shipping cutoff alert,
+  strategy steps as tasks, deep research and "not for me" (the research learns his taste), the flow's weak points and lane numbers, the
+  brain's models, pinned shortcuts, drafts/results/changed-plan in the catalog. Every new process runs through `master.run`.
+- **More guarded by the admin password** (E): loosening the investment guard (a higher limit, a wider price guard, no password) and putting a
+  brain version live or rolling one back — drafting and evaluating a version need none.
+- **Second audit, batches F–G**: a fresh pass over the 48 screens found wiring bugs (a mission's plan, the Qur'an's repeat, the /trend route)
+  and more missing controls; built: API keys saved only with the admin password and their expiry warned, stock alerts and payouts per channel,
+  strategy missions, a bekam clinic search (Hermes, contacts nobody), fare estimates on Gojek approvals, drafts that name what they used,
+  notice a requested file and take a spoken instruction, receipts from email as spending (never twice), habits on arriving/leaving/meetings,
+  the workshop proposing its own fixes weekly and testing every draft (only better ones go to 10%), week-on-week job numbers, the flow's
+  inputs/router/tools/memory/queue and a day replayed, every step's model/tokens/cost or "no AI", the investment execution screen (checks,
+  orders, waiting for his PIN, "Buka Pluang"), a meeting paused (nothing kept) or made confidential mid-way, a chat turn's time and cost and
+  suggestions from the answer, a mission paused, routine steps and what skills saved, a failed ride finished in Gojek, "do it for me" in
+  approved apps (never Pluang: trades only through Investasi), one answer to email + WhatsApp, a room change put on the Outlook calendar.
+  The APK can open only the approved apps on the owner's tap (`openApp`), and the alarm shows the subuh time.
+- **Not built** (no reliable source, or out of scope for now): booking cinema seats and other days' schedules (the source shows today and
+  presales only), a live KRL delay/crowding/platform feed (held trains are inferred from the trip's own timing), casting to a TV or picking a
+  speaker, video speed/subtitle/PiP controls, highlighting the target on the guided screen, receipts from the phone's gallery, OAuth API
+  sources, a desktop three-pane cockpit, and a full router/model editor (models are chosen in Komposisi AI on the admin site; Bengkel shows
+  them and how each did).

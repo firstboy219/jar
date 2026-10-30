@@ -9,14 +9,13 @@ passwords, card numbers) never goes to the cloud model; only "a sensitive notifi
 """
 
 import asyncio
-import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel, Field
 
-from . import audit, db, hub, llm, reports, sensitive
+from . import audit, db, hub, reports, sensitive
 from .config import settings
 from .location import WIB
 
@@ -93,18 +92,16 @@ async def _flush_later() -> None:
             log.exception("notification triage failed")
 
 
-def _parse(raw: str) -> dict:
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    return json.loads(m.group(0)) if m else {}
-
-
 async def triage(batch: list[dict]) -> dict:
     listing = "\n".join(f'- id {b["id"]} | {b["app"]} | {b["title"]} | {b["text"][:400]}' for b in batch)
+    from . import master   # through the master flow (ADR-087); a notification is personal: never a free endpoint
     try:
-        raw = await llm.complete([{"role": "system", "content": TRIAGE},
-                                  {"role": "user", "content": f"Notifikasi:\n{listing}"}], max_tokens=300)
-        result = _parse(raw)
-    except (llm.LLMError, ValueError) as e:
+        result = await master.ask(master.Job("perhatian", "notif-triase", "pilah notifikasi HP: abaikan, sebutkan, atau mendesak", trigger="event",
+                                             messages=[{"role": "system", "content": TRIAGE}, {"role": "user", "content": f"Notifikasi:\n{listing}"}],
+                                             json_out=True, no_free=True, max_tokens=300))
+        if not isinstance(result, dict):
+            raise ValueError("bukan objek JSON")
+    except (master.FlowError, ValueError) as e:
         log.warning("triage unavailable (%s); announcing plainly", e)
         result = {"decisions": [{"id": b["id"], "decision": "announce"} for b in batch],
                   "say": "Ada notifikasi baru: " + "; ".join(f'{b["app"]} — {b["title"]}' for b in batch[:3])}

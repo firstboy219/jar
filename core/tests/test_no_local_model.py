@@ -76,16 +76,16 @@ async def test_a_confidential_meeting_is_transcript_only(pool, monkeypatch):
 
 @needs_db
 async def test_an_ordinary_meeting_is_still_summarised(pool, monkeypatch):
-    from app import llm, meetings
+    from app import gateway, meetings, modelrouter
     seen = []
 
-    async def complete(messages, **k):
-        seen.append(k.get("private"))
-        return '{"ringkasan": "ok", "keputusan": ["a"], "action_items": [{"siapa": "Opik", "apa": "x", "tenggat": ""}], "pertanyaan": [], "topik": []}'
-    monkeypatch.setattr(llm, "complete", complete)
+    async def complete(category, body, **k):   # the master flow (ADR-087): Hermes picks the brain; a meeting never goes to a free model
+        seen.append((k.get("private"), modelrouter.NO_FREE.get()))
+        return {"choices": [{"message": {"content": '{"ringkasan": "ok", "keputusan": ["a"], "action_items": [{"siapa": "Opik", "apa": "x", "tenggat": ""}], "pertanyaan": [], "topik": []}'}}]}
+    monkeypatch.setattr(gateway, "complete", complete)
     summary = await meetings._summarize({"confidential": False, "title": "UAT", "marks": [], "context": {}},
                                         [{"text": "halo", "start": 0, "end": 1, "speaker": "A"}])
-    assert summary["action_items"][0]["siapa"] == "Opik" and set(seen) == {False}
+    assert summary["action_items"][0]["siapa"] == "Opik" and set(seen) == {(False, True)}
 
 
 def test_the_owner_is_not_told_a_local_model_will_catch_him():

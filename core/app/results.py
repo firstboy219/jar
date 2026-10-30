@@ -17,6 +17,7 @@ FORMAT_HELP = """Tulis hasilmu terstruktur supaya pemilik bisa membukanya sebaga
  "grafik": [{"judul": "Gaji per perusahaan", "jenis": "bar", "label": ["PT A", "PT B"], "nilai": [25, 30], "satuan": "jt"}],
  "gambar": [{"url": "https://…", "keterangan": "apa isi gambar ini"}],
  "tautan": [{"teks": "Lowongan PT A", "url": "https://…"}],
+ "keyakinan": "tinggi|sedang|rendah — seberapa yakin kamu pada hasil ini (sumber cukup, saling cocok?)",
  "pilihan": [{"label": "KRL 06:27 → tiba kantor 07:05", "waktu": "06:02", "detail": "berangkat dari rumah 06:02"}]}
 ```
 ("pilihan" hanya bila pemilik harus memilih salah satu opsi hasilmu untuk langkah berikutnya: 3–6 opsi; "waktu" = jam HH:MM WIB yang menentukan kapan langkah berikutnya jalan, bila ada.)
@@ -88,6 +89,8 @@ def clean(data) -> dict:
              if isinstance(i, dict) and (u := _url(i.get("url")))]
     if links:
         out["tautan"] = links
+    if (k := _s(data.get("keyakinan"), 10).lower()) in ("tinggi", "sedang", "rendah"):
+        out["keyakinan"] = k
     return out
 
 

@@ -47,6 +47,13 @@ async def remember_last(loc: Location) -> None:
         """INSERT INTO settings_kv (key, value) VALUES ('last_location', $1)
            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
         loc.model_dump() | {"received_at": datetime.now(timezone.utc).isoformat()})
+    if loc.age_s is None or loc.age_s < 600:   # the trail of places (ADR-087): only fixes that say where the owner is now
+        from . import places
+        try:
+            await places.observe(loc.lat, loc.lon, loc.accuracy_m)
+        except Exception:  # the trail is a convenience; a chat turn never fails on it
+            import logging
+            logging.getLogger("jarvis-core").exception("place trail failed")
 
 
 async def last() -> dict | None:

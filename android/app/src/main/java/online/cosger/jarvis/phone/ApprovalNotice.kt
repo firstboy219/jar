@@ -39,12 +39,13 @@ object ApprovalNotice {
     private const val TAG = "phone_approval"
 
     /** ADR-079: a plain notification (a project's pick is waiting, a run ended …). Ketuk opens the app, where the pick shows as a dialog. */
-    fun notice(context: Context, id: Int, title: String, text: String, urgent: Boolean) {
+    fun notice(context: Context, id: Int, title: String, text: String, urgent: Boolean, route: String = "") {
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         nm.createNotificationChannel(NotificationChannel(INFO_CHANNEL, "Proyek & pemberitahuan", NotificationManager.IMPORTANCE_DEFAULT))
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Persetujuan operasi aplikasi", NotificationManager.IMPORTANCE_HIGH))
         val open = PendingIntent.getActivity(context, id,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .apply { if (route.startsWith("#/")) putExtra(MainActivity.EXTRA_ROUTE, route) },   // ADR-087: the app opens that screen
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(context, if (urgent) CHANNEL else INFO_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info)

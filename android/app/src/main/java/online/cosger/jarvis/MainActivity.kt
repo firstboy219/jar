@@ -10,16 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.automirrored.filled.FactCheck
-import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Public
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -31,10 +21,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -73,14 +62,6 @@ import online.cosger.jarvis.ui.screens.SettingsScreen
 import online.cosger.jarvis.ui.theme.JarvisColors
 import online.cosger.jarvis.ui.theme.JarvisTheme
 
-private enum class Tab(val route: String, val label: String, val icon: ImageVector) {
-    Desk("desk", "Meja", Icons.Filled.Public),
-    Notes("notes", "Catatan", Icons.Filled.EditNote),   // ADR-060: notes & to-dos; the conversation is on the desk
-    Tasks("tasks", "Tugas", Icons.AutoMirrored.Filled.FactCheck),
-    Meetings("meetings", "Rapat", Icons.Filled.Groups),
-    More("more", "Lainnya", Icons.Filled.Apps),
-}
-
 // FragmentActivity (not ComponentActivity): the owner console asks for fingerprint/face via BiometricPrompt.
 class MainActivity : FragmentActivity() {
     override fun onResume() {
@@ -89,6 +70,7 @@ class MainActivity : FragmentActivity() {
         (application as JarvisApp).engine.checkUpdateSoon()
         (application as JarvisApp).engine.refreshPhoneApprovals()   // ADR-077: an approval asked while the app was closed
         (application as JarvisApp).engine.refreshChoices()           // ADR-079: a pick asked while the app was closed
+        (application as JarvisApp).engine.syncAlarm()                // ADR-087: the morning alarm set on the web reaches this phone
         if ((application as JarvisApp).settings.state.value.isConfigured) StandbyService.startIfWanted(this)   // ADR-086: stay connected in the background
     }
 
@@ -163,49 +145,62 @@ class MainActivity : FragmentActivity() {
                 }
 
                 val areaFull by DeskChrome.fullscreen.collectAsState()   // an area open full screen on the desk (ADR-062)
+                // the native talk sheet over the app (ADR-087): opened by the page's mic button, a stage panel or an unheard report
+                var talkOpen by remember { androidx.compose.runtime.mutableStateOf(false) }
+                val stage by vm.stage.collectAsStateWithLifecycle()
+                val board by vm.board.collectAsStateWithLifecycle()
+                val onApp = current?.destination?.route == "app"
+                LaunchedEffect(stage.panel?.id) { if (onApp && stage.panel != null) talkOpen = true }
+                val unheard = board.reports.count { it.state == online.cosger.jarvis.ui.SpokenReport.State.Unheard }
+                LaunchedEffect(unheard) { if (onApp && unheard > 0) talkOpen = true }
+                // Bimbing layar (ADR-087): the page asks for the screen to be shared; Android asks the owner once per session
+                val askShare = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+                    if (r.resultCode == android.app.Activity.RESULT_OK && r.data != null) {
+                        online.cosger.jarvis.screen.ScreenShareService.start(this@MainActivity, r.resultCode, r.data!!)
+                    }
+                }
+                val hostActions = remember(nav) {
+                    object : online.cosger.jarvis.ui.console.AppHostActions {
+                        override fun talk() { talkOpen = true }
+                        override fun open(what: String) {
+                            when {
+                                what.startsWith("console:") -> ConsoleRoute.entries.firstOrNull { it.path == what.removePrefix("console:") }
+                                    ?.let { nav.navigate("console/${it.path}") }
+                                what in setOf("desk", "notes", "tasks", "meetings") -> nav.navigate(what)
+                                what == "talk" -> talkOpen = true
+                                what == "guide" -> if (!(application as JarvisApp).engine.screen.active.value) {
+                                    askShare.launch(getSystemService(android.media.projection.MediaProjectionManager::class.java).createScreenCaptureIntent())
+                                }
+                                what == "measure" -> startActivity(android.content.Intent(this@MainActivity, online.cosger.jarvis.measure.MeasureActivity::class.java))
+                                else -> vm.notify("Fitur ini hadir di versi aplikasi berikutnya.")
+                            }
+                        }
+                    }
+                }
                 Scaffold(
                     containerColor = JarvisColors.Background,
                     snackbarHost = { SnackbarHost(snackbar) },
-                    bottomBar = {
-                        if (!areaFull) NavigationBar(containerColor = JarvisColors.Surface) {
-                            Tab.entries.forEach { tab ->
-                                NavigationBarItem(
-                                    selected = current?.destination?.route == tab.route ||
-                                        (tab == Tab.More && current?.destination?.route?.startsWith("console/") == true) ||
-                                        (tab == Tab.Meetings && current?.destination?.route?.startsWith("meeting/") == true),
-                                    onClick = {
-                                        nav.navigate(tab.route) {
-                                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    },
-                                    icon = { Icon(tab.icon, tab.label) },
-                                    label = { Text(tab.label) },
-                                    colors = NavigationBarItemDefaults.colors(indicatorColor = JarvisColors.SurfaceHigh),
-                                )
-                            }
-                        }
-                    },
                 ) { padding ->
                     NavHost(
                         nav,
-                        startDestination = if (settings.isConfigured) Tab.Desk.route else "console/app",
+                        startDestination = if (settings.isConfigured) "app" else "console/app",
                         // edge-to-edge: Android no longer shrinks the window for the keyboard, so every tab makes room for it itself — the desk's
                         // chat box and the notes editor stay above the keyboard instead of under it
                         modifier = Modifier.padding(padding).consumeWindowInsets(padding).imePadding(),
                     ) {
                         val back: () -> Unit = { nav.popBackStack() }
-                        composable(Tab.Desk.route) {
-                            GalaxyScreen(vm, back, asTab = true,
+                        // the app v2 (ADR-087): the server's /app/ page is the main screen; the native screens below open from it
+                        composable("app") { online.cosger.jarvis.ui.console.AppHostScreen(vm, hostActions) }
+                        composable("desk") {
+                            GalaxyScreen(vm, back, asTab = false,
                                 onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
                                 onOpenBackground = { nav.navigate("console/${ConsoleRoute.Background.path}") })
                         }
-                        composable(Tab.Notes.route) { NotesScreen(vm, back) }
-                        composable(Tab.Tasks.route) { TasksScreen(vm, null) }
-                        composable(Tab.Meetings.route) { MeetingsScreen(vm, null) { id -> nav.navigate("meeting/$id") } }
+                        composable("notes") { NotesScreen(vm, back) }
+                        composable("tasks") { TasksScreen(vm, back) }
+                        composable("meetings") { MeetingsScreen(vm, back) { id -> nav.navigate("meeting/$id") } }
                         composable("meeting/{id}") { e -> MeetingDetailScreen(vm, e.arguments?.getString("id").orEmpty(), back) }
-                        composable(Tab.More.route) { MoreScreen { r -> nav.navigate("console/${r.path}") } }
+                        composable("more") { MoreScreen { r -> nav.navigate("console/${r.path}") } }
                         ConsoleRoute.entries.forEach { r ->
                             composable("console/${r.path}") {
                                 when (r) {
@@ -230,13 +225,32 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Voice -> VoiceprintScreen(vm, back)
                                     ConsoleRoute.Phone -> PhoneSetupScreen(back)
                                     ConsoleRoute.Passwords -> PasswordsScreen(vm, back)
-                                    ConsoleRoute.App -> SettingsScreen(vm, onSaved = { nav.navigate(Tab.Desk.route) { launchSingleTop = true } })
+                                    ConsoleRoute.App -> SettingsScreen(vm, onSaved = { nav.navigate("app") { launchSingleTop = true; popUpTo(0) } })
                                 }
                             }
                         }
                     }
+                    if (talkOpen && onApp && !areaFull) androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+                        online.cosger.jarvis.ui.console.DeskTalkSheet(vm, { talkOpen = false },
+                            { nav.navigate("console/${ConsoleRoute.Dashboard.path}") }, { nav.navigate("console/${ConsoleRoute.Background.path}") },
+                            Modifier.align(androidx.compose.ui.Alignment.BottomCenter))
+                    }
                 }
             }
         }
+        routeFromIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        routeFromIntent(intent)
+    }
+
+    private fun routeFromIntent(intent: android.content.Intent?) {
+        online.cosger.jarvis.ui.console.AppRoute.open(intent?.getStringExtra(EXTRA_ROUTE))
+    }
+
+    companion object {
+        const val EXTRA_ROUTE = "open_route"
     }
 }

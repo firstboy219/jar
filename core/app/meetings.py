@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from . import audit, composition, db, documents, hub, llm, memory, reports, stt, voice_id
+from . import audit, composition, db, documents, hub, memory, reports, stt, voice_id
 from .config import settings
 from .location import WIB
 
@@ -57,6 +57,9 @@ async def create(title: str, confidential: bool, consent: bool, device_id=None, 
     title = (title or "").strip()[:150] or f"Rapat {datetime.now(WIB):%d %b %Y %H:%M}"
     context = {"participants": [p.strip()[:60] for p in (participants or []) if p.strip()][:30],
                "agenda": (agenda or "").strip()[:2000]}
+    nxt = await db.pool().fetchrow("SELECT location FROM calendar_events WHERE start_at BETWEEN now() - interval '30 minutes' AND now() + interval '20 minutes' ORDER BY start_at LIMIT 1")
+    if nxt and nxt["location"]:
+        context["room"] = nxt["location"][:120]   # the meeting on his calendar now: its room
     row = await db.pool().fetchrow(
         "INSERT INTO meetings (title, confidential, consent, device_id, context) VALUES ($1, $2, true, $3, $4) "
         "RETURNING id, title, status",
@@ -71,6 +74,24 @@ async def create(title: str, confidential: bool, consent: bool, device_id=None, 
 # "Mulai rapat" by voice or chat does not record by itself — recording others needs everyone's consent — it puts the meeting card on the
 # desk with the button that starts it. The card then follows the meeting from its row (recording → processing → done), whichever device
 # holds the microphone; "stop" by voice raises stop_seq, which the recording device sees and obeys.
+_paused: set[str] = set()   # meetings on "Jeda": the phone keeps sending, nothing is stored or transcribed
+
+
+async def set_paused(meeting_id: str, paused: bool, actor: str) -> bool:
+    (_paused.add if paused else _paused.discard)(meeting_id)
+    await audit.record(actor, "meeting.paused" if paused else "meeting.resumed", f"meeting:{meeting_id}")
+    return paused
+
+
+async def set_confidential(meeting_id: str, confidential: bool, actor: str) -> bool:
+    """Rahasia switched during the recording: from now on (and for the minutes) the transcript stays off the AI — or goes to it again."""
+    done = await db.pool().execute("UPDATE meetings SET confidential = $2 WHERE id = $1 AND status = 'recording'", uuid.UUID(meeting_id), confidential)
+    if not done.endswith(" 1"):
+        raise MeetingError("rapat tidak sedang direkam")
+    await audit.record(actor, "meeting.confidential", f"meeting:{meeting_id}", confidential=confidential)
+    return confidential
+
+
 WANT_TTL_S = 30 * 60
 SHOW_DONE_S = 30 * 60
 _desk: dict = {"want": None, "stop_seq": 0}
@@ -110,7 +131,7 @@ def forget_want() -> None:
 async def desk_card() -> dict | None:
     """The card's state: recording | processing | waiting (asked, not started) | done | failed — or None when there is nothing to show."""
     row = await db.pool().fetchrow(
-        """SELECT id, title, status, confidential, chunks, started_at, duration_s, document_id, error, coalesce(done_at, finished_at, started_at) AS ended
+        """SELECT id, title, status, confidential, chunks, started_at, duration_s, document_id, error, context, coalesce(done_at, finished_at, started_at) AS ended
            FROM meetings WHERE status IN ('recording', 'queued', 'transcribing', 'summarizing')
               OR (status IN ('done', 'failed') AND coalesce(done_at, finished_at, started_at) > now() - make_interval(secs => $1))
            ORDER BY started_at DESC LIMIT 1""", SHOW_DONE_S)
@@ -130,7 +151,8 @@ async def desk_card() -> dict | None:
     return {"state": state, "key": f"{row['id']}:{state}", "id": str(row["id"]), "title": row["title"],
             "confidential": row["confidential"], "chunks": row["chunks"], "started_at": row["started_at"].timestamp(),
             "duration_s": row["duration_s"], "document_id": str(row["document_id"]) if row["document_id"] else None,
-            "error": (row["error"] or "")[:200] if state == "failed" else "", "status": row["status"], "stop_seq": _desk["stop_seq"]}
+            "error": (row["error"] or "")[:200] if state == "failed" else "", "status": row["status"], "stop_seq": _desk["stop_seq"],
+            "paused": str(row["id"]) in _paused, "participants": (row["context"] or {}).get("participants", []), "room": (row["context"] or {}).get("room", "")}
 
 
 def chunk_files(meeting_id: str) -> list[Path]:
@@ -145,12 +167,16 @@ async def add_chunk(meeting_id: str, n: int, data: bytes, ext: str = "ogg") -> d
     m = await get(meeting_id)
     if not m or m["status"] != "recording":
         raise MeetingError("rapat tidak sedang direkam")
+    if meeting_id in _paused:
+        return {"chunk": n, "chunks": m.get("chunks") or 0, "paused": True}   # paused: what was said now is not kept at all
     for other in _dir(meeting_id).glob(f"chunk-{n:05d}.*"):
         other.unlink(missing_ok=True)
     path = _dir(meeting_id) / f"chunk-{n:05d}.{ext}"
     path.write_bytes(data)
     count = len(chunk_files(meeting_id))
     await db.pool().execute("UPDATE meetings SET chunks = $2 WHERE id = $1", uuid.UUID(meeting_id), count)
+    from . import meeting_live   # the live transcript and what was decided so far (ADR-087)
+    asyncio.create_task(meeting_live.on_chunk(meeting_id, n, str(path), bool(m["confidential"])))
     return {"chunk": n, "chunks": count}
 
 
@@ -424,16 +450,24 @@ async def _summarize(meeting: dict, transcript: list[dict]) -> dict:
     private = meeting["confidential"]
     if private:
         return {"ringkasan": CONFIDENTIAL_NOTE, "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}
+    # through the master flow (ADR-087): Hermes picks the brain for each part; a meeting is personal content, never a free endpoint
+    from . import master
     notes = []
     system = NOTES_PROMPT.format(context=await context_text(meeting))
     for b in blocks(transcript):
-        notes.append(await llm.complete([{"role": "system", "content": system}, {"role": "user", "content": b}],
-                                        category="rapat", caller="meeting", private=private, max_tokens=700))
+        r = await master.run(master.Job("rapat", "catat-bagian", f"catat bagian rapat {meeting['title']}", trigger="event",
+                                        messages=[{"role": "system", "content": system}, {"role": "user", "content": b}], no_free=True, max_tokens=700))
+        if r["status"] != "done":
+            raise RuntimeError(r.get("error") or "catatan rapat gagal")
+        notes.append(str(r["result"]))
     marks = "; ".join(f"{int(m['t'] // 60):02d}:{int(m['t'] % 60):02d} {m['note']}" for m in meeting["marks"] or []) or "-"
-    raw = await llm.complete([{"role": "system", "content": FINAL_PROMPT.format(title=meeting["title"], marks=marks)
-                                              + "\n\nKONTEKS RAPAT:\n" + await context_text(meeting)},
-                              {"role": "user", "content": "\n\n---\n\n".join(notes)[:60000]}],
-                             category="rapat", caller="meeting", private=private, max_tokens=1500, temperature=0.2)
+    r = await master.run(master.Job("rapat", "notulen", f"susun notulen rapat {meeting['title']}", trigger="event", heavy=True, no_free=True, max_tokens=1500,
+                                    messages=[{"role": "system", "content": FINAL_PROMPT.format(title=meeting["title"], marks=marks)
+                                               + "\n\nKONTEKS RAPAT:\n" + await context_text(meeting)},
+                                              {"role": "user", "content": "\n\n---\n\n".join(notes)[:60000]}]))
+    if r["status"] != "done":
+        raise RuntimeError(r.get("error") or "notulen gagal")
+    raw = str(r["result"])
     summary = _json(raw)
     if not summary.get("ringkasan"):
         summary = {"ringkasan": raw.strip()[:2000], "keputusan": [], "action_items": [], "pertanyaan": [], "topik": []}
@@ -545,12 +579,15 @@ async def ask(meeting_id: str, question: str) -> dict:
             "filter": {"must": [{"key": "meeting_id", "match": {"value": meeting_id}}]}})
     hits = r.json().get("result", []) if r.status_code == 200 else []
     context = "\n".join(f"[{int(h['payload']['t'] // 60):02d}:{int(h['payload']['t'] % 60):02d}] {h['payload']['text']}" for h in hits)
-    answer = await llm.complete([
+    from . import master   # through the master flow (ADR-087)
+    r = await master.run(master.Job("rapat", "tanya", f"jawab pertanyaan tentang rapat {meeting['title']}", no_free=True, max_tokens=400, messages=[
         {"role": "system", "content": "Jawab pertanyaan pemilik tentang rapat ini hanya dari kutipan transkrip dan "
                                       "notulen. Sebut menit-nya. Kalau tidak ada, katakan tidak dibahas. Singkat."},
         {"role": "user", "content": f"Notulen: {json.dumps(meeting['summary'], ensure_ascii=False)[:4000]}\n\n"
-                                    f"Kutipan:\n{context}\n\nPertanyaan: {question}"}],
-        category="rapat", caller="meeting", private=meeting["confidential"], max_tokens=400)
+                                    f"Kutipan:\n{context}\n\nPertanyaan: {question}"}]))
+    if r["status"] != "done":
+        raise MeetingError(r.get("error") or "tidak bisa menjawab sekarang")
+    answer = str(r["result"])
     return {"answer": answer, "sources": [{"t": h["payload"]["t"], "text": h["payload"]["text"][:300]} for h in hits]}
 
 

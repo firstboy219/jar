@@ -19,7 +19,8 @@ from . import audit, db
 ROOT = Path(os.getenv("DOCUMENTS_DIR", "/data/documents"))
 FORMATS = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
            "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-           "pdf": "application/pdf", "md": "text/markdown; charset=utf-8"}
+           "pdf": "application/pdf", "md": "text/markdown; charset=utf-8",
+           "zip": "application/zip", "png": "image/png", "jpg": "image/jpeg", "txt": "text/plain; charset=utf-8"}   # the last four: files the tools made (store)
 MAX_CONTENT = 400_000
 
 
@@ -169,7 +170,7 @@ def _pdf(title: str, blocks: list[tuple], path: Path) -> None:
 async def create(title: str, fmt: str, content: str, actor: str, task_id: int | None = None,
                  rows: list | None = None) -> dict:
     title = (title or "Dokumen").strip()[:150]
-    if fmt not in FORMATS:
+    if fmt not in ("docx", "xlsx", "pdf", "md"):
         raise DocumentError("format harus docx, xlsx, pdf, atau md")
     if len(content or "") > MAX_CONTENT:
         raise DocumentError("isi dokumen terlalu panjang")
@@ -197,6 +198,23 @@ async def create(title: str, fmt: str, content: str, actor: str, task_id: int | 
     from . import canvas
     company = await db.pool().fetchval("SELECT company_id FROM tasks WHERE id = $1", task_id) if task_id else None
     await canvas.auto(f"doc:{doc_id}", company)
+    return dict(row) | {"url": f"/api/v1/documents/{doc_id}", "download_name": f"{safe}.{fmt}"}
+
+
+async def store(title: str, fmt: str, data: bytes, actor: str) -> dict:
+    """A finished file a tool made (a merged PDF, page images in a ZIP, a Word copy …): kept and served like any document."""
+    if fmt not in FORMATS:
+        raise DocumentError("format berkas tidak dikenal")
+    title = (title or "Berkas").strip()[:150]
+    ROOT.mkdir(parents=True, exist_ok=True)
+    doc_id = uuid.uuid4()
+    filename = f"{doc_id}.{fmt}"
+    (ROOT / filename).write_bytes(data)
+    row = await db.pool().fetchrow(
+        "INSERT INTO documents (id, title, format, filename, size, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, title, format, size, created_at",
+        doc_id, title, fmt, filename, len(data), actor)
+    await audit.record(actor, "document.stored", f"document:{doc_id}", title=title, format=fmt)
+    safe = re.sub(r"[^A-Za-z0-9 _-]", "", title).strip().replace(" ", "_")[:60] or "berkas"
     return dict(row) | {"url": f"/api/v1/documents/{doc_id}", "download_name": f"{safe}.{fmt}"}
 
 
