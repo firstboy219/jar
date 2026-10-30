@@ -1,6 +1,6 @@
 // Film bioskop (mockup 31): what plays today at the cinemas near him — each film with its rating, genre, length, cheapest ticket and the show
 // times still ahead per cinema; which cinemas (and which city) are his choice.
-import { get, header, html, icon, loading, on, post, put, render, sheet, toast } from '../core.js';
+import { get, header, html, icon, loading, on, openWeb, post, put, render, sheet, toast } from '../core.js';
 import { rupiah } from '../lib.js';
 
 let cur = null, where = 'rumah', day = 0;
@@ -21,7 +21,10 @@ export default {
     const dayChips = html`<div class="chips">${[0, 1, 2, 3, 4, 5, 6].map((n) => html`<a class="chip ${n === day ? 'on' : ''}" href="#/bioskop?day=${n}&where=${where}">${dayLabel(n)}</a>`)}</div>`;
     if (d.error && !d.films.length) {
       root.innerHTML = String(html`${header('Film bioskop', { sub: d.date })}<div class="scr">${dayChips}<div class="card red"><span class="k" style="color:var(--red-t)">Jadwal ${dayLong(day)} belum terbaca</span>
-        <span class="small">${d.error}</span><a class="btn" href="#/bioskop?day=${day}&where=${where}&refresh=1">${icon('repeat', 16)} Coba lagi</a></div></div>`);
+        <span class="small">${d.error}</span>
+        <span class="small">Bila situsnya minta verifikasi "bukan robot", buka sekali di HP lalu Selesai — berikutnya JARVIS bisa membacanya sendiri.</span>
+        <div class="chips">${[['21cineplex', 'https://21cineplex.com/'], ['CGV', 'https://www.cgv.id/'], ['Cinépolis', 'https://www.cinepolis.co.id/']].map(([l, u]) => html`<button class="chip" data-act="site" data-u="${u}">${icon('lock', 12)} Buka ${l} di HP</button>`)}</div>
+        <a class="btn" href="#/bioskop?day=${day}&where=${where}&refresh=1">${icon('repeat', 16)} Coba lagi</a></div></div>`);
       return;
     }
     if (d.loading) {
@@ -57,6 +60,7 @@ export default {
       </div>`);
   },
   actions: {
+    site(b) { openWeb(b.dataset.u); },
     async book(b) {
       const v = await sheet(String(html`<form><span class="ttl">${b.dataset.f}</span><span class="small">${b.dataset.c} · ${dayLong(day)} ${b.dataset.t.replace(':', '.')}</span>
         <label class="field">Jumlah kursi<input name="seats" type="number" min="1" max="8" value="2"></label>

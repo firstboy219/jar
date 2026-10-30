@@ -127,7 +127,7 @@ async def read(url: str, domains: list[str], phone_sites: set[str] | None = None
             log.info("server read %s: %s", url, e)
     page = await _phone_read(url, domains)
     if page.get("challenged") or challenged(page):
-        raise WebError("situsnya meminta verifikasi manusia — buka sekali lewat tombol \"Buka di HP\", lalu coba lagi")
+        raise WebError("situsnya meminta verifikasi \"bukan robot\" — buka situsnya sekali di HP lewat tombol \"Buka … di HP\", lalu coba lagi")
     if not (page.get("text") or "").strip():
         raise WebError("halamannya kosong")
     return {**page, "by": "hp"}
