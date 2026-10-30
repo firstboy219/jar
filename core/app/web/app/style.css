@@ -243,3 +243,20 @@ body[data-view="obrolan"] #player { bottom: calc(126px + var(--safe-b)); }
   .chatbar { right: 340px; }
   #player { right: 364px; }
 }
+
+/* ---------- "Ambil alih": the desk's takeover window, reused in the app (takeover.js) ---------- */
+#takeover { position: fixed; inset: 0; z-index: 25000; display: flex; flex-direction: column; background: #02030a; color: var(--tx); }
+#takeover[hidden] { display: none; }
+.tk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); border-bottom: 1px solid var(--cyan-bd); }
+.tk-bar button { padding: 7px 10px; border-radius: 10px; border: 1px solid var(--cyan-bd); background: var(--cyan-bg); color: var(--tx); font: inherit; font-size: 13px; }
+.tk-title { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-url { flex: 1; min-width: 80px; color: var(--cyan); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tk-bar .livebadge { padding: 1px 7px; border-radius: 999px; font-size: 10px; letter-spacing: 1px; color: #fff; background: #e11d48; }
+.tk-bar .tk-done { background: #166534; border-color: #4ade80; }
+.tk-note { padding: 4px 12px; font-size: 12px; color: #fde68a; background: rgba(251, 191, 36, .12); }
+.tk-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+.tk-canvas { background: #000; border: 2px solid #fbbf24; border-radius: 6px; touch-action: none; cursor: crosshair; max-width: 100%; max-height: 100%; }
+.tk-paste { display: flex; gap: 6px; padding: 6px 12px; padding-bottom: max(6px, env(safe-area-inset-bottom)); } .tk-paste input { flex: 1; }
+.tk-input { position: fixed; left: 8px; top: 60px; width: 48px; height: 32px; opacity: .01; font-size: 16px; padding: 0; border: 0; color: transparent;
+  background: transparent; caret-color: transparent; z-index: 25001; pointer-events: none; }
+@media (max-width: 700px) { .tk-title { max-width: 100%; } .tk-bar button { padding: 5px 8px; font-size: 12px; } }

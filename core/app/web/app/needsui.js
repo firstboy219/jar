@@ -16,7 +16,7 @@ export function itemCard(it, compact = false) {
         <span>${o.i === it.recommended ? '★ ' : ''}${o.label || o.title || `Opsi ${o.i + 1}`}</span>${o.waktu ? html`<span class="mono small">${o.waktu}</span>` : ''}</button>`)}
         ${it.recommended != null ? html`<span class="small">★ biasanya kamu pilih ini</span>` : ''}</div>`
     : it.kind === 'question'
-      ? html`<button class="btn block" data-act="needAnswer" data-id="${it.id}">Jawab</button>`
+      ? html`<div class="btns"><button class="btn violet" data-act="needAnswer" data-id="${it.id}">Jawab</button>${it.task_id ? html`<a class="btn" href="#/misi/${it.task_id}" style="flex:0 0 120px">Buka misi</a>` : ''}</div>`
       : html`<div class="btns"><button class="btn ${tone}" data-act="needApprove" data-kind="${it.kind}" data-id="${it.id}" ${it.admin_only ? 'disabled' : ''}>${it.admin_only ? 'Hanya di admin web' : it.cta}</button>
           <button class="btn" data-act="needReject" data-kind="${it.kind}" data-id="${it.id}" style="flex:0 0 96px">Tolak</button></div>`;
   const r = it.route || {};
@@ -124,8 +124,9 @@ export const needActions = {
   async needPick(b) { await post(`/api/v1/app/needs/choice/${b.dataset.id}`, { option: Number(b.dataset.opt) }); toast('Pilihanmu dicatat.'); render(); },
   async needAnswer(b) {
     const it = byKey.get(key('question', b.dataset.id));
-    const r = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:12px"><span class="k violet">Pertanyaan dari misi</span><p>${it?.title || ''}</p>
-      <label class="field">Jawabanmu<textarea name="text" required></textarea></label><button class="btn primary">Kirim jawaban</button></form>`));
+    const r = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:12px"><span class="k violet">Pertanyaan dari misi</span><p style="white-space:pre-wrap">${it?.text || it?.title || ''}</p>
+      ${it?.task_id ? html`<a class="small" href="#/misi/${it.task_id}" data-close="" style="color:var(--cyan)">Buka misinya (layar langsung · Ambil alih) →</a>` : ''}
+      <label class="field">Jawabanmu<textarea name="text" required placeholder="mis. sudah, lanjutkan"></textarea></label><button class="btn primary">Kirim jawaban</button></form>`));
     if (!r?.text) return;
     await post(`/api/v1/app/needs/question/${b.dataset.id}`, { text: r.text });
     toast('Jawaban dikirim ke misinya.');

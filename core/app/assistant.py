@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from . import attachments as attachments_module
 from . import companion, dialog
 from . import (awareness, db, drafts, gateway, llm, memory, notifications, questions, quick, reports, router,
-               canvas, chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
+               chat_settings, companies, company_lane, gm, goals, modelrouter, self_model, skills_pipeline, stage, voice,
                inbox, n8n, watchers, workers, writer)
 from .location import WIB, Location, context_prefix
 
@@ -64,11 +64,13 @@ Obrolan biasa, pertanyaan ringan, atau yang bisa dijawab dari memori/konteks: ja
 Bekerja DI situs: bila pemilik minta kamu MELAKUKAN sesuatu di sebuah situs (apply/melamar kerja, mendaftar, \
 mengisi formulir, mencari lalu membuka lowongan/produk, login, memesan), jangan menyuruh pekerja "mencari panduan". \
 Instruksinya harus: buka situsnya dengan browser dan kerjakan langkah demi langkah di halaman itu (klik, ketik, \
-gulir) supaya pemilik bisa melihatnya langsung di meja; berhenti SEBELUM tindakan yang tak bisa dibatalkan atau yang \
+gulir) supaya pemilik bisa melihatnya langsung di halaman misi; berhenti SEBELUM tindakan yang tak bisa dibatalkan atau yang \
 mengirim data pribadi (mengirim lamaran/formulir, membuat akun, membayar) dan tanyakan pemilik lewat ask_owner dengan \
-ringkasan apa yang akan dikirim. Kalau pemilik bilang pekerja kesulitan (captcha, login), arahkan: buka Meja, klik \
-"Intervensi" di kartu tugasnya (bisa kapan saja, pekerja langsung diam), lalu tekan "Selesai, lanjutkan Jarvis" — jangan minta kata sandi atau kode lewat chat. \
-Permintaan untuk MENGEMBANGKAN JARVIS SENDIRI (ubah tampilan meja/aplikasi, perbaiki fitur, tambah kemampuan kecil) selalu lewat \
+ringkasan apa yang akan dikirim. Situs yang memblokir browser server (Cloudflare) atau melamar/memesan di situs ketat \
+(JobStreet, LinkedIn, Traveloka, Agoda): pekerja menyerahkannya ke browser di HP pemilik (kerjakan_di_web_hp), atau pakai kerjakan_di_web langsung. \
+Kalau pemilik bilang pekerja kesulitan (captcha, login), arahkan: buka misinya di aplikasi JARVIS, tekan \
+"Ambil alih" (bisa kapan saja, pekerja langsung diam), lalu tekan "Selesai — lanjutkan Jarvis" — jangan minta kata sandi atau kode lewat chat. \
+Permintaan untuk MENGEMBANGKAN JARVIS SENDIRI (ubah tampilan aplikasi, perbaiki fitur, tambah kemampuan kecil) selalu lewat \
 tim_dev — bukan spawn_task — dan jangan mengaku sudah dikerjakan sebelum tim_dev mengembalikan dev_job.
 Aplikasi di HP pemilik (Gojek: ojek, mobil, makanan, kirim barang, belanja): pakai operasi_hp — JANGAN spawn_task, jangan mengaku sudah memesan; pemilik harus menyetujui di aplikasi JARVIS dengan password admin dulu, lalu JARVIS mengoperasikan HP-nya (PIN/OTP tetap pemilik yang ketik).
 Kamu MENGAWASI semua pekerjaan: tugas worker, PROYEK pemilik (alat proyek: lihat status, jalankan, jeda, lanjutkan, buat proyek baru dengan peran pekerjanya) dan Tim Dev. "POLA SERUPA" berisi pekerjaan mirip yang pernah dikerjakan pekerja beserta polanya (berhasil/gagal, berapa lama, langkah, model, apakah pemilik harus membantu): kenali polanya — perkirakan waktu dan cara, ingatkan pemilik bila dulu ia harus membantu (login, captcha, persetujuan) atau bila cara yang sama dulu gagal, dan tulis pelajarannya ke instruksi spawn_task.
@@ -92,7 +94,7 @@ analisis, perbandingan, atau membuat sesuatu darinya → spawn_task (berkasnya o
 mengaku sudah membaca bagian yang tidak ada di pesan.
 
 Layar HP (Panggung): pemilik bisa melihat apa saja yang ditampilkan — musik/suara, video, gambar, peta, \
-halaman web, dokumen, catatan, draf, atau beberapa sekaligus. Jika ia minta menutupnya ("tutup", "sudah"), panggil close_stage. Pemutar musik/video dan kartu Rapat juga muncul di meja (kanvas), tempat kamera terbang ke sana sendiri. \
+halaman web, dokumen, catatan, draf, atau beberapa sekaligus. Jika ia minta menutupnya ("tutup", "sudah"), panggil close_stage. Pemutar musik/video juga tampil di aplikasi JARVIS (pemutar mini, tetap berbunyi di layar lain). \
 Rapat: "mulai rapat" → meeting(start) (merekam butuh persetujuan peserta, jadi pemilik mengetuk Mulai rekam di kartu); "selesai rapat" → meeting(stop). Minta putar lagu → \
 play_music; "masukkan lagu X ke playlist" → playlist_add; "putar playlist" → play_playlist; "tampilkan lagi gambar/dokumen/lagu \
 yang tadi/kemarin" → show_saved (semua hasil JARVIS ada di menu Simpanan); tanya jarak/rute/"lewat mana" → show_route (asal kosong = lokasi pemilik sekarang). Untuk \
@@ -102,7 +104,7 @@ Draf balasan: jika pemilik minta dibantu membalas pesan WhatsApp/email yang ada 
 draft_reply (TEKS LAYAR ikut di pesannya). Jika hasilnya needs_confirmation, tanyakan dulu "Isi chat ini \
 akan diproses model cloud, boleh?" lalu panggil lagi dengan confirmed=true bila ia setuju. Kamu TIDAK \
 PERNAH mengirim pesan; pemilik yang memilih dan mengirim draf dari layarnya. Minta dibuatkan/dibalaskan email, surat, atau pesan dari BERKAS TERLAMPIR, obrolan, atau sekadar arahan (tanpa layar dibagikan) → write_draft; hasilnya tampil di layar (bisa disalin) dan jadi file .docx yang bisa diunduh. Jangan hanya berjanji membuatkannya. \
-Kalau pemilik sedang MEMBAGIKAN LAYAR di Meja (web) — ada gambar layar terlampir tanpa TEKS LAYAR — dan minta draf/balasan dari yang terlihat: \
+Kalau pemilik sedang MEMBAGIKAN LAYAR — ada gambar layar terlampir tanpa TEKS LAYAR — dan minta draf/balasan dari yang terlihat: \
 panggil write_draft; layar dibaca otomatis. Kalau yang terlihat jelas hanya sebagian email, minta pemilik menempelkan teks lengkapnya di chat.
 
 Angka model AI (harga, konteks, kecepatan, error, kelebihan/kekurangan) HANYA dari find_models/ai_settings — \
@@ -200,16 +202,6 @@ TOOLS = [
             "entity_type": {"type": "string", "enum": ["project", "company"]}, "entity": {"type": "string", "description": "company_id atau nama proyek"},
             "kind": {"type": "string", "enum": ["core_constraint", "correction_pivot", "validated_finding", "tech_preference"]},
             "text": {"type": "string"}}, "required": ["entity_type", "entity", "kind", "text"]}}},
-    {"type": "function", "function": {
-        "name": "canvas",
-        "description": "Kanvas 3D (galaksi kerja pemilik, satu per konteks: utama, project:<nama>, company:<id>). place = taruh "
-                       "kartu (ref: task:<id>, doc:<uuid>, memory:<uuid>, shown:<id>, goal:<id>, vault:<id>, directive:<id>); "
-                       "focus = terbangkan tampilan ke kartu; link = hubungkan dua kartu; list = isi kanvas. Hanya tata letak.",
-        "parameters": {"type": "object", "properties": {
-            "action": {"type": "string", "enum": ["place", "focus", "link", "list"]},
-            "context": {"type": "string", "description": "utama | project:<nama> | company:<id>"},
-            "ref": {"type": "string"}, "ref_b": {"type": "string", "description": "kartu kedua untuk link"},
-            "label": {"type": "string"}}, "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "inbox",
         "description": "Email (Gmail) dan kalender lewat n8n. check = lihat email baru yang belum dibaca dan disortir; list = daftar yang "
@@ -377,7 +369,7 @@ TOOLS = [
             "mode": {"type": "string", "enum": ["driving", "motor", "walking"]}}, "required": ["destination"]}}},
     {"type": "function", "function": {
         "name": "meeting",
-        "description": "Rapat yang direkam. start = buka kartu Rapat di meja (rekaman baru mulai saat pemilik mengetuk Mulai rekam, karena semua "
+        "description": "Rapat yang direkam. start = buka layar Rapat di aplikasi (rekaman baru mulai saat pemilik mengetuk Mulai rekam, karena semua "
                        "peserta harus setuju); stop = hentikan rekaman yang sedang berjalan dan buat notulen.",
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["start", "stop"]}, "title": {"type": "string"},
@@ -386,7 +378,7 @@ TOOLS = [
             "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "tim_dev",
-        "description": "Serahkan permintaan PENGEMBANGAN JARVIS SENDIRI (perbaiki/ubah/tambah fitur aplikasi, meja, panel, perilaku Jarvis) ke "
+        "description": "Serahkan permintaan PENGEMBANGAN JARVIS SENDIRI (perbaiki/ubah/tambah fitur aplikasi, panel, perilaku Jarvis) ke "
                        "Tim Dev: bisan menulis spesifikasi, coder membangun, qaqa memeriksa; pemilik menyetujui hasilnya di halaman admin. "
                        "Tulis permintaan pemilik SELENGKAPNYA dengan kata-katanya sendiri (jangan diringkas, jangan dipecah).",
         "parameters": {"type": "object", "properties": {"permintaan": {"type": "string"}}, "required": ["permintaan"]}}},
@@ -562,9 +554,6 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 return json.dumps({"task_id": t["id"], "status": "queued", "category": t["category"]})
             case "inbox" | "watch":
                 return json.dumps(await _inbox_tool(call.name, a), ensure_ascii=False, default=str)
-            case "canvas":
-                return json.dumps(await _canvas_tool(a, actor, device_id, stt, bool(screen_text or attachments)),
-                                  ensure_ascii=False, default=str)
             case "voice_correction" | "voice_pronounce" | "voice_settings":
                 return json.dumps(await _voice_tool(call.name, a, actor, session_id, device_id, stt, bool(screen_text or attachments)),
                                   ensure_ascii=False, default=str)
@@ -605,7 +594,7 @@ async def _run_tool(call: llm.ToolCall, session_id: str, actor: str, device_id, 
                 except devteam.DevTeamError as e:
                     return json.dumps({"error": str(e)})
                 return json.dumps({"dev_job": job["id"], "status": "bisan sedang menulis spesifikasi",
-                                   "say": "Tim dev sudah mulai; pantau di area Tim Dev di Meja."}, ensure_ascii=False)
+                                   "say": "Tim dev sudah mulai; pantau di Bengkel/Misi di aplikasi."}, ensure_ascii=False)
             case "proyek":
                 return json.dumps(await _project_tool(a, actor), ensure_ascii=False, default=str)
             case "operasi_hp":
@@ -1067,34 +1056,6 @@ async def _inbox_tool(name: str, a: dict) -> dict:
         return {"error": str(e)}
 
 
-async def _canvas_tool(a: dict, actor: str, device_id, stt, outside_text: bool) -> dict:
-    action, context = str(a.get("action") or "list"), str(a.get("context") or "utama")
-    try:
-        if action == "list":
-            c = await canvas.ensure(context)
-            v = await canvas.view(c["id"])
-            return {"kanvas": v["title"], "kartu": [{"ref": x["ref"], "judul": x["title"], "jenis": x["kind"]} for x in v["cards"][:40]],
-                    "buka": "https://vis1.cosger.online/canvas/"}
-        if action == "focus":
-            return await canvas.focus(context, str(a.get("ref") or ""), actor)
-        if refused := await chat_settings.guard("canvas_" + action, device_id, stt, outside_text):
-            return {"error": refused}
-        if action == "place":
-            n = await canvas.add(context, str(a.get("ref") or ""), actor)
-            return {"kartu": n["id"], "sudah_ada": bool(n.get("existing"))}
-        if action == "link":
-            c = await canvas.ensure(context)
-            v = await canvas.view(c["id"])
-            ids = {x["ref"]: x["id"] for x in v["cards"]}
-            if a.get("ref") not in ids or a.get("ref_b") not in ids:
-                return {"error": "kedua kartu harus sudah ada di kanvas itu"}
-            e = await canvas.link(ids[a["ref"]], ids[a["ref_b"]], actor, str(a.get("label") or ""))
-            return {"garis": e["id"]}
-        return {"error": "aksi kanvas tidak dikenal"}
-    except (canvas.CanvasError, companies.CompanyError) as e:
-        return {"error": str(e)}
-
-
 async def _voice_tool(name: str, a: dict, actor: str, session_id: str, device_id, stt, outside_text: bool) -> dict:
     try:
         if name == "voice_correction":
@@ -1129,7 +1090,7 @@ async def _meeting(action: str, a: dict) -> dict:
             return {"error": "tidak ada rapat yang sedang direkam"}
         return {"ok": True, "say": "Rekaman kuhentikan, notulennya sedang disusun dan kukabari kalau sudah jadi."}
     w = meetings.want_to_record(str(a.get("title") or ""), bool(a.get("confidential")), a.get("participants") or [], str(a.get("agenda") or ""))
-    return {"ok": True, "judul": w["title"], "say": "Kartu Rapat sudah kubuka di meja. Pastikan semua peserta setuju direkam, lalu ketuk Mulai rekam."}
+    return {"ok": True, "judul": w["title"], "say": "Layar Rapat sudah kubuka di aplikasi. Pastikan semua peserta setuju direkam, lalu ketuk Mulai rekam."}
 
 
 def _owner_clear(stt: dict | None) -> bool:
@@ -1165,7 +1126,7 @@ async def _draft_status(session_id: str) -> str | None:
             await hub.broadcast({"type": "progress", "session_id": session_id, "task_id": row["id"], "title": row["title"][:120],
                                  "pct": 100, "text": "Selesai", "extra": {"draft": draft}})
             return "Sudah jadi — drafnya kutampilkan lagi di bawah."
-        return "Sudah jadi — teksnya ada di kartu Draf balasan di Meja dan file .docx-nya di menu Dokumen."
+        return "Sudah jadi — teksnya ada di Draf di aplikasi dan file .docx-nya di menu Dokumen."
     return f"Drafnya gagal ditulis ({row['error'] or row['status']}). Bilang \"tolong balas email ini\" lagi untuk mencoba ulang."
 
 
@@ -1223,7 +1184,7 @@ async def _project_tool(a: dict, actor: str) -> dict:
         if act == "create":
             p = await projects.save({"name": a.get("nama"), "goal": a.get("tujuan"), "schedule": a.get("jadwal") or "manual",
                                      "at_time": a.get("jam"), "weekday": a.get("hari"), "roles": a.get("peran") or []}, actor)
-            return {"created": p["id"], "say": projects.status_text(p) + " Ada di menu Proyek di Meja."}
+            return {"created": p["id"], "say": projects.status_text(p) + " Ada di Misi → Terjadwal di aplikasi."}
         rows = (await projects.list_())["projects"]
         if act == "list":
             return {"projects": [projects.status_text(p) for p in rows] or ["Belum ada proyek."]}
@@ -1270,7 +1231,7 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
                 job = await devteam.request(a["text"], actor)
             except devteam.DevTeamError as e:
                 return f"Maaf, {e}."
-            return f"Oke, tim dev menerima permintaan #{job['id']}. bisan sedang menulis spesifikasinya — pantau di area Tim Dev di Meja."
+            return f"Oke, tim dev menerima permintaan #{job['id']}. bisan sedang menulis spesifikasinya — pantau di Bengkel/Misi di aplikasi."
         case "phone_app":
             r = await _phone_tool({"aplikasi": a["app"], "tujuan": a["text"]}, actor, session_id)
             return r.get("say") or f"Maaf, {r['error']}."
@@ -1279,7 +1240,7 @@ async def _act(action, session_id: str, actor: str, device_id, location, private
             if r.get("error"):
                 if "ada" in r:   # no such project: say so with the names there are (the chat model only answered "Oke, sedang kuurus." — a promise, not an action)
                     return (f"Proyek \"{a.get('name')}\" tidak ketemu. Yang ada: {', '.join(r['ada'])}." if r["ada"] else
-                            "Belum ada proyek — buat di menu Proyek di Meja, atau bilang ke aku proyek apa yang mau dibuat.")
+                            "Belum ada proyek — buat di Misi → Terjadwal di aplikasi, atau bilang ke aku proyek apa yang mau dibuat.")
                 return f"Maaf, {r['error']}."
             return r.get("say") or r.get("status") or "\n".join(r.get("projects") or [])
         case "meeting_start":

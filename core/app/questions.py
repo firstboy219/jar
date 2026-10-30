@@ -10,6 +10,9 @@ from . import audit, db, reports
 
 async def ask(question: str, task_id: int | None) -> dict:
     question = question.strip()[:1000]
+    if not task_id:   # a worker that forgot its task number: the one mission running now is the one asking
+        running = await db.pool().fetch("SELECT id FROM tasks WHERE status = 'running' AND kind IN ('owner', 'feature', 'routine') AND runtime = 'hermes' LIMIT 2")
+        task_id = running[0]["id"] if len(running) == 1 else None
     title = await db.pool().fetchval("SELECT title FROM tasks WHERE id = $1", task_id) if task_id else None
     row = await db.pool().fetchrow(
         "INSERT INTO owner_questions (task_id, question) VALUES ($1, $2) RETURNING *", task_id, question)

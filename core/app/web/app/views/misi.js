@@ -78,7 +78,7 @@ function detailView(t) {
       ${t.episode ? html`<span class="small" style="padding:0 4px">${t.episode.success ? '✓ dipelajari' : '✗ dicatat'}: ${t.episode.lesson || t.episode.approach || ''}</span>` : ''}
       <div class="g4" style="margin-top:4px">
         <button class="btn" data-act="say" ${t.can_say ? '' : 'disabled'} style="flex-direction:column;height:60px;font-size:11px">${icon('chat', 18)}Arahkan</button>
-        <button class="btn" data-native="desk" style="flex-direction:column;height:60px;font-size:11px" ${t.station ? '' : 'disabled'}>${icon('hand', 18)}Ambil alih</button>
+        <button class="btn" data-act="take" style="flex-direction:column;height:60px;font-size:11px" ${t.status === 'running' && (t.station?.browsing || t.station?.has_frame) ? '' : 'disabled'}>${icon('hand', 18)}Ambil alih</button>
         <button class="btn" data-act="start" ${t.can_start ? '' : 'disabled'} style="flex-direction:column;height:60px;font-size:11px">${icon('play', 18)}Mulai lagi</button>
         <button class="btn danger" data-act="stop" ${t.can_stop ? '' : 'disabled'} style="flex-direction:column;height:60px;font-size:11px">${icon('stop', 18)}Hentikan</button>
       </div>
@@ -136,6 +136,7 @@ export default {
     async stop() { await post(`/api/v1/workers/${currentId}/stop`); toast('Misi dihentikan.'); render(); },
     async pause() { await post(`/api/v1/app/missions/${currentId}/pause`); toast('Dijeda'); render(); },
     async resume() { await post(`/api/v1/app/missions/${currentId}/resume`); toast('Dilanjutkan'); render(); },
+    async take() { const { takeOver } = await import('../takeover.js'); takeOver(current); },
     zoom() {   // the live screen full size, still live
       const w = document.createElement('div');
       w.style.cssText = 'position:fixed;inset:0;z-index:60;background:#000d;display:flex;align-items:center;justify-content:center;padding:8px';

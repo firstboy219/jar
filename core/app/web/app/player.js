@@ -1,7 +1,7 @@
 // The app's player (ADR-087): whatever JARVIS puts on the stage as music, a sound or a video — from Musik, Video, a playlist, the chat —
 // plays here, in a bar above the dock (a video opens above it, in the official YouTube player served from JARVIS' own origin). The server
 // hears "ended"/"next"/"prev" back, so a playlist moves on by itself.
-import { $, api, castTv, embedded, get, html, icon, on, pickSpeaker, pipVideo, post, send } from './core.js';
+import { $, api, castTv, embedded, get, host, html, icon, on, pickSpeaker, pipVideo, post, send } from './core.js';
 
 const YT = /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
 let cur = null, audio = null, lastUrl = null, open = false, watch = null;
@@ -15,6 +15,35 @@ function watchVideo() {
     try { t = f?.contentDocument?.title || ''; } catch { /* not loaded */ }
     if (t === 'ended' && cur) { clearInterval(watch); send({ type: 'stage_event', id: cur.id, event: 'ended' }); }
   }, 2000);
+}
+
+// Inside the APK the sound plays in the phone's own media service (it keeps playing on every screen, with the screen off, with lock-screen
+// controls); this stands in for an <audio> so the bar shows and steers it.
+class PhoneAudio {
+  constructor(track) {
+    this.track = track; this.s = {}; this.was = null;
+    this.timer = setInterval(() => this.poll(), 1000);
+    this.poll();
+  }
+  poll() {
+    try { this.s = JSON.parse(host.call('musicState') || '{}'); } catch { this.s = {}; }
+    if (this.s.id && this.s.id !== this.track.id) this.s = {};   // the phone plays something else now
+    tick();
+    if (this.s.playing !== this.was) { this.was = this.s.playing; paint(); }
+  }
+  get paused() { return !this.s.playing; }
+  get currentTime() { return (this.s.pos || 0) / 1000; }
+  set currentTime(v) { host.call('musicCmd', 'seek', String(Math.round(v * 1000))); }
+  get duration() { return this.s.dur ? this.s.dur / 1000 : NaN; }
+  play() {
+    if (this.s.id) host.call('musicCmd', 'play', '');
+    else host.call('musicPlay', { id: this.track.id, url: this.track.url, title: this.track.title || '', artist: this.track.artist || '', cover: this.track.cover_url || '' });
+    setTimeout(() => this.poll(), 400);
+    return Promise.resolve();
+  }
+  pause() { host.call('musicCmd', 'pause', ''); setTimeout(() => this.poll(), 300); }
+  stop() { clearInterval(this.timer); host.call('musicCmd', 'stop', ''); }
+  forget() { clearInterval(this.timer); }
 }
 
 function bar() {
@@ -57,9 +86,14 @@ function paint() {
 
 async function load(autoplay) {
   const yt = YT.exec(cur.url || '');
-  if (audio) { audio.pause(); audio = null; }
+  if (audio) { if (audio instanceof PhoneAudio) audio.forget(); else audio.pause(); audio = null; }
   if (lastUrl) { URL.revokeObjectURL(lastUrl); lastUrl = null; }
   if (yt) { open = autoplay; paint(); if (open) watchVideo(); return; }
+  if (embedded && host.has('musicState')) {   // the engine already started it from the same stage event; a resumed track starts on "Putar"
+    audio = new PhoneAudio(cur);
+    paint();
+    return;
+  }
   let src = cur.url;
   if (src.startsWith('/api/v1/media/')) {   // JARVIS' own file: an <audio> cannot send the device token, so it is fetched first
     const b = await api('GET', src, undefined, { blob: true });
@@ -84,10 +118,10 @@ function take(p, autoplay) {
 }
 
 export function startPlayer() {
-  if (embedded) return;   // inside the APK the phone's own player (the talk sheet's music/video panel, with its media session) plays it
+  if (embedded && !host.has('musicState')) return;   // an older APK: its talk sheet's panel plays it
   on('stage', (e) => {
     if (!['music', 'audio', 'video'].includes(e.panel)) return;
-    if (e.mode === 'close') { if (cur && cur.id === e.id) { audio?.pause(); cur = null; paint(); } return; }
+    if (e.mode === 'close') { if (cur && cur.id === e.id) { if (audio instanceof PhoneAudio) audio.forget(); else audio?.pause(); audio = null; cur = null; paint(); } return; }
     const p = e.payload || {};
     take({ id: e.id, panel: e.panel, title: p.title, artist: p.artist || p.channel, url: p.url, cover_url: p.cover_url || p.thumbnail_url, playlist: p.playlist }, true);
   });
@@ -105,7 +139,7 @@ export function startPlayer() {
       (a === 'pip' ? pipVideo : castTv)(YT.exec(cur.url || '')[1], t);
     } else if (a === 'speaker') { pickSpeaker(audio); }
     else if (a === 'next' || a === 'prev') { send({ type: 'stage_event', id: cur.id, event: a }); }
-    else if (a === 'close') { audio?.pause(); send({ type: 'stage_event', id: cur.id, event: 'closed' }); post('/api/v1/app/music/stop').catch(() => {}); cur = null; open = false; paint(); }
+    else if (a === 'close') { if (audio instanceof PhoneAudio) audio.stop(); else audio?.pause(); audio = null; send({ type: 'stage_event', id: cur.id, event: 'closed' }); post('/api/v1/app/music/stop').catch(() => {}); cur = null; open = false; paint(); }
   });
 }
 

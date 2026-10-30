@@ -77,19 +77,3 @@ async def test_a_run_starts_every_worker_with_its_role_model_and_the_web_rules(p
     assert listed["projects"][0]["name"] == "Cari kerja" and "cron" in listed
 
 
-@pytest.mark.asyncio
-async def test_the_last_activity_points_at_the_latest_card(pool, monkeypatch):
-    from app import canvas, hub, live, stage
-
-    async def quiet(ev):
-        return 1
-    monkeypatch.setattr(hub, "broadcast", quiet)
-    await pool.execute("TRUNCATE canvases CASCADE")
-    await pool.execute("INSERT INTO messages (session_id, role, content, route) VALUES ('meja-1', 'user', 'putar video kucing', 'assistant')")
-    tid = await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, status) VALUES ('meja-1', 'Riset', 'x', 'owner', 'running') RETURNING id")
-    node = (await canvas.add("utama", f"task:{tid}", "owner"))["id"]
-    a = await live.last_activity()
-    assert a["where"] == "card" and a["node"] == node and a["asked"] == "putar video kucing"
-    await stage.show("video", {"title": "Kucing lucu", "url": "https://www.youtube.com/watch?v=abcdefghijk"})
-    a = await live.last_activity()
-    assert a["where"] == "panel" and a["panel"] == "video" and a["title"] == "Kucing lucu"     # the newest place wins

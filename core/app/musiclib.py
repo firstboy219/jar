@@ -18,6 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import httpx
+from urllib.parse import quote
 
 from .config import settings
 
@@ -28,8 +29,24 @@ AUDIO_TYPES = {"audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/ogg": "ogg", "aud
 _ID = re.compile(r"^[0-9a-f]{32}$")
 
 
-async def search(query: str, limit: int = 6) -> list[dict]:
-    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "JARVIS/1.0"}) as c:
+MOODS = {   # how the owner asks (Indonesian) → what the open-music catalogues tag it as
+    "santai": "chill", "rileks": "relaxing", "relax": "relaxing", "tenang": "calm", "tidur": "ambient", "fokus": "ambient", "belajar": "lofi",
+    "kerja": "lofi", "semangat": "upbeat", "olahraga": "energetic", "senam": "energetic", "sedih": "sad", "galau": "melancholic",
+    "romantis": "romantic", "bahagia": "happy", "senang": "happy", "pagi": "acoustic", "hujan": "piano", "jazz": "jazz", "akustik": "acoustic",
+    "piano": "piano", "gitar": "guitar", "klasik": "classical", "lofi": "lofi", "chill": "chill", "instrumental": "instrumental",
+}
+_NOISE = re.compile(r"\b(musik|music|lagu|lagu2|lagu-lagu|putar|putarkan|play|yang|yg|dong|aja|saja|buat|untuk|sambil|suasana|nuansa)\b", re.I)
+
+
+def mood_query(query: str) -> tuple[str, str]:
+    """'musik santai buat kerja' → ('santai kerja', 'chill'): the words that matter, and a catalogue tag when it is a mood. Pure."""
+    words = " ".join(_NOISE.sub(" ", query).split())
+    tag = next((MOODS[w] for w in re.findall(r"\w+", words.lower()) if w in MOODS), "")
+    return words or query.strip(), tag
+
+
+async def _openverse(query: str, limit: int) -> list[dict]:
+    async with httpx.AsyncClient(timeout=8, headers={"User-Agent": "JARVIS/1.0"}) as c:
         r = await c.get("https://api.openverse.org/v1/audio/",
                         params={"q": query, "page_size": max(1, min(limit, 20)), "category": "music", "mature": "false"})
     r.raise_for_status()
@@ -42,6 +59,68 @@ async def search(query: str, limit: int = 6) -> list[dict]:
                     "license": (t.get("license") or "").upper(), "source_url": t.get("foreign_landing_url") or "",
                     "cover_url": t.get("thumbnail") if str(t.get("thumbnail", "")).startswith("https://") else None})
     return out
+
+
+def licence_name(url: str) -> str:
+    """'http://creativecommons.org/licenses/by-nc-sa/3.0/' → 'CC BY-NC-SA 3.0'; '' for anything not open. Pure."""
+    u = str(url or "").lower()
+    if "publicdomain" in u:
+        return "CC0 / domain publik"
+    m = re.search(r"creativecommons\.org/licenses/([a-z-]+)/([\d.]+)", u)
+    return f"CC {m.group(1).upper()} {m.group(2)}" if m else ""
+
+
+async def _archive(words: str, tag: str, limit: int) -> list[dict]:
+    """The Internet Archive's netlabel and open-audio collections (Creative Commons albums, MP3 straight from archive.org, no key) —
+    reached when Openverse is not. A mood is its subject tag; anything else a search in titles and subjects."""
+    what = re.sub(r'["\\()]', " ", tag or words).strip()
+    if not what:
+        return []
+    q = f'mediatype:audio AND (collection:netlabels OR collection:opensource_audio) AND (subject:("{what}") OR title:("{what}"))'
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "JARVIS/1.0"}) as c:
+        r = await c.get("https://archive.org/advancedsearch.php", params={"q": q, "fl[]": ["identifier", "title", "creator", "licenseurl"],
+                                                                          "rows": max(2, min(limit, 8)), "sort[]": "downloads desc", "output": "json"})
+        r.raise_for_status()
+        docs = [d for d in r.json().get("response", {}).get("docs", []) if licence_name(d.get("licenseurl"))]
+
+        async def files(d: dict) -> list[dict]:
+            try:
+                m = (await c.get(f"https://archive.org/metadata/{d['identifier']}")).json()
+            except (httpx.HTTPError, ValueError):
+                return []
+            out, mp3s = [], [f for f in m.get("files") or [] if str(f.get("name") or "").lower().endswith(".mp3") and "_64kb" not in str(f.get("name"))]
+            originals = [f for f in mp3s if f.get("source") == "original"]
+            for f in originals or mp3s:   # the uploaded MP3s, not archive.org's own re-encodings of them
+                name = str(f.get("name") or "")
+                secs = int(float(f.get("length") or 0)) if str(f.get("length") or "").replace(".", "", 1).isdigit() else 0
+                if secs > MAX_SONG_S:
+                    continue
+                creator = d.get("creator") or ""
+                out.append({"id": f"ia-{d['identifier']}-{len(out)}", "title": f.get("title") or name.rsplit(".", 1)[0].replace("_", " "),
+                            "artist": creator if isinstance(creator, str) else ", ".join(creator), "url": f"https://archive.org/download/{d['identifier']}/{quote(name)}",
+                            "duration_s": secs, "license": licence_name(d.get("licenseurl")), "source_url": f"https://archive.org/details/{d['identifier']}",
+                            "cover_url": f"https://archive.org/services/img/{d['identifier']}"})
+                if len(out) >= 2:
+                    break
+            return out
+        lists = await asyncio.gather(*(files(d) for d in docs[:4]))
+    return [t for group in zip(*[x for x in lists if x]) for t in group][:limit] or [t for x in lists for t in x][:limit]
+
+
+async def search(query: str, limit: int = 6) -> list[dict]:
+    """Open-licence music for a request: Openverse first, the Internet Archive when Openverse is slow or has nothing (a mood like "santai" is asked
+    in its catalogue tag)."""
+    words, tag = mood_query(query)
+    try:
+        found = await _openverse(f"{tag} {words}".strip() if tag else words, limit)
+        if found:
+            return found
+    except (httpx.HTTPError, ValueError):
+        pass
+    found = await _archive(words, tag, limit)
+    if not found and tag:
+        found = await _archive(words, "", limit)
+    return found
 
 
 async def download(track: dict) -> dict:

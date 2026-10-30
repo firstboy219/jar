@@ -781,137 +781,6 @@ async def _task(pool, title, company=None, status="running", result="hasil"):   
                                   VALUES ('s', $1, $1, $2, $3, $4) RETURNING id""", title, status, result, company)
 
 
-async def test_v4_f4_each_context_is_its_own_galaxy_and_companies_never_mix(pool, monkeypatch):
-    from app import canvas, companies
-    await pool.execute("TRUNCATE canvases CASCADE")
-    r, j = await _two_companies(pool, monkeypatch)
-    rv = await companies.vault_add(r, "kpi", "Omzet Renature", "owner", data={"metric": "Omzet", "value": 120, "unit": "juta", "period": "Okt"})
-    jv = await companies.vault_add(j, "validated_finding", "Rahasia dagang JH", "owner")
-    rt = await _task(pool, "Riset pasar Renature", company=r)
-    mine = await _task(pool, "Cari resep rendang")
-    mem = await pool.fetchval("INSERT INTO memories (text, category, source) VALUES ('Aku suka kopi tubruk', 'personal', 'owner') RETURNING id")
-    await canvas.add(f"company:{r}", f"vault:{rv['id']}", "owner")
-    await canvas.add(f"company:{r}", f"task:{rt}", "owner")
-    await canvas.add("utama", f"task:{mine}", "owner")
-    await canvas.add("utama", f"memory:{mem}", "owner")
-    refused = [(f"company:{r}", f"vault:{jv['id']}"), (f"company:{r}", f"memory:{mem}"), (f"company:{r}", f"task:{mine}"),
-               ("utama", f"vault:{rv['id']}"), ("utama", f"task:{rt}"), (f"company:{j}", f"task:{rt}")]
-    for ctx, ref in refused:
-        with pytest.raises(canvas.CanvasError):
-            await canvas.add(ctx, ref, "owner")
-    rc, uc = await canvas.ensure(f"company:{r}"), await canvas.ensure("utama")
-    rview, uview = await canvas.view(rc["id"]), await canvas.view(uc["id"])
-    assert {c["ref"] for c in rview["cards"]} == {f"vault:{rv['id']}", f"task:{rt}"}
-    assert {c["ref"] for c in uview["cards"]} == {f"task:{mine}", f"memory:{mem}"}
-    assert "120" in next(c for c in rview["cards"] if c["ref"].startswith("vault"))["snippet"]
-    assert "Rahasia" not in json.dumps(rview, default=str) and "Renature" not in json.dumps(uview, default=str)
-    assert {c["kind"] for c in rview["constellations"]} == {"tugas", "perusahaan", "arahan", "dokumen", "keputusan"}
-    assert "memori" in {c["kind"] for c in uview["constellations"]} and "arahan" not in {c["kind"] for c in uview["constellations"]}
-    titles = {c["context"]: c for c in await canvas.contexts()}
-    assert set(titles) >= {"utama", f"company:{r}", f"company:{j}"} and titles[f"company:{r}"]["cards"] == 2
-    # Postgres itself: as a role without the RLS bypass, Jack Healer's scope sees none of Renature's canvas
-    await pool.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$")
-    await pool.execute("GRANT SELECT, INSERT ON canvases, canvas_nodes TO rls_probe")
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SET LOCAL ROLE rls_probe")
-            await conn.execute("SELECT set_config('jarvis.company', $1, true)", j)
-            assert await conn.fetchval("SELECT count(*) FROM canvas_nodes WHERE company_id = $1", r) == 0
-            assert await conn.fetchval("SELECT count(*) FROM canvases WHERE company_id = $1", r) == 0
-            assert await conn.fetchval("SELECT count(*) FROM canvas_nodes WHERE company_id IS NULL") == 2   # personal cards are not a company's
-        with pytest.raises(Exception):
-            async with conn.transaction():
-                await conn.execute("SET LOCAL ROLE rls_probe")
-                await conn.execute("SELECT set_config('jarvis.company', $1, true)", j)
-                await conn.execute("INSERT INTO canvas_nodes (canvas_id, company_id, kind, ref) VALUES ($1, $2, 'tugas', 'task:999')", rc["id"], r)
-
-
-async def test_v4_f4_jarvis_places_its_work_and_the_canvas_holds_layout_not_knowledge(pool, monkeypatch):
-    from app import canvas, stage, workers
-    await pool.execute("TRUNCATE canvases, stage_history CASCADE")
-    await stage.show("text", {"text": "Ringkasan cuaca minggu ini"}, "Cuaca minggu ini")
-    shown = await pool.fetchval("SELECT id FROM stage_history ORDER BY id DESC LIMIT 1")
-    tid = await _task(pool, "Bandingkan harga laptop")
-    await canvas.auto(f"task:{tid}")
-    await canvas.auto(f"task:{tid}")                                                   # idempotent: one card
-    doc = await pool.fetchval("""INSERT INTO documents (title, format, filename, size, task_id, created_by)
-                                 VALUES ('Perbandingan laptop', 'docx', 'x.docx', 10, $1, 'jarvis') RETURNING id""", tid)
-    await canvas.auto(f"doc:{doc}")
-    c = await canvas.ensure("utama")
-    v = await canvas.view(c["id"])
-    assert {x["ref"] for x in v["cards"]} == {f"shown:{shown}", f"task:{tid}", f"doc:{doc}"}
-    assert next(x for x in v["cards"] if x["ref"] == f"doc:{doc}")["url"] == f"/api/v1/documents/{doc}"
-    # the canvas stores references only; the text comes from where it lives, and follows it
-    cols = {r["column_name"] for r in await pool.fetch("SELECT column_name FROM information_schema.columns WHERE table_name = 'canvas_nodes'")}
-    assert not cols & {"text", "title", "body", "content", "snippet"}
-    await pool.execute("UPDATE tasks SET title = 'Bandingkan harga laptop gaming' WHERE id = $1", tid)
-    assert any(x["title"] == "Bandingkan harga laptop gaming" for x in (await canvas.view(c["id"]))["cards"])
-    # a private task never becomes a card
-    priv = await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, status, private) VALUES ('s', 'rahasia', 'x', 'queued', true) RETURNING id")
-    assert priv and "rahasia" not in json.dumps(await canvas.view(c["id"]), default=str)
-    # end to end: a worker finishing an owner task puts its card on the galaxy by itself
-    _hermes(monkeypatch, lambda n, text, sid: _done("Laptop A paling hemat."))
-    t = await workers.spawn("Cek harga SSD", "Cek harga SSD 1TB", "s-f4", "test")
-    assert await _wait(lambda: pool.fetchval("SELECT status = 'completed' FROM tasks WHERE id = $1", t["id"]))
-    assert await _wait(lambda: pool.fetchval("SELECT count(*) = 1 FROM canvas_nodes WHERE ref = $1", f"task:{t['id']}"))
-
-
-async def test_v4_f4_moves_links_focus_versions_and_hiding_never_deletes_data(pool, monkeypatch):
-    from app import canvas
-    await pool.execute("TRUNCATE canvases CASCADE")
-    a, b = await _task(pool, "Tugas A"), await _task(pool, "Tugas B")
-    na = await canvas.add("utama", f"task:{a}", "owner")
-    nb = await canvas.add("utama", f"task:{b}", "owner")
-    c = await canvas.ensure("utama")
-    moved = await canvas.move(na["id"], "owner", x=12345.5, y=-300, z=88)
-    assert (moved["x"], moved["y"]) == (12345.5, -300)                                 # anywhere in the infinite space
-    with pytest.raises(canvas.CanvasError):
-        await canvas.move(na["id"], "owner", x=float("inf"))
-    e = await canvas.link(na["id"], nb["id"], "owner", "lanjutan")
-    v1 = await canvas.view(c["id"])
-    assert v1["edges"] == [{"id": e["id"], "a": na["id"], "b": nb["id"], "label": "lanjutan", "style": {}}]
-    assert (await canvas.view(c["id"], since=v1["version"]))["unchanged"]
-    f = await canvas.focus("utama", f"task:{b}", "jarvis")
-    assert (await canvas.view(c["id"]))["focus"] == nb["id"] and f["version"] > v1["version"]
-    before_hide = (await canvas.versions(c["id"]))[0]["version"]
-    assert await canvas.hide(nb["id"], "owner")
-    assert await pool.fetchval("SELECT count(*) FROM tasks WHERE id = $1", b) == 1     # the task itself is untouched
-    v2 = await canvas.view(c["id"])
-    assert [x["ref"] for x in v2["cards"]] == [f"task:{a}"] and v2["edges"] == []
-    r = await canvas.restore(c["id"], before_hide, "owner")
-    v3 = await canvas.view(c["id"])
-    assert r["cards"] == 2 and {x["ref"] for x in v3["cards"]} == {f"task:{a}", f"task:{b}"} and len(v3["edges"]) == 1
-    assert next(x for x in v3["cards"] if x["ref"] == f"task:{a}")["x"] == 12345.5
-
-
-async def test_v4_f4_viewer_is_served_safely_and_the_api_needs_the_owner(pool, monkeypatch):
-    import httpx
-    from app import devices, main
-    await pool.execute("TRUNCATE canvases CASCADE")
-    _, token = await devices.create("HP pemilik", "test", scope="owner")
-    _, guest = await devices.create("Tamu", "test", scope="device")
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
-        r = await c.get("/canvas/")
-        assert r.status_code == 200 and "Papan JARVIS" in r.text
-        csp = r.headers["content-security-policy"]
-        assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp and "unsafe-eval'" not in csp.replace("wasm-unsafe-eval'", "")
-        for f in ("app.js", "lib.js", "board.js", "chrome.js", "gestures.js", "gesture.html"):
-            assert (await c.get(f"/canvas/{f}")).status_code == 200
-        assert (await c.get("/canvas/../main.py")).status_code == 404 and (await c.get("/canvas/%2e%2e/main.py")).status_code == 404
-        assert (await c.get("/api/v1/canvases")).status_code == 401
-        h, g = {"Authorization": f"Bearer {token}"}, {"Authorization": f"Bearer {guest}"}
-        opened = (await c.post("/api/v1/canvases", json={"context": "project:Toko Online"}, headers=h)).json()
-        assert opened["context"] == "project:toko-online"
-        tid = await _task(pool, "Desain logo toko")
-        assert (await c.post(f"/api/v1/canvases/{opened['id']}/cards", json={"ref": f"task:{tid}"}, headers=g)).status_code == 403
-        card = (await c.post(f"/api/v1/canvases/{opened['id']}/cards", json={"ref": f"task:{tid}"}, headers=h)).json()
-        found = (await c.get(f"/api/v1/canvases/{opened['id']}/search?q=logo", headers=h)).json()
-        assert found[0]["ref"] == f"task:{tid}"
-        assert (await c.patch(f"/api/v1/canvas/cards/{card['id']}", json={"x": 1, "y": 2, "z": 3}, headers=h)).json()["z"] == 3
-        view = (await c.get(f"/api/v1/canvases/{opened['id']}", headers=g)).json()      # anyone paired may look
-        assert view["cards"][0]["title"] == "Desain logo toko" and view["constellations"]
-
-
 async def test_v4_f2_spike_keys_reach_only_the_spike_model_and_stop_at_its_budget(pool, monkeypatch):
     import hashlib
 
@@ -1394,22 +1263,6 @@ async def test_v4_f7_private_and_company_work_never_leaks_onto_the_wrong_desk_an
     assert next(p for p in shown if p["asked"] == "tolong cek harga emas")["answer"] == "Emas Rp 1,5 juta"
 
 
-async def test_v4_f7_a_new_task_is_on_the_canvas_at_once_and_storage_can_be_laid_out(pool, monkeypatch):
-    from app import canvas, memory, workers
-    monkeypatch.setattr(memory, "search", _no_memory)
-    t = await workers.spawn("Cari sepatu", "Cari sepatu lari di jostreet dan bandingkan harga.", "s-f7b", "test")
-    c = await canvas.ensure("utama")
-    v = await canvas.view(c["id"])
-    assert f"task:{t['id']}" in [x["ref"] for x in v["cards"]]                                  # a card from the moment the task exists
-    before = v["version"]
-    await canvas.touch(f"task:{t['id']}")
-    assert (await canvas.view(c["id"]))["version"] == before + 1                                # a finished task makes open viewers re-read it
-    first = await canvas.fill("utama", "owner")
-    assert (await canvas.fill("utama", "owner"))["added"] == 0                                              # idempotent
-    r, _ = await _two_companies(pool, monkeypatch)
-    assert (await canvas.fill(f"company:{r}", "owner"))["added"] == 0                            # a company galaxy takes none of the personal library
-
-
 class _FakeSocket:
     """What a browser's WebSocket looks like to main.ws(): first-message auth (browsers cannot set headers), text frames in and out."""
     def __init__(self):
@@ -1440,14 +1293,12 @@ async def test_v4_f8_the_desk_is_the_front_door_and_its_chat_voice_camera_and_sc
     import httpx
     from fastapi import WebSocketDisconnect
     from app import chat, devices, main, stt, voice
-    # the front door: / opens the desk, and the desk may use this origin's microphone, camera and screen sharing (nothing else, nobody else)
+    # the front door is the app; the infinite canvas is gone (owner 2026-10-30) and its old links land in the app
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
-        r = await c.get("/", follow_redirects=False)
-        assert r.status_code in (302, 307) and r.headers["location"] == "/canvas/"
-        pp = (await c.get("/canvas/")).headers["permissions-policy"]
-        assert "camera=(self)" in pp and "microphone=(self)" in pp and "display-capture=(self)" in pp and "geolocation=()" in pp
-        for f in ("deskcards.js", "dock.js", "worklet.js"):
-            assert (await c.get(f"/canvas/{f}")).status_code == 200
+        for path in ("/", "/canvas", "/canvas/", "/canvas/app.js"):
+            r = await c.get(path, follow_redirects=False)
+            assert r.status_code in (302, 307) and r.headers["location"] == "/app/"
+        assert (await c.get("/api/v1/canvases")).status_code == 404                   # no board API any more
     seen = {}
 
     async def handle(text, session_id, actor, device_id=None, emit=None, **kw):
@@ -1852,19 +1703,6 @@ async def test_v4_f12_a_failed_deploy_sends_the_job_back_to_coder_and_a_deployed
     assert await devteam.check_deploys() == 0                                              # nothing is moved twice
 
 
-async def test_v4_f12_the_owner_sizes_and_locks_desk_areas_for_every_device(pool):
-    from app import main
-    dev = {"name": "HP pemilik", "scope": "owner"}
-    assert (await main.canvas_areas(device=dev))["areas"] == {}
-    await main.canvas_area_put("devteam", main.AreaIn(w=1800, h=900, locked=False), device=dev)
-    await main.canvas_area_put("devteam", main.AreaIn(w=1850, h=None, locked=True), device=dev)     # locked, height back to "grows"
-    await main.canvas_area_put("workers", main.AreaIn(w=500), device=dev)
-    assert (await main.canvas_areas(device=dev))["areas"] == {"devteam": {"w": 1850, "h": None, "locked": True},
-                                                            "workers": {"w": 500, "h": None, "locked": False}}
-    with pytest.raises(main.HTTPException):
-        await main.canvas_area_put("../etc", main.AreaIn(w=300), device=dev)
-
-
 async def test_v4_f12_a_worker_gets_the_owners_latest_message_whole(pool):
     from app import assistant
     brief = "Kerjakan pengembangan ini: " + "langkah rinci " * 200
@@ -2121,92 +1959,4 @@ async def test_v4_f10_the_meeting_endpoints_need_consent_and_an_owner_device(poo
 
 # ---------- Fase 11 / ADR-055: the canvas is a 2D board ----------
 
-async def test_v4_f11_the_owner_draws_notes_shapes_and_frames_resizes_them_and_undoes_by_the_history(pool, monkeypatch):
-    from app import canvas
-    c = await canvas.ensure("utama")
-    note = await canvas.create_object("utama", {"type": "note", "text": "Beli tinta printer\nbesok", "color": "#fde68a"}, "owner", 100, -50)
-    frame = await canvas.create_object("utama", {"type": "frame", "text": "Minggu ini"}, "owner", 0, 0, 800, 500)
-    v = await canvas.view(c["id"])
-    got = {x["id"]: x for x in v["cards"]}
-    n = got[note["id"]]
-    assert n["ref"].startswith("obj:") and n["kind"] == "papan" and n["type"] == "note" and n["title"] == "Beli tinta printer"
-    assert (n["x"], n["z"], n["w"], n["h"]) == (100, -50, 220, 180)                                   # a note arrives with a default size
-    assert got[frame["id"]]["w"] == 800 and got[frame["id"]]["props"]["text"] == "Minggu ini"
-    # resize + edit text + colour: only known keys, only well-formed values
-    await canvas.move(note["id"], "owner", w=300, h=240, props={"text": "Beli tinta", "color": "#bbf7d0", "font": 20})
-    n = {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}[note["id"]]
-    assert (n["w"], n["h"], n["props"]["color"], n["props"]["font"], n["props"]["type"]) == (300, 240, "#bbf7d0", 20, "note")
-    for bad in ({"color": "merah"}, {"shape": "bintang"}, {"type": "frame"}, {"align": "tengah"}):
-        with pytest.raises(canvas.CanvasError):
-            await canvas.move(note["id"], "owner", props=bad)
-    with pytest.raises(canvas.CanvasError):
-        await canvas.create_object("utama", {"type": "script", "text": "x"}, "owner")
-    with pytest.raises(canvas.CanvasError):
-        await canvas.move(0, "owner", w=100)                                                           # a card that does not exist
-    # several at once = one version
-    before = (await canvas.view(c["id"]))["version"]
-    out = await canvas.move_many(c["id"], [{"id": note["id"], "x": 0, "z": 600}, {"id": frame["id"], "x": -50, "z": 520, "w": 900}], "owner", "geser dua")
-    assert out["version"] == before + 1
-    assert {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}[frame["id"]]["w"] == 900
-    # connectors keep an arrow and a style, and the history brings back sizes, props and arrows
-    e = await canvas.link(note["id"], frame["id"], "owner", "ada di", {"to": frame["id"], "dash": True, "color": "#38bdf8"})
-    edge = (await canvas.view(c["id"]))["edges"][0]
-    assert edge["label"] == "ada di" and edge["style"] == {"to": frame["id"], "dash": True, "color": "#38bdf8"}
-    await canvas.update_edge(e["id"], c["id"], "owner", label="di dalam", style={"dash": False})
-    assert (await canvas.view(c["id"]))["edges"][0]["style"]["dash"] is False
-    with pytest.raises(canvas.CanvasError):
-        await canvas.update_edge(e["id"], c["id"], "owner", style={"to": 999999})
-    ver = (await canvas.view(c["id"]))["version"]
-    await canvas.hide(note["id"], "owner")                                                            # deleting the owner's own note is allowed
-    assert note["id"] not in {x["id"] for x in (await canvas.view(c["id"]))["cards"]}
-    r = await canvas.restore(c["id"], ver, "owner")
-    back = (await canvas.view(c["id"]))
-    notes = [x for x in back["cards"] if x["type"] == "note"]
-    assert r["dropped"] == 0 and len(notes) == 1 and notes[0]["w"] == 300 and notes[0]["props"]["text"] == "Beli tinta"
-    assert back["edges"][0]["style"].get("to") in {x["id"] for x in back["cards"]}                        # the arrow follows the restored node's new id
 
-
-async def test_v4_f11_a_company_board_can_hold_drawings_but_never_another_boards_cards(pool, monkeypatch):
-    from app import canvas
-    r, _ = await _two_companies(pool, monkeypatch)
-    mine = await canvas.create_object(f"company:{r}", {"type": "shape", "shape": "ellipse", "text": "Target Q4"}, "owner", 10, 10)
-    assert {x["ref"] for x in (await canvas.view((await canvas.ensure(f"company:{r}"))["id"]))["cards"]} == {mine["ref"]}
-    other = await canvas.create_object("utama", {"type": "note", "text": "pribadi"}, "owner")
-    with pytest.raises(canvas.CanvasError):
-        await canvas.link(mine["id"], other["id"], "owner")                                          # different boards stay apart
-    c2 = await canvas.ensure(f"company:{r}")
-    with pytest.raises(canvas.CanvasError):
-        await canvas.move_many(c2["id"], [{"id": other["id"], "x": 1, "z": 1}], "owner")                # and a batch cannot reach across
-
-
-async def test_v4_f11_the_board_endpoints_need_an_owner_and_reject_nonsense(pool, monkeypatch):
-    from fastapi import HTTPException
-
-    from app import canvas, main
-    c = await canvas.ensure("utama")
-    dev = {"name": "HP"}
-    made = await main.canvases_add_object(c["id"], main.ObjectIn(props={"type": "text", "text": "Halo", "bold": True}, x=5, z=6), device=dev)
-    assert made["props"]["bold"] is True and made["w"] == 240
-    with pytest.raises(HTTPException) as e:
-        await main.canvases_add_object(c["id"], main.ObjectIn(props={"type": "note", "color": "<script>"}), device=dev)
-    assert e.value.status_code == 422
-    await main.canvases_layout(c["id"], main.LayoutIn(items=[main.LayoutItem(id=made["id"], x=50, z=60)], note="uji"), device=dev)
-    moved = {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}[made["id"]]
-    assert (moved["x"], moved["z"]) == (50, 60)
-    with pytest.raises(HTTPException):
-        await main.canvases_layout(c["id"], main.LayoutIn(items=[main.LayoutItem(id=987654321, x=1)]), device=dev)
-
-
-async def test_v4_f11_arrange_puts_pointing_cards_back_in_their_grid_and_leaves_drawings_and_locked_cards(pool, monkeypatch):
-    from app import canvas
-    t = [await pool.fetchval("INSERT INTO tasks (session_id, title, instruction, kind, category, status) VALUES ('s-ar', $1, 'x', 'owner', 'web', 'running') RETURNING id", f"T{i}") for i in range(3)]
-    c = await canvas.ensure("utama")
-    nodes = [await canvas.add("utama", f"task:{i}", "owner", (123.0 + n, 5.0, 456.0)) for n, i in enumerate(t)]
-    note = await canvas.create_object("utama", {"type": "note", "text": "tetap"}, "owner", 7, 8)
-    await canvas.move(nodes[2]["id"], "owner", pinned=True)
-    r = await canvas.arrange(c["id"], "owner")
-    assert r["arranged"] == 2
-    got = {x["id"]: x for x in (await canvas.view(c["id"]))["cards"]}
-    a, b = got[nodes[0]["id"]], got[nodes[1]["id"]]
-    assert (a["x"], a["z"]) == (canvas.place("tugas", 0)[0], canvas.place("tugas", 0)[2]) and b["x"] == canvas.place("tugas", 1)[0]
-    assert (got[nodes[2]["id"]]["x"], got[note["id"]]["x"]) == (125.0, 7)                                  # locked and drawn things stay where they are

@@ -343,7 +343,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
         }
         if (c.cmd != "start" || st.recording || st.finishing) return
         if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            _notice.value = "Rapat belum bisa direkam: izinkan mikrofon dulu (ketuk tombol Mikrofon di Meja sekali)."
+            _notice.value = "Rapat belum bisa direkam: izinkan mikrofon dulu (ketuk tombol Mikrofon di layar Bicara sekali)."
             return
         }
         prepareMeeting()
@@ -482,11 +482,26 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
 
     // ---------- the front screen ----------
 
+    /** Music and other sound play in the phone's media service, not in the panel: on every screen and with the screen off. */
+    private fun stageMusic(e: ServerEvent.Stage) {
+        if (e.mode == "close") { online.cosger.jarvis.media.MusicPlayer.stop(e.id); return }
+        if (e.panel !in setOf("music", "audio") || e.mode == "update") return
+        val p = online.cosger.jarvis.ui.stage.Panel(e.id, e.panel, e.payload, e.caption)
+        if (p.str("url").isBlank()) return
+        online.cosger.jarvis.media.MusicPlayer.onEnded = { id -> socket.sendControl(Protocol.stageEvent(id, "ended", emptyMap())) }
+        online.cosger.jarvis.media.MusicPlayer.play(context, online.cosger.jarvis.media.MusicPlayer.Track(
+            e.id, p.str("url"), p.str("title"), p.str("artist").ifBlank { p.str("channel") }, p.str("cover_url"), p.str("license"), p.str("source_url")),
+            settings.value.serverUrl, console.authHeader(), p.autoplay)
+    }
+
+    /** A panel outside the stage (the app's mini player, a board block) starts or steers the same music. */
+    fun musicEvent(id: String, event: String) = socket.sendControl(Protocol.stageEvent(id, event, emptyMap()))
+
     fun stageEvent(event: String, detail: Map<String, Int> = emptyMap()) {
         val current = _stage.value.panel ?: return
         socket.sendControl(Protocol.stageEvent(current.id, event, detail))
         when (event) {
-            "closed" -> _stage.update { it.close(current.id) }
+            "closed" -> { _stage.update { it.close(current.id) }; online.cosger.jarvis.media.MusicPlayer.stop(current.id) }
             "route_selected" -> detail["index"]?.let { i -> _stage.update { it.select(i) } }
         }
     }
@@ -524,7 +539,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 _board.update { it.reduce(event) }
                 if (event.items.isNotEmpty()) _notice.value = "JARVIS menampilkan: ${event.caption.ifBlank { "${event.items.size} gambar/video" }}"
             }
-            is ServerEvent.Stage -> _stage.update { it.reduce(event) }
+            is ServerEvent.Stage -> { _stage.update { it.reduce(event) }; scope.launch(Dispatchers.Main) { stageMusic(event) } }
             is ServerEvent.MeetingCmd -> onMeetingCmd(event)
             is ServerEvent.BrainPulse -> _stage.update { it.pulse(event.ids, event.kind, event.labels) }
             is ServerEvent.Approval -> _notice.value = "Butuh persetujuanmu: ${event.title} (menu Tugas & Persetujuan)"

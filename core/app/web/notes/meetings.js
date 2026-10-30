@@ -169,7 +169,7 @@ export function createMeetings({ api, toast, showView, onOpenPage }) {
   }
 
   async function start() {
-    try { await api.req('POST', '/api/v1/meetings/want'); location.href = '/canvas/'; }   // the desk's meeting card records (consent, then Mulai rekam)
+    try { await api.req('POST', '/api/v1/meetings/want'); location.href = '/app/#/rapat'; }   // the app's Rapat screen records (consent, then Mulai rekam)
     catch (err) { toast(err.message, true); }
   }
 

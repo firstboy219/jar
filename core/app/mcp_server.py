@@ -459,6 +459,32 @@ async def check_owner_answer(question_id: int, wait_seconds: int = 60) -> dict:
 
 
 @mcp.tool()
+async def kerjakan_di_web_hp(goal: str, start_url: str = "", task_id: int | None = None, wait_seconds: int = 280) -> dict:
+    """Hand work on a website to the browser on the OWNER'S PHONE (his own connection and cookies). Use it when a site walls off your
+    browser (Cloudflare "Just a moment…", "Access denied", a robot check that does not clear) or for DOING something on a strict site
+    (applying on JobStreet/LinkedIn/Glints/Kalibrr, booking on Traveloka/tiket.com/Agoda): the phone's agent fills forms from the owner's
+    profile, he solves robot checks / sign-ins on his phone, and every send/apply/book is reviewed by him first. goal: everything it must
+    know (which job/hotel, what to fill, what to bring back). Waits up to wait_seconds (max 300); 'running' → call cek_web_hp later."""
+    r = await _core("/internal/web_task", {"goal": goal, "start_url": start_url, "task_id": task_id})
+    if "error" in r:
+        return r
+    return await cek_web_hp(r["web_task_id"], wait_seconds)
+
+
+@mcp.tool()
+async def cek_web_hp(web_task_id: int, wait_seconds: int = 120) -> dict:
+    """The state of a kerjakan_di_web_hp task: status running/waiting (the owner is asked on his phone)/done/failed/stopped, its result
+    text and data. Waits up to wait_seconds (max 300) for it to finish."""
+    st: dict = {}
+    for _ in range(max(1, min(wait_seconds, 300)) // 5):
+        st = await _core_call("GET", f"/internal/web_task/{web_task_id}")
+        if st.get("error") or st.get("status") in ("done", "failed", "stopped"):
+            break
+        await asyncio.sleep(5)
+    return {"web_task_id": web_task_id, **st}
+
+
+@mcp.tool()
 async def wait_for_owner(task_id: int, wait_seconds: int = 240) -> dict:
     """The owner took over your browser (you were told so): keep your hands off the browser and wait here until they hand it back.
     Returns status 'handed_back' (carry on: look at the page first) or 'owner_driving' after wait_seconds (max 300) — then call again."""
@@ -500,8 +526,8 @@ async def stage_show(panel: str, payload: dict, caption: str = "") -> dict:
     - image: {"title","url"} one picture, full size (zoomable)
     - text: {"title","text"} notes, a list, a summary, a recipe — plain text, newlines kept
     - board: {"title","blocks":[{"kind": <any panel above except draft>, ...its payload}]} several things at once
-    All URLs must be https. It also lands on its own card on the owner's desk (Meja): music, video, picture, document, map, web,
-    notes, draft — the desk flies to that card. Returns the stage id (for stage_update / stage_close). Easier: show_anything."""
+    All URLs must be https. It is shown in the owner's JARVIS app: music, video, picture, document, map, web,
+    notes, draft. Returns the stage id (for stage_update / stage_close). Easier: show_anything."""
     return await _core("/internal/stage", {"action": "show", "panel": panel, "payload": payload, "caption": caption})
 
 

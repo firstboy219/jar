@@ -56,7 +56,7 @@ async def describe(full: bool = False) -> str:
         "model sendiri di Komposisi AI: JAR (kategori ringan) untuk pencarian sederhana — berita, harga, fakta — dijawab detik-an tanpa sesi "
         "Hermes dan tanpa antre; OPENJARVIS (kategori berat) untuk tugas berat yang kamu tandai berat=true, bila pemilik menyalakannya. "
         "Tugas yang butuh alat (browser, memori, dokumen, n8n) dikerjakan Hermes sendiri. Jalurnya dipilih otomatis menurut jenis tugas, "
-        "beban, dan pola tugas serupa yang pernah terjadi; bebannya terlihat di kartu Pekerja di Meja.",
+        "beban, dan pola tugas serupa yang pernah terjadi; bebannya terlihat di Misi di aplikasi.",
         f"- Otak: kamu agen utama (ngobrol: {who('ngobrol')}). Pekerjaan dikerjakan worker Hermes "
         f"(maks {settings.worker_concurrency} bersamaan, antrean tak terbatas) dengan AI per kategori: web {who('web')}, "
         f"coding {who('coding')}, produktivitas {who('produktivitas')}, analisis {who('analisis')}. Semua lewat gerbang AI "

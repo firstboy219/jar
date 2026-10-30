@@ -42,10 +42,14 @@ WORKER_BRIEF = (
     "(buka halamannya, klik, ketik, gulir) — bukan sekadar mencari atau membaca teksnya lewat web search — karena pemilik "
     "melihat browser itu langsung di mejanya. Berhenti sebelum tindakan yang tak bisa dibatalkan atau yang mengirim data "
     "pribadi (kirim lamaran/formulir, buat akun, bayar) dan minta persetujuan pemilik lewat ask_owner.\n"
-    "Kalau terhalang LOGIN, CAPTCHA, kode OTP/verifikasi, atau langkah yang hanya bisa dilakukan manusia: JANGAN menebak, "
-    "mengulang tanpa henti, atau memakai kata sandi yang tidak diberikan. Panggil ask_owner (wait_seconds 300) dengan "
-    "kalimat seperti: 'Aku butuh bantuanmu di halaman <nama situs>: <captcha/login>. Buka Meja, klik Intervensi di kartu "
-    "tugas ini, selesaikan, lalu tekan Selesai.' Lalu TUNGGU jawabannya (check_owner_answer) tanpa menyentuh halaman. "
+    "Kalau situsnya MEMBLOKIR browsermu (Cloudflare 'Just a moment…', 'Access denied', cek robot yang tidak hilang dalam ±20 detik) "
+    "— atau tugasnya MELAKUKAN sesuatu di situs ketat (melamar di JobStreet/LinkedIn/Glints/Kalibrr, memesan di Traveloka/tiket.com/Agoda) "
+    "— JANGAN mencoba berulang: serahkan bagian itu ke kerjakan_di_web_hp (browser di HP pemilik, koneksinya sendiri; ia mengisi dari "
+    "profil pemilik dan pemilik meninjau tiap kirim/lamar), dengan goal yang lengkap dan task_id-mu, lalu lanjutkan dari hasilnya. "
+    "Kalau terhalang LOGIN, CAPTCHA, kode OTP/verifikasi di browsermu sendiri: JANGAN menebak, "
+    "mengulang tanpa henti, atau memakai kata sandi yang tidak diberikan. Panggil ask_owner (wait_seconds 300, SELALU dengan task_id-mu) dengan "
+    "kalimat seperti: 'Aku butuh bantuanmu di halaman <nama situs>: <captcha/login>. Buka misi ini di aplikasi JARVIS, tekan Ambil alih, "
+    "selesaikan, lalu tekan Selesai.' Lalu TUNGGU jawabannya (check_owner_answer) tanpa menyentuh halaman. "
     "Setelah dijawab, ambil dulu pandangan halaman untuk melihat keadaan terbaru dan lanjutkan dari situ.\n"
     "Pemilik juga bisa INTERVENSI kapan saja tanpa kamu minta. Kalau ada pesan bahwa pemilik mengambil alih browser, berhenti "
     "memakai browser saat itu juga dan panggil wait_for_owner(task_id) sampai hasilnya 'handed_back'.\n"
@@ -122,9 +126,6 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
         await modelrouter.default_task_budget(), company_id, runtime, why or None)
     task = dict(row)
     await audit.record(actor, "task.spawned", f"task:{task['id']}", title=task["title"], kind=kind)
-    if kind == "owner" and not private:  # the task appears on the desk (the canvas) the moment it exists, not when it ends (ADR-051)
-        from . import canvas
-        await canvas.auto(f"task:{task['id']}", company_id)
     await _announce(task, "queued")
     if kind not in ("owner", "meeting"):  # everything JARVIS starts by itself is listed for the owner
         from . import ops
@@ -259,9 +260,6 @@ async def _run(task_id: int, context: str) -> None:
                 await _tell_progress(row, task_id, 100, "Selesai")
             await _deliver(task_id, kind, row["title"], text, row["session_id"])
             await _remember_episode(task_id)
-            if kind == "owner" and not row["private"]:  # its card (made when the task began) shows the result until the board sweeps it (ADR-067)
-                from . import canvas
-                await canvas.touch(f"task:{task_id}", row["company_id"])
         except asyncio.CancelledError:
             stopped = task_id in _stopping
             await db.pool().execute(  # only a task still in flight: a cancel during report delivery must not undo "completed"

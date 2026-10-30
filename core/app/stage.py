@@ -163,10 +163,7 @@ async def show(panel: str, payload: dict, caption: str = "", actor: str = "jarvi
     place(event)
     delivered = await hub.broadcast(event)
     from . import library
-    shown = await library.record(panel, payload, caption)  # Simpanan: shown again later
-    if shown and actor != "owner":  # what JARVIS shows also lands on the galaxy (ADR-049); a re-show from Simpanan does not
-        from . import canvas
-        await canvas.auto(f"shown:{shown}")
+    await library.record(panel, payload, caption)  # Simpanan: shown again later
     await audit.record(actor, "stage.show", None, panel=panel, delivered=delivered)
     return {"id": event["id"], "delivered": delivered}
 

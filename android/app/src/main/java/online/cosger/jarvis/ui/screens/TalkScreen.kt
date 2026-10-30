@@ -165,7 +165,7 @@ fun TalkScreen(vm: JarvisViewModel, onOpenServer: () -> Unit = {}, onOpenBackgro
         },
         camera = { CameraPreview(frontCamera, vm::setCameraFrameSource, Modifier.fillMaxSize()) },
         onFlipCamera = { frontCamera = !frontCamera },
-        panelOpen = stage.panel != null && !(compact && stage.panel?.kind in online.cosger.jarvis.ui.console.DESK_PLAYS),
+        panelOpen = stage.panel != null && !(compact && stage.panel?.kind in online.cosger.jarvis.ui.console.APP_PLAYS),
         stageContent = {
             val workersBusy = board.workers.any { it.active }
             StageHost(stage, brain, orbPhase(turn, mic, speaking, workersBusy) != Phase.Idle,
@@ -241,7 +241,7 @@ fun TalkContent(
     onRelieve: () -> Unit = {},
     onRetryTask: (Long) -> Unit = {},
     onCloseTask: (Long) -> Unit = {},
-    /** On the desk (Meja) the conversation is a sheet over the 3D canvas: no brain of its own, a small readiness ring instead. */
+    /** Over the app the conversation is a sheet: no brain of its own, a small readiness ring instead. */
     compact: Boolean = false,
 ) {
     val workers = board.workers.filter { it.active }

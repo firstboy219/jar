@@ -28,6 +28,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +59,7 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
+import online.cosger.jarvis.media.MusicPlayer
 import online.cosger.jarvis.ui.theme.JarvisColors
 
 /** ExoPlayer that sends the device token when fetching JARVIS' own media (/api/v1/media/...). */
@@ -82,26 +84,22 @@ internal fun rememberPlayer(url: String, actions: StageActions, autoplay: Boolea
 
 @Composable
 fun MusicPanel(panel: Panel, actions: StageActions) {
-    val player = rememberPlayer(panel.str("url"), actions, panel.autoplay)
-    var playing by remember { mutableStateOf(panel.autoplay) }
+    // The sound itself plays in the phone's media service (MusicPlayer): this panel only shows and steers it.
+    val context = LocalContext.current
+    val track by MusicPlayer.track.collectAsState()
+    val playing by MusicPlayer.playing.collectAsState()
+    val mine = track?.id == panel.id
     var position by remember { mutableFloatStateOf(0f) }
-    DisposableEffect(player) {
-        val ended = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                if (state == Player.STATE_ENDED) actions.event("ended", emptyMap())  // a playlist moves on
-            }
-        }
-        player.addListener(ended)
-        onDispose { player.removeListener(ended) }
-    }
-    LaunchedEffect(player) {
-        while (true) {
-            val d = player.duration
-            if (d > 0) position = player.currentPosition.toFloat() / d
-            playing = player.isPlaying
+    LaunchedEffect(mine) {
+        while (mine) {
+            val (pos, dur) = MusicPlayer.position()
+            if (dur > 0) position = pos.toFloat() / dur
             delay(500)
         }
     }
+    LaunchedEffect(actions.hearing) { MusicPlayer.duck(actions.hearing) }
+    fun start() = MusicPlayer.play(context, MusicPlayer.Track(panel.id, panel.str("url"), panel.str("title"), panel.str("artist"), panel.str("cover_url"),
+        panel.str("license"), panel.str("source_url")), actions.console.absolute("/"), actions.console.authHeader())
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         val cover = panel.str("cover_url")
         if (cover.startsWith("https://")) {
@@ -110,19 +108,24 @@ fun MusicPanel(panel: Panel, actions: StageActions) {
         }
         Text(panel.str("title"), color = JarvisColors.Text, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
         Text(panel.str("artist"), color = JarvisColors.Muted, fontSize = 13.sp)
-        Slider(position, { v -> position = v; if (player.duration > 0) player.seekTo((v * player.duration).toLong()) },
+        Slider(if (mine) position else 0f, { v -> if (mine) { position = v; MusicPlayer.seekFraction(v) } },
             colors = SliderDefaults.colors(thumbColor = JarvisColors.Cyan, activeTrackColor = JarvisColors.Cyan))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            PanelButton(if (playing) "Jeda" else "Putar", primary = true) {
-                if (player.isPlaying) { player.pause(); actions.event("paused", emptyMap()) } else player.play()
+            PanelButton(if (mine && playing) "Jeda" else "Putar", primary = true) {
+                when {
+                    !mine -> start()
+                    playing -> { MusicPlayer.pause(); actions.event("paused", emptyMap()) }
+                    else -> MusicPlayer.resume()
+                }
             }
-            PanelButton("Dari awal") { player.seekTo(0); player.play() }
+            PanelButton("Dari awal") { if (mine) MusicPlayer.restart() else start() }
         }
         PlaylistBar(panel, actions)
         Spacer(Modifier.height(8.dp))
         if (panel.str("license").isNotBlank()) {  // music from open sources; any other sound (audio) has none
             Text("Lisensi ${panel.str("license")} · ${Uri.parse(panel.str("source_url")).host ?: ""}", color = JarvisColors.Muted, fontSize = 10.sp)
         }
+        Text("Tetap berbunyi di layar lain & saat layar mati · kontrol di layar kunci", color = JarvisColors.Muted, fontSize = 10.sp)
     }
 }
 

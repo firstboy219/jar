@@ -33,7 +33,6 @@ import online.cosger.jarvis.ui.console.AppUpdateScreen
 import online.cosger.jarvis.ui.console.AuditScreen
 import online.cosger.jarvis.ui.console.CompositionScreen
 import online.cosger.jarvis.ui.console.DeskChrome
-import online.cosger.jarvis.ui.console.GalaxyScreen
 import online.cosger.jarvis.ui.console.NotesScreen
 import online.cosger.jarvis.ui.console.JarvisVoiceScreen
 import online.cosger.jarvis.ui.console.ConsoleRoute
@@ -166,7 +165,8 @@ class MainActivity : FragmentActivity() {
                             when {
                                 what.startsWith("console:") -> ConsoleRoute.entries.firstOrNull { it.path == what.removePrefix("console:") }
                                     ?.let { nav.navigate("console/${it.path}") }
-                                what in setOf("desk", "notes", "tasks", "meetings") -> nav.navigate(what)
+                                what == "desk" -> nav.navigate("app") { popUpTo("app") { inclusive = true } }   // the infinite canvas is gone
+                                what in setOf("notes", "tasks", "meetings") -> nav.navigate(what)
                                 what == "talk" -> talkOpen = true
                                 what == "guide" -> if (!(application as JarvisApp).engine.screen.active.value) {
                                     askShare.launch(getSystemService(android.media.projection.MediaProjectionManager::class.java).createScreenCaptureIntent())
@@ -191,11 +191,6 @@ class MainActivity : FragmentActivity() {
                         val back: () -> Unit = { nav.popBackStack() }
                         // the app v2 (ADR-087): the server's /app/ page is the main screen; the native screens below open from it
                         composable("app") { online.cosger.jarvis.ui.console.AppHostScreen(vm, hostActions) }
-                        composable("desk") {
-                            GalaxyScreen(vm, back, asTab = false,
-                                onOpenServer = { nav.navigate("console/${ConsoleRoute.Dashboard.path}") },
-                                onOpenBackground = { nav.navigate("console/${ConsoleRoute.Background.path}") })
-                        }
                         composable("notes") { NotesScreen(vm, back) }
                         composable("tasks") { TasksScreen(vm, back) }
                         composable("meetings") { MeetingsScreen(vm, back) { id -> nav.navigate("meeting/$id") } }
@@ -208,7 +203,6 @@ class MainActivity : FragmentActivity() {
                                     ConsoleRoute.Memory -> MemoryScreen(vm, back)
                                     ConsoleRoute.Composition -> CompositionScreen(vm, back)
                                     ConsoleRoute.JarvisVoice -> JarvisVoiceScreen(vm, back)
-                                    ConsoleRoute.Galaxy -> GalaxyScreen(vm, back)
                                     ConsoleRoute.Studio -> StudioScreen(vm, back)
                                     ConsoleRoute.Self -> SelfScreen(vm, back)
                                     ConsoleRoute.Flow -> FlowScreen(vm, back)

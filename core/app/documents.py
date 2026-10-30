@@ -195,9 +195,6 @@ async def create(title: str, fmt: str, content: str, actor: str, task_id: int | 
            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, title, format, size, created_at""",
         doc_id, title, fmt, filename, path.stat().st_size, task_id, actor)
     await audit.record(actor, "document.created", f"document:{doc_id}", title=title, format=fmt)
-    from . import canvas
-    company = await db.pool().fetchval("SELECT company_id FROM tasks WHERE id = $1", task_id) if task_id else None
-    await canvas.auto(f"doc:{doc_id}", company)
     return dict(row) | {"url": f"/api/v1/documents/{doc_id}", "download_name": f"{safe}.{fmt}"}
 
 

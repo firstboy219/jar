@@ -12,6 +12,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -20,7 +21,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
 
 /**
  * ADR-087 batch I: JARVIS working on any website (booking a hotel, a flight, a ticket) in a browser that lives on the phone but nobody sees.
@@ -139,6 +139,7 @@ object WebSessions {
         val s = sessions[id] ?: return
         (s.web.parent as? ViewGroup)?.removeView(s.web)
         s.holder.baseContext = s.web.context.applicationContext
+        s.web.onResume(); s.web.resumeTimers()   // off screen the page must keep running for JARVIS
         s.shown = false
         if (done) s.ownerDone = true else s.ownerCancelled = true
         s.lastUsed = SystemClock.uptimeMillis()
@@ -152,9 +153,14 @@ object WebSessions {
         CookieManager.getInstance().flush()
     }
 
-    private suspend fun evaluate(web: WebView, js: String): String = suspendCoroutine { cont ->
-        web.evaluateJavascript(js) { raw ->
-            cont.resume(runCatching { Json.parseToJsonElement(raw).jsonPrimitive.content }.getOrDefault(raw ?: ""))
+    /** A busy page (or one the system paused) may never call back: JARVIS waits [EVAL_MS] at most, so the server always gets an answer. */
+    private suspend fun evaluate(web: WebView, js: String): String = withTimeoutOrNull(EVAL_MS) {
+        suspendCancellableCoroutine { cont ->
+            web.evaluateJavascript(js) { raw ->
+                if (cont.isActive) cont.resume(runCatching { Json.parseToJsonElement(raw).jsonPrimitive.content }.getOrDefault(raw ?: ""))
+            }
         }
-    }
+    } ?: ""
+
+    private const val EVAL_MS = 10_000L
 }

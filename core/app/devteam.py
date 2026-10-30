@@ -30,7 +30,7 @@ MEMBERS = {
 }
 
 TEAM = ("Kamu anggota TIM DEV JARVIS: bisan (analis bisnis & sistem), coder (expert developer), qaqa (QA). Pemilik melihat "
-        "pekerjaanmu langsung di area Tim Dev di Meja dan bisa mengirim pesan kepadamu. Repo kerja: /opt/data/workspace/jar "
+        "pekerjaanmu langsung di aplikasi JARVIS (Misi/Bengkel) dan bisa mengirim pesan kepadamu. Repo kerja: /opt/data/workspace/jar "
         "(origin = kode JARVIS terbaru, baca saja lewat origin/main). Bahasa: Indonesia, ringkas, fakta. Tiap langkah ±10 detik: "
         "gabungkan pembacaan file/perintah yang tidak saling bergantung, jangan menjelajah tanpa tujuan.\n")
 
@@ -54,7 +54,7 @@ Mutu spesifikasi (dari ulasan nyata):
 - Kriteria terima = pernyataan yang BELUM terpenuhi dan bisa diperiksa qaqa dari diff/tes/perintah. Jangan beri tanda ✓ dan jangan mengulang bagian "Perilaku".
 - Sebelum menulis, git grep di origin/main: siapa lagi yang memakai hal yang akan diubah, dan tes YANG SUDAH ADA yang akan terpengaruh
   (mis. tes yang menyebut daftar kunci/panel/fungsi itu). Cantumkan tes lama yang HARUS diperbarui coder.
-- Sebut hanya berkas yang benar-benar perlu diubah, dengan path relatif repo (core/app/web/canvas/app.js), bukan path absolut dan bukan "kalau perlu".
+- Sebut hanya berkas yang benar-benar perlu diubah, dengan path relatif repo (core/app/web/app/views/beranda.js), bukan path absolut dan bukan "kalau perlu".
 - Tes baru hanya untuk hal yang BISA diuji tanpa browser (fungsi murni di lib.js, bukan app.js yang penuh DOM). Jangan mengarang berkas atau fungsi yang tidak ada.
 - Kalau permintaan meminta memeriksa/mengusulkan sesuatu (mis. kandidat lain), tuliskan hasilnya di bagian "Temuan untuk pemilik", jangan dilewatkan.
 Akhiri dengan HASIL berformat persis:
@@ -63,7 +63,7 @@ Tujuan: <satu kalimat, dari sudut pandang pemilik>
 Berkas: <daftar berkas yang diubah + alasannya>
 Perilaku: <poin-poin perilaku yang harus terjadi, termasuk di HP>
 Kriteria terima: <daftar bernomor, masing-masing bisa diperiksa qaqa dari diff / tes / perintah>
-Tes baru: <nama BERKAS TES BARU yang harus dibuat coder (mis. core/app/web/canvas/tests/<fitur>.test.mjs) dan apa yang dibuktikannya>
+Tes baru: <nama BERKAS TES BARU yang harus dibuat coder (mis. core/app/web/app/tests/<fitur>.test.mjs) dan apa yang dibuktikannya>
 Tes lama yang terpengaruh: <nama tes + apa yang harus diubah, atau "tidak ada">
 Bukan lingkup: <yang sengaja tidak dikerjakan>
 Risiko: <efek samping yang harus diwaspadai coder>
@@ -81,7 +81,7 @@ Urutan kerja (cepat DAN benar — tiap langkah ±10 detik, jadi hemat langkah):
    terjadi (bukan puluhan edit kecil). Ubah seperlunya saja. Tanpa kode mati, blok kosong, kode lama yang dikomentari, console.log sisa, atau
    komentar yang mengulang kode. Komentar singkat dalam gaya file itu. Penuhi SETIAP kriteria terima dan pikirkan efek sampingnya (layar HP,
    mode gelap, state yang tersimpan, hal yang membuka/menutup sendiri).
-4. Tes baru di BERKAS TES BARU (core/app/web/canvas/tests/<fitur>.test.mjs atau core/tests/test_<fitur>.py), bukan ditambah di akhir berkas
+4. Tes baru di BERKAS TES BARU (core/app/web/app/tests/<fitur>.test.mjs atau core/tests/test_<fitur>.py), bukan ditambah di akhir berkas
    bersama (lib.test.mjs, test_acceptance.py…): menambah di akhir berkas bersama membuat konflik merge saat deploy. Tes tidak boleh dilemahkan atau dihapus.
 5. Periksa: cd {dir} && python3 core/app/preflight.py — perbaiki SETIAP FAIL dan pahami SETIAP WARN, baca hasil tes JS-nya. Tes JS manual: cd <folder web> && node --test tests/*.test.mjs (Node baru menolak
    direktori kosong sebagai argumen: beri daftar berkas). Lalu baca
@@ -258,7 +258,7 @@ async def on_result(task_id: int, result: str) -> None:
 
 async def _fail(job: dict, why: str, rounds: int, review: str | None = None) -> None:
     await _set(job["id"], status="failed", note=why[:500], round=rounds, **({"review": review[:8000]} if review else {}))
-    await reports._create(None, SESSION, f"Tim dev berhenti: {_short(job['request'], 120)} — {why}. Lihat area Tim Dev di Meja.")
+    await reports._create(None, SESSION, f"Tim dev berhenti: {_short(job['request'], 120)} — {why}. Lihat Misi di aplikasi JARVIS.")
 
 
 async def on_failed(task_id: int, error: str) -> None:

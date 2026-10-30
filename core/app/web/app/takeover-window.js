@@ -1,7 +1,7 @@
-// "Intervensi" (ADR-053, ADR-056: any time, the worker is told to stand still): the owner takes the wheel of a worker's browser from the desk — to solve a captcha or log in when the worker is stuck.
+// "Ambil alih" (ADR-053, ADR-056: any time, the worker is told to stand still): the owner takes the wheel of a worker's browser from the app — to solve a captcha or log in when the worker is stuck.
 // A full-window view of the live video; what the owner does on it (mouse, touch, wheel, keys, pasted text) goes to the same tab over the
 // desk's WebSocket. Nothing typed here is kept: it is sent and forgotten.
-import { fitSize, keyToInput, pageFraction, scrollDelta, touchIntent } from './lib.js';
+import { fitSize, keyToInput, pageFraction, scrollDelta, touchIntent } from './takeover-lib.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const FINAL = ['completed', 'failed', 'cancelled', 'stopped'];
@@ -25,7 +25,7 @@ export function createTakeover({ send, toast }) {
   const kin = el('input', 'tk-input'); kin.type = 'text'; kin.inputMode = 'text'; kin.enterKeyHint = 'enter'; kin.autocapitalize = 'off'; kin.autocomplete = 'off'; kin.spellcheck = false; kin.setAttribute('aria-label', 'Ketikan ke halaman');
   root.append(bar, note, stage, pasteRow, kin);
   document.body.append(root);
-  // nothing under the window (the 3D desk, its shortcuts) hears what happens in it
+  // nothing under the window (the app, its shortcuts) hears what happens in it
   for (const t of ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'touchstart', 'touchmove', 'contextmenu']) root.addEventListener(t, (e) => e.stopPropagation());
 
   const put = (ev) => { if (task != null) send({ type: 'input', task, ev }); };

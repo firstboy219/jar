@@ -200,6 +200,28 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
         view.post { online.cosger.jarvis.media.VideoPipActivity.open(view.context, v, start?.toIntOrNull() ?: 0) }
         return true
     }
+    // ---- the app's mini player steers the phone's one music player (media/MusicPlayer: plays on every screen, lock-screen controls) ----
+    @JavascriptInterface fun musicState(): String = online.cosger.jarvis.media.MusicPlayer.stateJson()
+    @JavascriptInterface fun musicCmd(cmd: String?, arg: String?) {
+        view.post {
+            val m = online.cosger.jarvis.media.MusicPlayer
+            when (cmd) {
+                "play" -> m.resume(); "pause" -> m.pause(); "toggle" -> m.toggle(); "restart" -> m.restart()
+                "seek" -> m.seekTo(arg?.toLongOrNull() ?: 0L); "stop" -> m.stop()
+            }
+        }
+    }
+    @JavascriptInterface fun musicPlay(json: String?) {
+        val o = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(json.orEmpty().take(4000)) as kotlinx.serialization.json.JsonObject }.getOrNull() ?: return
+        fun s(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+        val url = s("url")
+        if (!(url.startsWith("/api/v1/media/") || url.startsWith("https://"))) return
+        view.post {
+            val engine = (view.context.applicationContext as JarvisApp).engine
+            online.cosger.jarvis.media.MusicPlayer.play(view.context, online.cosger.jarvis.media.MusicPlayer.Track(s("id").take(80), url, s("title").take(200), s("artist").take(200), s("cover")),
+                engine.console.absolute("/"), engine.console.authHeader())
+        }
+    }
     @JavascriptInterface fun pickSpeaker(): Boolean = online.cosger.jarvis.media.MediaRoutes.pickSpeaker(view.context)
     @JavascriptInterface fun castTv(id: String?, start: String?): Boolean = online.cosger.jarvis.media.MediaRoutes.castTv(view.context, id.orEmpty().take(11), start?.toIntOrNull() ?: 0)
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */

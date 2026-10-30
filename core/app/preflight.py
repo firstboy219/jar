@@ -158,7 +158,7 @@ def main(argv: list[str]) -> int:
     if shared:
         add("WARN", "tes di berkas bersama", f"{', '.join(shared)} — menambah tes di akhir berkas bersama sering konflik saat deploy; "
             "taruh tes barumu di BERKAS TES BARU (mis. tests/<fitur>.test.mjs atau tests/test_<fitur>.py)")
-    for d in ("core/app/web/canvas", "core/app/web/notes"):
+    for d in ("core/app/web/app", "core/app/web/notes"):
         if any(f.startswith(d + "/") for f in files) and Path(root, d, "tests").is_dir():
             # explicit files, not a directory: newer Node (≥ 24) reads the argument as a glob and refuses a bare directory
             tests_js = sorted(str(t.relative_to(Path(root, d))) for t in Path(root, d, "tests").glob("*.test.mjs"))

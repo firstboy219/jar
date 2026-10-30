@@ -199,7 +199,6 @@ def test_distance():
     assert 1000 < d < 1200
 
 
-
 def test_quiet_hours_wrap_midnight(monkeypatch):
     from app import config, notifications
     monkeypatch.setattr(config.settings, "quiet_hours", "22:00-06:00")
@@ -353,7 +352,6 @@ def test_error_signature_ignores_values():
     assert "abcdefghijklmnopqrstu" not in cleaned and "…" in cleaned
 
 
-
 def test_direct_actions_and_model_question():
     from app.router import parse_action
     assert parse_action("tolong putarkan lagu ada band") == Intent("play_music", {"query": "ada band"})
@@ -381,7 +379,6 @@ def test_promise_detection():
     assert _PROMISE.search("Oke, aku cek dulu ya, nanti aku kabari.")
     assert _PROMISE.search("Oke, saya akan cari lagu band dan tampilkan di layar HP.")
     assert not _PROMISE.search("Kopi, biar melek.")
-
 
 
 def test_flow_checks_find_unkept_promises_and_repeats():
@@ -485,7 +482,6 @@ def test_ai_calls_in_words():
 def test_hermes_profile_follows_where_it_runs():
     from app.composition import hermes_profile_for
     assert hermes_profile_for(False) == "lean" and hermes_profile_for(True) == "full"
-
 
 
 def test_hermes_session_lines_move_after_the_shared_prefix():
@@ -1086,31 +1082,6 @@ def test_selfdev_policy_protects_the_voice_gate_and_company_isolation():
 
 # ---- Fase 4 (ADR-049): the 3D canvas ----
 
-def test_canvas_geometry_refs_contexts_and_isolation_rule():
-    from app import canvas
-    centers = {k: canvas.constellation_center(k) for k in canvas.PERSONAL_KINDS}
-    assert len(set(centers.values())) == len(centers)                               # every constellation has its own place
-    assert len({canvas.constellation_center(k, True) for k in canvas.COMPANY_KINDS}) == len(canvas.COMPANY_KINDS)
-    assert set(canvas.PERSONAL_KINDS + canvas.COMPANY_KINDS) | {"papan"} == set(canvas.KINDS) == set(canvas.KIND_OF.values())
-    a, b = canvas.place("tugas", 0), canvas.place("tugas", 1)
-    assert a != b and canvas.place("tugas", 5) == canvas.place("tugas", 5)          # deterministic, distinct
-    cx, _, cz = centers["tugas"]
-    spots = [canvas.place("tugas", i) for i in range(30)]
-    assert all(abs(p[0] - cx) < 700 and 0 < p[2] - cz < 2100 for p in spots)                    # rows under the area's name
-    assert len({(p[0], p[2]) for p in spots}) == 30 and spots[0][2] == spots[3][2] < spots[4][2]  # four to a row, then down
-    near = sorted((abs(a[0] - b[0]), abs(a[2] - b[2])) for a in spots[:8] for b in spots[:8] if a != b)
-    assert all(dx >= 340 or dz >= 230 for dx, dz in near)                                            # two 300 × 160 cards never overlap
-    assert canvas.context_of("") == "utama" and canvas.context_of("Toko Online!") == "project:toko-online"
-    assert canvas.context_of("company:renature") == "company:renature" and canvas.context_company("company:renature") == "renature"
-    assert canvas.parse_ref("task:12") == ("task", "12")
-    for bad in ("task:abc", "doc:12", "memory:not-a-uuid", "secret:1", "task:1;drop"):
-        with pytest.raises(canvas.CanvasError):
-            canvas.parse_ref(bad)
-    # isolation: a company galaxy only its own things, a personal galaxy nothing of a company
-    assert canvas.allowed("vault:3", "renature", "renature") and not canvas.allowed("vault:3", "renature", "jack-healer")
-    assert not canvas.allowed("vault:3", None, "renature") and not canvas.allowed("memory:" + "0" * 8 + "-0000-0000-0000-" + "0" * 12, "renature", None)
-    assert canvas.allowed("task:1", None, None) and not canvas.allowed("task:1", None, "renature") and canvas.allowed("task:1", "renature", "renature")
-
 
 def test_selfdev_policy_protects_canvas_isolation_and_gestures():
     from app import selfdev_policy as p
@@ -1315,21 +1286,6 @@ def test_v4_f10_meeting_voice_commands_are_understood_and_ordinary_talk_is_not_t
         assert not i or i.name not in ("meeting_start", "meeting_stop"), said
 
 
-def test_v4_f11_free_objects_keep_only_known_well_formed_properties():
-    from app import canvas
-    ok = canvas.clean_props({"type": "shape", "shape": "diamond", "color": "#AABBCC", "font": 500, "text": "x" * 9000, "evil": "<b>", "locked": 1})
-    assert ok == {"type": "shape", "shape": "diamond", "color": "#aabbcc", "font": 96, "text": "x" * 4000, "locked": True}
-    assert canvas.clean_props({"text": "baru"}, creating=False) == {"text": "baru"}
-    for bad in ({"type": "iframe"}, {"type": "note", "color": "red"}, {"type": "note", "shape": "star"}, {"type": "note", "align": "x"}, "teks"):
-        with pytest.raises(canvas.CanvasError):
-            canvas.clean_props(bad)
-    assert canvas.clean_style({"to": "7", "dash": 1, "color": "#38BDF8", "x": 1}) == {"to": 7, "dash": True, "color": "#38bdf8"}
-    assert canvas.clean_style({"to": None}) == {"to": None} and canvas.clean_style({}) == {}
-    assert canvas.object_content({"type": "note", "text": "Judul\nisi panjang"})["title"] == "Judul"
-    assert canvas.object_content({"type": "frame"})["title"] == "Bingkai"
-    assert canvas.allowed("obj:abc123", "renature", None) and canvas.allowed("obj:abc123", None, None)
-
-
 def test_v4_f12_google_login_url_client_check_and_the_n8n_credential():
     from urllib.parse import parse_qs, urlparse
 
@@ -1449,7 +1405,6 @@ def test_v4_f12_preflight_catches_what_the_reviews_kept_finding():
     assert "preflight.py" in qa and "perubahan #9" in qa and "BERKAS TES BARU" not in devteam.BISAN.split("Tes baru:")[0]
 
 
-
 def test_v4_f12_bisan_is_taught_to_write_checkable_specs():
     from app import devteam
     for must in ("BELUM terpenuhi", "Tes lama yang terpengaruh", "Temuan untuk pemilik", "path relatif repo", "Jangan mengarang berkas"):
@@ -1463,16 +1418,6 @@ def test_v4_f12_preflight_runs_js_tests_with_explicit_files_for_newer_node():
     src = inspect.getsource(preflight.main)
     assert '"node", "--test", *tests_js' in src and '"--test", "tests/"' not in src       # a bare directory fails on Node ≥ 24
     assert "tests/*.test.mjs" in devteam.CODER
-
-
-def test_v4_f12_an_area_layout_is_bounded_and_named_safely():
-    from app import canvas
-    assert canvas.clean_area("devteam", {"w": 1800.6, "h": 900, "locked": 1}) == {"w": 1801, "h": 900, "locked": True}
-    assert canvas.clean_area("workers", {"w": 5, "h": None}) == {"w": 220, "h": None, "locked": False}   # no height: grows with content
-    assert canvas.clean_area("player", {"w": 99999, "h": 1}) == {"w": 2600, "h": 140, "locked": False}
-    for bad in ("", "../x", "Devteam", "a" * 40, "x y"):
-        with pytest.raises(canvas.CanvasError):
-            canvas.clean_area(bad, {"w": 300})
 
 
 def test_v4_f12_the_notes_page_may_play_a_meetings_recording():

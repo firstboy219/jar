@@ -113,8 +113,11 @@ def web_item(w: dict) -> dict:
 
 
 def question_item(q: dict) -> dict:
-    return {"kind": "question", "id": q["id"], "title": q["question"][:140], "sub": f"Ditanya oleh misi: {q.get('title') or '#' + str(q.get('task_id'))}",
-            "icon": "chat", "cta": "Jawab", "password": False, "task_id": q.get("task_id")}
+    text = q["question"]
+    title = text if len(text) <= 160 else text[:157].rsplit(" ", 1)[0] + "…"
+    sub = f"Ditanya oleh misi: {q['title']}" if q.get("title") else (f"Ditanya oleh misi #{q['task_id']}" if q.get("task_id") else "Ditanya oleh pekerja JARVIS")
+    return {"kind": "question", "id": q["id"], "title": title, "text": text, "sub": sub, "icon": "chat", "cta": "Jawab", "password": False,
+            "task_id": q.get("task_id")}
 
 
 async def listing() -> list[dict]:

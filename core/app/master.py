@@ -182,18 +182,36 @@ async def _step(run_id: int, stage: str, text: str, extra: dict | None = None, *
     await hub.broadcast({"type": "flow", "run": run_id, "stage": stage, "text": text[:300], **{k: v for k, v in cols.items() if k in ("lane", "status")}})
 
 
-async def _think(job: Job, lane: str, run_id: int) -> tuple[Any, str | None]:
-    body = {"messages": job.messages, "max_tokens": job.max_tokens, "temperature": job.temperature}
-    if job.json_out:
-        body["response_format"] = {"type": "json_object"}
+THINK_ROOM = 3000
+
+
+async def _complete(job: Job, lane: str, body: dict, run_id: int) -> dict:
     from . import modelrouter
     token = modelrouter.NO_FREE.set(True) if job.no_free else None
     try:
-        data = await gateway.complete("penglihatan" if job.vision else lane, body, caller=f"master:{job.feature}", session_id=f"flow-{run_id}", private=job.private)
+        return await gateway.complete("penglihatan" if job.vision else lane, body, caller=f"master:{job.feature}", session_id=f"flow-{run_id}", private=job.private)
     finally:
         if token is not None:
             modelrouter.NO_FREE.reset(token)
-    text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+
+
+async def _think(job: Job, lane: str, run_id: int) -> tuple[Any, str | None]:
+    # Today's models think before they answer and the thinking counts against max_tokens: unchecked, it ate the whole budget and the
+    # answer came back empty. The light brain (and sight) answer straight away; the heavy brain thinks a little, with room left for the answer.
+    body = {"messages": job.messages, "max_tokens": job.max_tokens, "temperature": job.temperature,
+            "reasoning": {"effort": "low"} if lane == "berat" and not job.vision else {"enabled": False}}
+    if lane == "berat" and not job.vision:
+        body["max_tokens"] = job.max_tokens + THINK_ROOM
+    if job.json_out:
+        body["response_format"] = {"type": "json_object"}
+    data = await _complete(job, lane, body, run_id)
+    choice = (data.get("choices") or [{}])[0]
+    text = (choice.get("message") or {}).get("content") or ""
+    if not text.strip() and body["reasoning"] != {"enabled": False}:   # it thought until the budget ran out: once more, answering directly
+        await _step(run_id, "hermes", "otak berat kehabisan token saat berpikir — dijawab langsung")
+        data = await _complete(job, lane, {**body, "reasoning": {"enabled": False}, "max_tokens": job.max_tokens}, run_id)
+        choice = (data.get("choices") or [{}])[0]
+        text = (choice.get("message") or {}).get("content") or ""
     model = (data.get("jarvis_route") or {}).get("model")
     if not text.strip():
         raise FlowError("AI tidak menjawab")

@@ -92,7 +92,7 @@ var b=document.body?document.body.innerText:'',low=(document.title+' '+b.slice(0
 var inp=[].slice.call(document.querySelectorAll('input')).filter(vis);
 f.password=inp.some(function(x){return (x.getAttribute('type')||'').toLowerCase()==='password';});
 f.otp=inp.some(function(x){return (x.getAttribute('autocomplete')||'')==='one-time-code';})||/kode otp|kode verifikasi|one[- ]time|verification code|masukkan kode/.test(low);
-f.captcha=[].slice.call(document.querySelectorAll('iframe')).some(function(x){return /recaptcha|hcaptcha|turnstile|challenges\.cloudflare|arkoselabs|captcha/.test(x.src||'');})||/i.m not a robot|bukan robot|verify you are human|security verification|just a moment/.test(low);
+f.captcha=[].slice.call(document.querySelectorAll('iframe')).some(function(x){var r=x.getBoundingClientRect(),st=getComputedStyle(x);return /recaptcha|hcaptcha|turnstile|challenges\.cloudflare|arkoselabs|captcha/.test(x.src||'')&&!/size=invisible/.test(x.src||'')&&r.width>=60&&r.height>=40&&st.visibility!=='hidden'&&st.display!=='none'&&+st.opacity!==0;})||/i.m not a robot|bukan robot|verify you are human|security verification|just a moment/.test(low);
 f.card=inp.some(function(x){return /cc-|card|kartu|cvv|cvc|expir|kadaluarsa/i.test((x.getAttribute('autocomplete')||'')+' '+(x.name||'')+' '+(x.id||'')+' '+(x.placeholder||''));});
 f.payment=f.card||/metode pembayaran|pilih pembayaran|payment method|bayar sekarang|pay now|selesaikan pembayaran|virtual account|total pembayaran|complete payment/.test(low);
 f.cookie=/cookie|kuki/.test(low);
@@ -302,6 +302,9 @@ def overlap(a: str, b: str) -> float:
 
 # ---------- sessions ----------
 
+PHONE_SLACK_S = 25   # a heavy page on a phone on mobile data: loading, running its scripts, then our script on top
+
+
 class _PhoneSession:
     backend = "hp"
 
@@ -316,10 +319,10 @@ class _PhoneSession:
             raise WebError(f"HP: {e}") from None
 
     async def open(self, url: str) -> dict:
-        return await self._op("web_open", url=url, wait_s=18)
+        return await self._op("web_open", url=url, wait_s=18, wait=18 + PHONE_SLACK_S)
 
     async def run(self, js: str, settle_ms: int = 0) -> str:
-        return str((await self._op("web_eval", js=js, settle_ms=settle_ms)).get("result") or "")
+        return str((await self._op("web_eval", js=js, settle_ms=settle_ms, wait=settle_ms / 1000 + PHONE_SLACK_S)).get("result") or "")
 
     async def show(self, reason: str) -> None:
         await self._op("web_show", reason=reason)
@@ -400,13 +403,17 @@ async def _session(sid: str, url: str):
     return _ServerSession(sid)
 
 
-async def _state(sess) -> dict:
-    raw = await sess.run(STATE_JS)
-    try:
-        st = json.loads(raw)
-    except ValueError:
-        raise WebError("halaman tidak terbaca") from None
-    return st if isinstance(st, dict) else {}
+async def _state(sess, tries: int = 3) -> dict:
+    """The page as fields and buttons. A heavy page still busy, or the phone's link blinking, is given a few more moments."""
+    for i in range(tries):
+        try:
+            st = json.loads(await sess.run(STATE_JS))
+            return st if isinstance(st, dict) else {}
+        except (ValueError, WebError) as e:
+            if i == tries - 1:
+                raise e if isinstance(e, WebError) else WebError("halaman tidak terbaca") from None
+            await asyncio.sleep(3 + 3 * i)
+    return {}
 
 
 # ---------- the owner ----------

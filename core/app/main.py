@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from . import assistant
 from . import devteam, google_auth, lanes, notes, phone_agent, project_flow, projects, routines
-from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, canvas, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
+from . import (approvals, inbox, live, openjarvis, spike, watchers, attachments, audit, auditor, awareness, capabilities, companies, gm, kpi, skills_pipeline, episodes, goals, library, modelinsight, openrouter, playlists, brain, budget, chat, dev, errors, hermes_studio, meetings, perf, vault, composition, db, deepgram, devices, documents, gateway, hub,
                media, memory, musiclib, notifications, ops, overrides, questions, reports, self_model, selfimprove, stage, status,
                n8n, sensitive, stt, usage, voice, voice_id, workers)
 from .config import settings
@@ -584,28 +584,7 @@ async def voice_correct(c: VoiceCorrectIn, device: dict = Depends(owner_device_a
         raise HTTPException(e.status, str(e))
 
 
-# ---------- the 3D canvas (Blueprint v4 Fase 4, ADR-049): galaxies of cards, layout only ----------
-
-def _canvas_error(e: Exception) -> HTTPException:
-    return HTTPException(404 if "tidak ada" in str(e) else 422, str(e))
-
-
-@app.get("/api/v1/canvases")
-async def canvases_list(device: dict = Depends(device_auth)):
-    return jsonable(await canvas.contexts())
-
-
-class CanvasIn(BaseModel):
-    context: str = Field(min_length=1, max_length=80)     # "utama", "project:Toko Online", "company:renature"
-    title: str | None = Field(default=None, max_length=80)
-
-
-@app.post("/api/v1/canvases")
-async def canvases_open(c: CanvasIn, device: dict = Depends(owner_device_auth)):
-    try:
-        return jsonable(await canvas.ensure(c.context, c.title))
-    except (canvas.CanvasError, companies.CompanyError) as e:
-        raise _canvas_error(e)
+# ---------- the live screens of the workers' browsers (ADR-051): what a mission is doing, and "Ambil alih" (ADR-053) ----------
 
 
 @app.get("/api/v1/canvas/live")
@@ -716,113 +695,12 @@ async def canvas_live_ws(websocket: WebSocket):
             unsubscribe()
 
 
-class AreaIn(BaseModel):
-    w: float | None = None
-    h: float | None = None
-    locked: bool = False
-
-
-@app.get("/api/v1/canvas/areas")
-async def canvas_areas(device: dict = Depends(owner_device_auth)):
-    """The size and lock the owner gave each desk area (ADR-062)."""
-    return {"areas": await canvas.areas()}
-
-
-@app.put("/api/v1/canvas/areas/{name}")
-async def canvas_area_put(name: str, a: AreaIn, device: dict = Depends(owner_device_auth)):
-    try:
-        return await canvas.set_area(name, a.model_dump(), f"device:{device['name']}")
-    except canvas.CanvasError as e:
-        raise HTTPException(422, str(e))
-
-
 @app.get("/api/v1/canvas/live/{task_id}/frame")
 async def canvas_live_frame(task_id: int, context: str = "utama", device: dict = Depends(device_auth)):
     got = live.frame(task_id, context[:80])
     if not got:
         raise HTTPException(404, "belum ada tampilan")
     return Response(got[0], media_type="image/jpeg", headers={"Cache-Control": "no-store", "X-Frame-Seq": str(got[1])})
-
-
-@app.post("/api/v1/canvases/{canvas_id}/fill")
-async def canvases_fill(canvas_id: int, device: dict = Depends(owner_device_auth)):
-    try:
-        row = await canvas._canvas_row(canvas_id)
-        return jsonable(await canvas.fill(row["context"], "owner"))
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-@app.get("/api/v1/canvases/{canvas_id}")
-async def canvases_view(canvas_id: int, since: int | None = None, device: dict = Depends(device_auth)):
-    try:
-        return jsonable(await canvas.view(canvas_id, since))
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-@app.get("/api/v1/canvases/{canvas_id}/search")
-async def canvases_search(canvas_id: int, q: str = "", device: dict = Depends(owner_device_auth)):
-    try:
-        row = await canvas._canvas_row(canvas_id)
-        return jsonable(await canvas.search_refs(row["context"], q[:80]))
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-class CardIn(BaseModel):
-    ref: str = Field(min_length=3, max_length=80)
-    x: float | None = None
-    y: float | None = None
-    z: float | None = None
-
-
-@app.post("/api/v1/canvases/{canvas_id}/cards")
-async def canvases_add_card(canvas_id: int, c: CardIn, device: dict = Depends(owner_device_auth)):
-    try:
-        row = await canvas._canvas_row(canvas_id)
-        pos = (c.x, c.y, c.z) if None not in (c.x, c.y, c.z) else None
-        return jsonable(await canvas.add(row["context"], c.ref, f"device:{device['name']}", pos))
-    except (canvas.CanvasError, companies.CompanyError) as e:
-        raise _canvas_error(e)
-
-
-class CardPatch(BaseModel):
-    x: float | None = None
-    y: float | None = None
-    z: float | None = None
-    size: float | None = None
-    pinned: bool | None = None
-    w: float | None = None
-    h: float | None = None
-    props: dict | None = None
-
-
-class ObjectIn(BaseModel):
-    props: dict
-    x: float = 0
-    z: float = 0
-    w: float | None = None
-    h: float | None = None
-
-
-@app.post("/api/v1/canvases/{canvas_id}/objects")
-async def canvases_add_object(canvas_id: int, o: ObjectIn, device: dict = Depends(owner_device_auth)):
-    """The owner draws a note / text / shape / frame on the board (ADR-055)."""
-    try:
-        row = await canvas._canvas_row(canvas_id)
-        return jsonable(await canvas.create_object(row["context"], o.props, f"device:{device['name']}", o.x, o.z, o.w, o.h))
-    except (canvas.CanvasError, companies.CompanyError, ValueError, TypeError) as e:
-        raise _canvas_error(e)
-
-
-@app.post("/api/v1/canvases/{canvas_id}/arrange")
-async def canvases_arrange(canvas_id: int, device: dict = Depends(owner_device_auth)):
-    """"Rapikan": cards that point at something go back into the grid of their area (the owner's drawings and locked cards stay)."""
-    try:
-        return await canvas.arrange(canvas_id, f"device:{device['name']}")
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
 
 
 class LayoutItem(BaseModel):
@@ -834,125 +712,19 @@ class LayoutItem(BaseModel):
     h: float | None = None
 
 
-class LayoutIn(BaseModel):
-    items: list[LayoutItem] = Field(min_length=1, max_length=500)
-    note: str = Field(default="", max_length=100)
-
-
-@app.post("/api/v1/canvases/{canvas_id}/layout")
-async def canvases_layout(canvas_id: int, l: LayoutIn, device: dict = Depends(owner_device_auth)):
-    """A multi-selection moved / aligned / resized: one change in the history."""
-    try:
-        return await canvas.move_many(canvas_id, [i.model_dump() for i in l.items], f"device:{device['name']}", l.note)
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-@app.patch("/api/v1/canvas/cards/{node_id}")
-async def canvases_move_card(node_id: int, p: CardPatch, device: dict = Depends(owner_device_auth)):
-    try:
-        return jsonable(await canvas.move(node_id, f"device:{device['name']}", **p.model_dump()))
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-@app.delete("/api/v1/canvas/cards/{node_id}")
-async def canvases_hide_card(node_id: int, device: dict = Depends(owner_device_auth)):
-    """Takes the card off the canvas only; what it points at is never deleted from here."""
-    try:
-        return {"hidden": await canvas.hide(node_id, f"device:{device['name']}")}
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-class EdgeIn(BaseModel):
-    a: int
-    b: int
-    label: str = Field(default="", max_length=60)
-    style: dict = Field(default_factory=dict)
-
-
-class EdgePatch(BaseModel):
-    label: str | None = Field(default=None, max_length=60)
-    style: dict | None = None
-
-
-@app.patch("/api/v1/canvases/{canvas_id}/edges/{edge_id}")
-async def canvases_edge_patch(canvas_id: int, edge_id: int, p: EdgePatch, device: dict = Depends(owner_device_auth)):
-    try:
-        return jsonable(await canvas.update_edge(edge_id, canvas_id, f"device:{device['name']}", p.label, p.style))
-    except (canvas.CanvasError, ValueError, TypeError) as e:
-        raise _canvas_error(e)
-
-
-@app.post("/api/v1/canvases/{canvas_id}/edges")
-async def canvases_link(canvas_id: int, e: EdgeIn, device: dict = Depends(owner_device_auth)):
-    try:
-        return jsonable(await canvas.link(e.a, e.b, f"device:{device['name']}", e.label, e.style))
-    except canvas.CanvasError as err:
-        raise _canvas_error(err)
-
-
-@app.delete("/api/v1/canvases/{canvas_id}/edges/{edge_id}")
-async def canvases_unlink(canvas_id: int, edge_id: int, device: dict = Depends(owner_device_auth)):
-    try:
-        return {"removed": await canvas.unlink(edge_id, canvas_id, f"device:{device['name']}")}
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-@app.get("/api/v1/canvases/{canvas_id}/versions")
-async def canvases_versions(canvas_id: int, device: dict = Depends(device_auth)):
-    try:
-        return jsonable(await canvas.versions(canvas_id))
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-class RestoreIn(BaseModel):
-    version: int
-
-
-@app.post("/api/v1/canvases/{canvas_id}/restore")
-async def canvases_restore(canvas_id: int, r: RestoreIn, device: dict = Depends(owner_device_auth)):
-    try:
-        return await canvas.restore(canvas_id, r.version, f"device:{device['name']}")
-    except canvas.CanvasError as e:
-        raise _canvas_error(e)
-
-
-_CANVAS_DIR = __import__("pathlib").Path(__file__).parent / "web" / "canvas"
-# The viewer and the gesture prototype: static, same origin as the API. Hand tracking (MediaPipe) runs in the browser:
-# its code and model come from jsdelivr / Google storage, camera frames never leave the device.
-# The map card (ADR-056) loads MapLibre from jsdelivr and its tiles/fonts from OpenFreeMap.
-_CANVAS_CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; "
-               "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://tiles.openfreemap.org; img-src 'self' https: data: blob:; "
-               "media-src 'self' https: blob:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; worker-src 'self' blob:; frame-ancestors 'none'")
-
-
 @app.get("/")
 async def site_root():
-    """The desk is the main page (ADR-052): the site's front door opens the canvas."""
+    """The app (ADR-087) is the front door; the infinite canvas was removed (owner 2026-10-30: "Infinite canvas hapus saja")."""
     from fastapi.responses import RedirectResponse
-    return RedirectResponse("/canvas/")
+    return RedirectResponse("/app/")
 
 
 @app.get("/canvas")
-async def canvas_root():
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse("/canvas/")
-
-
 @app.get("/canvas/{path:path}")
-async def canvas_static(path: str):
-    name = path or "index.html"
-    target = (_CANVAS_DIR / name).resolve()
-    if not str(target).startswith(str(_CANVAS_DIR.resolve())) or not target.is_file():
-        raise HTTPException(404)
-    return FileResponse(target, headers={"Content-Security-Policy": _CANVAS_CSP, "X-Content-Type-Options": "nosniff",
-                                         "Cache-Control": "no-cache",
-                                         # the desk's own microphone, camera and screen sharing (dock.js), for this origin only
-                                         "Permissions-Policy": "camera=(self), microphone=(self), display-capture=(self), geolocation=()"})
+async def canvas_gone(path: str = ""):
+    """Old links and older APKs land in the app (the token in the #fragment comes along: browsers keep it across a redirect)."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/app/")
 
 
 _NOTES_DIR = __import__("pathlib").Path(__file__).parent / "web" / "notes"
@@ -1509,6 +1281,40 @@ async def internal_ask(a: AskIn, request: Request):
     _tools_auth(request)
     q = await questions.ask(a.question, a.task_id)
     return {"question_id": q["id"]}
+
+
+class WebTaskIn(BaseModel):
+    goal: str = Field(min_length=5, max_length=1500)
+    start_url: str = ""
+    task_id: int | None = None
+
+
+@app.post("/internal/web_task")
+async def internal_web_task(a: WebTaskIn, request: Request):
+    """A mission hands work on a website to the phone's web agent (ADR-087 batch I): the owner's own connection — sites that wall the
+    server off (Cloudflare) open there — and the owner steps in on his phone for a robot check or a sign-in. A mission of a project
+    is reviewed without the admin password (the owner's rule for projects); any other with it."""
+    _tools_auth(request)
+    from . import webagent
+    parent = await db.pool().fetchrow("SELECT project_id FROM tasks WHERE id = $1", a.task_id) if a.task_id else None
+    try:
+        r = await webagent.request(a.goal, a.start_url, who="hermes", origin="feature" if parent and parent["project_id"] else "chat",
+                                   title=f"Web{f' (misi #{a.task_id})' if a.task_id else ''}: {a.goal}")
+    except webagent.WebError as e:
+        return {"error": str(e)}
+    return {"web_task_id": r["id"], "task_id": r["task_id"]}
+
+
+@app.get("/internal/web_task/{web_task_id}")
+async def internal_web_task_state(web_task_id: int, request: Request):
+    _tools_auth(request)
+    row = await db.pool().fetchrow("SELECT w.status, w.result, w.site, t.result AS text, t.error FROM web_tasks w LEFT JOIN tasks t ON t.id = w.task_id WHERE w.id = $1",
+                                   web_task_id)
+    if not row:
+        raise HTTPException(404, "tugas web tidak ada")
+    waits = await db.pool().fetch("SELECT kind, title FROM web_waits WHERE web_task_id = $1 AND status = 'open'", web_task_id)
+    return {"status": row["status"], "site": row["site"], "result": row["result"], "text": row["text"], "error": row["error"],
+            "waiting_for_owner": [dict(w) for w in waits]}
 
 
 @app.get("/internal/control/{task_id}")

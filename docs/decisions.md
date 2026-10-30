@@ -1501,7 +1501,24 @@ menentukan berat/ringan/non-AI)".
   how each did, with the admin password and the same rules as Komposisi AI (an expensive choice asks first); on a wide screen
   (≥1360px) the app is a three-pane cockpit — the menu, the page, and a side pane with "Butuh kamu", running missions, pages and today's
   flow, kept fresh by events.
-- **Not built**: a lock-screen media session (the player's controls live in the app and the notification-less PiP window); casting uses the
-  YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
+- **First run of 0.26 fixed** (owner 2026-10-30: "masih banyak fitur yg belum bisa saya pakai … silahkan kamu scan dan perbaiki"):
+  every brain job sends a reasoning setting — today's OpenRouter models otherwise think until max_tokens is spent and answer nothing
+  (recap, brief, story all failed "AI tidak menjawab"): the light brain and sight answer directly, the heavy brain thinks at low effort with
+  3,000 tokens of room and is asked once more without thinking if it still comes back empty. Music plays in the phone's media service
+  (`MusicPlayer` + `MusicService`, a Media3 session): on every screen, with the screen off, with the lock-screen and notification controls;
+  the talk sheet's panel and the app's mini player (a bridge: musicState / musicCmd / musicPlay) only steer it. Openverse no longer answers
+  the server, so open-licence music falls back to the Internet Archive's netlabel / open-audio collections (Creative Commons, MP3 from
+  archive.org), a mood ("santai", "semangat", "fokus") asked in the catalogue's own tag. A mission's question shows its whole text and its
+  mission (a worker that forgot its task number is matched to the one mission running) with "Buka misi"; the mission page has "Ambil alih"
+  in the app itself (the desk's takeover window over the live screen); a mission blocked by Cloudflare or applying/booking on a strict site
+  hands that part to the phone's web agent (`kerjakan_di_web_hp` / `cek_web_hp`, reviewed without the admin password for a project's
+  mission, with it otherwise). The web agent no longer takes an invisible reCAPTCHA for a robot check, gives a phone step the time a
+  heavy page needs (the server waited 25 s while the phone could take longer; a script on a busy page could hang for ever) and reads a
+  busy page again before giving up.
+- **The infinite canvas is removed** (owner 2026-10-30: "Infinite canvas hapus saja"; supersedes ADR-049/052/055/062 for the UI): the web
+  board (`/canvas/`), the phone's desk and "Galaksi 3D" screens, cards placed automatically for tasks / documents / shown things, the
+  chat's canvas tool and the board API are gone; `/` and `/canvas/…` open the app. Kept: the workers' live screens and takeover
+  (`/api/v1/canvas/live…`, used by the mission page) and the old board tables in the database (nothing reads them).
+- **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

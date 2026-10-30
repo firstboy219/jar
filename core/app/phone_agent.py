@@ -247,8 +247,9 @@ async def wait_online(seconds: int = ONLINE_WAIT_S) -> bool:
     return phone_online()
 
 
-async def op(name: str, **args) -> dict:
-    """One instruction to the phone's accessibility service; its answer (a fresh screen for most)."""
+async def op(name: str, *, wait: float | None = None, **args) -> dict:
+    """One instruction to the phone's accessibility service; its answer (a fresh screen for most). `wait`: how long the phone may take
+    (a web page that loads and settles on the phone needs longer than a tap)."""
     if not await wait_online():
         raise PhoneError("HP dengan aplikasi JARVIS terbaru tidak tersambung (buka aplikasi JARVIS di HP)")
     req = uuid.uuid4().hex[:12]
@@ -257,7 +258,7 @@ async def op(name: str, **args) -> dict:
     try:
         if not await hub.send_cap(CAP, {"type": "phone_op", "req": req, "op": name, **args}):
             raise PhoneError("HP tidak tersambung")
-        reply = await asyncio.wait_for(fut, OP_TIMEOUT)
+        reply = await asyncio.wait_for(fut, wait or OP_TIMEOUT)
     except asyncio.TimeoutError:
         raise PhoneError("HP tidak menjawab (layar terkunci? aplikasi JARVIS ditutup?)") from None
     finally:

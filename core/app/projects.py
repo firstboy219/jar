@@ -32,9 +32,11 @@ yang sebaiknya dikerjakan run berikutnya.
 {format}"""
 SPLIT = ("Ada {total} pekerja dengan peran ini yang bekerja bersamaan: ambil bagian ke-{n} (mis. item, halaman, perusahaan, atau rentang yang berbeda) "
          "supaya tidak mengulang pekerjaan rekanmu; sebut bagian mana yang kamu ambil.\n")
-WEB = ("Peran ini MENGOPERASIKAN SITUS: kerjakan di browser (buka halaman, klik, ketik, gulir) — pemilik melihatnya langsung di Meja. "
+WEB = ("Peran ini MENGOPERASIKAN SITUS: kerjakan di browser (buka halaman, klik, ketik, gulir) — pemilik melihatnya langsung di halaman misi. "
        "BERHENTI sebelum mengirim lamaran/formulir, membuat akun, membayar, atau mengirim data pribadi: minta persetujuan lewat ask_owner dengan "
-       "ringkasan apa yang akan dikirim. Terhalang login/captcha/OTP → ask_owner, pemilik bisa Intervensi.\n")
+       "ringkasan apa yang akan dikirim. Situs memblokir browsermu (Cloudflare/cek robot) atau melamar/memesan di situs ketat (JobStreet, LinkedIn, "
+       "Traveloka…) → kerjakan_di_web_hp (browser di HP pemilik; pemilik meninjau tiap kirim). Terhalang login/captcha/OTP → ask_owner dengan "
+       "task_id-mu, pemilik bisa Ambil alih dari halaman misi.\n")
 
 
 class ProjectError(ValueError):
