@@ -108,7 +108,7 @@ def web_item(w: dict) -> dict:
     d = w.get("detail") or {}
     return {"kind": "web", "id": w["id"], "wait": w["kind"], "title": w["title"], "sub": f"{label} · {w.get('site') or ''} · {(w.get('goal') or '')[:90]}",
             "icon": ic, "cta": cta, "password": w["kind"] == "tinjau" and bool(d.get("password")), "session": d.get("session") if w["kind"] in ("masuk", "verifikasi", "bayar", "macet") else None,
-            "options": [{"label": o} for o in d.get("options") or []], "rows": d.get("rows") or [], "summary": d.get("summary") or d.get("why") or "",
+            "options": [{"label": o} for o in d.get("options") or []], "cards": d.get("cards") or [], "rows": d.get("rows") or [], "summary": d.get("summary") or d.get("why") or "",
             "button": d.get("button") or "", "missing": d.get("missing") or [], "url": d.get("url") or "", "at": w.get("created_at")}
 
 

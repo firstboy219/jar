@@ -33,6 +33,21 @@ export function itemCard(it, compact = false) {
 }
 
 // a web task waiting for him (ADR-087 batch I): the page itself on his phone, a pick, an answer, or the filled form to review
+/** One place to choose (a hotel, a restaurant): its picture, price, rating and reviews from the site, where it is and how to get there. */
+function placeCard(it, c, i, compact) {
+  return html`<div class="card" style="background:var(--bg2);gap:8px;padding:12px">
+    ${c.gambar && !compact ? html`<img src="${c.gambar}" alt="${c.label}" loading="lazy" referrerpolicy="no-referrer" style="width:100%;max-height:170px;object-fit:cover;border-radius:10px">` : ''}
+    <div class="row sb top" style="gap:8px"><b style="font-size:15px">${c.label}</b>${c.harga ? html`<span class="mono" style="white-space:nowrap">${c.harga}</span>` : ''}</div>
+    ${c.rating || c.ulasan ? html`<span class="small">★ ${c.rating || '–'}${c.ulasan ? ` · ${c.ulasan}` : ''}</span>` : ''}
+    ${c.kutipan ? html`<span class="small" style="font-style:italic">“${c.kutipan}”</span>` : ''}
+    ${c.alamat || c.lokasi ? html`<span class="small">${icon('pin', 12)} ${c.alamat || c.lokasi}${c.perkiraan ? ' (lokasi perkiraan: daerahnya)' : ''}</span>` : ''}
+    ${c.dari_stasiun ? html`<span class="small">${icon('train', 12)} ${c.dari_stasiun}</span>` : ''}
+    ${c.dari_rumah ? html`<span class="small">${icon('car', 12)} ${c.dari_rumah}</span>` : ''}
+    <div class="btns"><button class="btn violet sm" data-act="webPick" data-id="${it.id}" data-opt="${i}">Pilih ini</button>
+      ${c.peta ? html`<a class="btn sm" href="${c.peta}" target="_blank" rel="noopener">${icon('pin', 14)} Peta</a>` : ''}
+      ${c.link ? html`<a class="btn sm" href="${c.link}" target="_blank" rel="noopener">Lihat di situs</a>` : ''}</div></div>`;
+}
+
 function webCard(it, compact) {
   const tone = it.wait === 'tinjau' || it.wait === 'bayar' ? 'amber' : it.wait === 'pilih' || it.wait === 'tanya' ? 'violet' : 'cyan';
   let actions;
@@ -40,8 +55,14 @@ function webCard(it, compact) {
     actions = html`<div class="btns"><button class="btn ${tone}" data-act="webShow" data-id="${it.id}">${icon('right', 16)} ${it.cta}</button>
       <button class="btn" data-act="webDone" data-id="${it.id}" style="flex:0 0 96px">Sudah</button><button class="btn ghost" data-act="needReject" data-kind="web" data-id="${it.id}" style="flex:0 0 80px">Batal</button></div>
       <span class="small">${it.wait === 'bayar' ? 'Halaman pembayarannya terbuka di HP — kamu yang bayar, lalu tekan Selesai.' : 'Halamannya terbuka di HP persis seperti yang JARVIS lihat. Selesaikan sendiri (JARVIS tidak membaca sandimu), lalu Selesai.'}</span>`;
+  } else if (it.wait === 'pilih' && (it.cards || []).some((c) => c.harga || c.rating || c.alamat || c.peta || c.gambar)) {
+    actions = html`<div style="display:flex;flex-direction:column;gap:10px">${it.cards.map((c, i) => placeCard(it, c, i, compact))}</div>
+      <form class="row" data-ask="${it.id}" style="gap:8px"><input name="text" placeholder="Tanya dulu… mis. lihat ulasan & foto ${it.cards[0]?.label || ''}" style="flex:1;min-width:0">
+        <button class="btn sm" data-act="webAsk" data-id="${it.id}">Tanya</button></form>
+      <span class="small">Belum yakin? Minta JARVIS melihat detail, ulasan, atau lokasinya dulu — ia kembali dengan info yang lebih lengkap.</span>`;
   } else if (it.wait === 'pilih') {
-    actions = html`<div style="display:flex;flex-direction:column;gap:8px">${it.options.map((o, i) => html`<button class="btn" data-act="webPick" data-id="${it.id}" data-opt="${i}" style="justify-content:flex-start;text-align:left">${o.label}</button>`)}</div>`;
+    actions = html`<div style="display:flex;flex-direction:column;gap:8px">${it.options.map((o, i) => html`<button class="btn" data-act="webPick" data-id="${it.id}" data-opt="${i}" style="justify-content:flex-start;text-align:left">${o.label}</button>`)}</div>
+      <form class="row" data-ask="${it.id}" style="gap:8px"><input name="text" placeholder="Tanya dulu…" style="flex:1;min-width:0"><button class="btn sm" data-act="webAsk" data-id="${it.id}">Tanya</button></form>`;
   } else if (it.wait === 'tanya') {
     actions = html`<button class="btn block" data-act="webAnswer" data-id="${it.id}">Jawab</button>${(it.missing || []).length ? html`<a class="small" href="#/web?tab=profil">atau isi profil web (${it.missing.join(', ')})</a>` : ''}`;
   } else {
@@ -96,6 +117,14 @@ export const needActions = {
     toast('Buka aplikasi JARVIS di HP untuk menyelesaikan langkah ini.', true);
   },
   async webDone(b) { await post(`/api/v1/app/needs/web/${b.dataset.id}`, { approve: true }); toast('JARVIS melanjutkan.'); render(); },
+  async webAsk(b, e) {
+    e?.preventDefault();
+    const f = b.closest('form'), text = f ? new FormData(f).get('text') : '';
+    if (!text) return toast('Tulis dulu yang ingin kamu ketahui.', true);
+    await post(`/api/v1/app/needs/web/${b.dataset.id}`, { text });
+    toast('JARVIS melihatnya dulu, lalu kembali dengan info yang lebih lengkap.');
+    render();
+  },
   async webPick(b) { await post(`/api/v1/app/needs/web/${b.dataset.id}`, { option: Number(b.dataset.opt) }); toast('Pilihanmu dicatat — JARVIS melanjutkan.'); render(); },
   async webAnswer(b) {
     const it = byKey.get(key('web', b.dataset.id));

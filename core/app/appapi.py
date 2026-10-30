@@ -113,7 +113,9 @@ async def app_missions(done: bool = False, device: dict = Depends(owner)):
     rows = await db.pool().fetch(
         """SELECT id, title, status, kind, category, runtime, model_used, cost_usd::float AS cost, phase, progress, created_at, finished_at,
                   EXTRACT(EPOCH FROM (COALESCE(finished_at, now()) - COALESCE(started_at, created_at)))::int AS seconds,
-                  CASE WHEN $1 THEN left(coalesce(result::text, ''), 220) END AS preview
+                  CASE WHEN $1 THEN left(coalesce(result::text, ''), 220) END AS preview,
+                  (EXISTS (SELECT 1 FROM web_waits w JOIN web_tasks wt ON wt.id = w.web_task_id WHERE wt.task_id = tasks.id AND w.status = 'open')
+                   OR EXISTS (SELECT 1 FROM owner_questions q WHERE q.task_id = tasks.id AND q.status = 'open')) AS waiting
            FROM tasks WHERE company_id IS NULL AND dev_role IS NULL AND kind NOT IN ('flowcheck') AND (NOT $1 OR status = 'completed')
            ORDER BY (status IN ('queued', 'running')) DESC, id DESC LIMIT 40""", done)
     return jsonable({"missions": [dict(r) for r in rows]})
@@ -139,7 +141,35 @@ async def app_mission(task_id: int, device: dict = Depends(owner)):
     t["can_start"] = t["status"] in ("stopped", "failed", "cancelled")
     ep = await db.pool().fetchrow("SELECT success, approach, lesson, model FROM episodes WHERE task_id = $1 ORDER BY id DESC LIMIT 1", task_id)
     t["episode"] = dict(ep) if ep else None
+    t.update(await _mission_extra(task_id, t))
     return jsonable(t)
+
+
+async def _mission_extra(task_id: int, t: dict) -> dict:
+    """What a mission shows beyond the worker's own fields (owner 2026-10-30: "lg buka halaman misi … tidak ada tanda2 hasilnya"): who does
+    it, what it is waiting for from the owner (answered right on the mission page), and — for the web agent — its steps and result."""
+    from . import needs, workers
+    producer = workers.core_producer(t.pop("instruction", "") or "")
+    out: dict = {"producer": producer, "needs": [], "web": None}
+    for q in await db.pool().fetch("SELECT q.id, q.question, q.task_id, t.title FROM owner_questions q LEFT JOIN tasks t ON t.id = q.task_id "
+                                   "WHERE q.task_id = $1 AND q.status = 'open' ORDER BY q.id", task_id):
+        out["needs"].append(needs.question_item(dict(q)))
+    w = await db.pool().fetchrow("SELECT id, goal, site, status, backend, trace, result FROM web_tasks WHERE task_id = $1", task_id)
+    if w:
+        trace = w["trace"] or []
+        out["web"] = {"id": w["id"], "site": w["site"], "status": w["status"], "backend": w["backend"], "result": w["result"],
+                      "steps": [webstep_text(s) for s in trace][-12:], "step_count": len(trace)}
+        for row in await db.pool().fetch("SELECT w.*, t.goal, t.origin, t.site FROM web_waits w JOIN web_tasks t ON t.id = w.web_task_id "
+                                         "WHERE w.web_task_id = $1 AND w.status = 'open' ORDER BY w.id", w["id"]):
+            out["needs"].append(needs.web_item(dict(row)))
+    return out
+
+
+def webstep_text(s: dict) -> str:
+    """One step of the web agent in words. Pure."""
+    op, label = s.get("op") or "", ((s.get("sig") or {}).get("l") or "")[:80]
+    return {"klik": f"klik “{label}”" + (" (ditinjau dulu)" if s.get("commit") else ""), "isi": f"isi {len(s.get('fields') or [])} kolom",
+            "buka": f"buka {str(s.get('url') or '')[:80]}", "gulir": "gulir halaman", "kembali": "kembali ke halaman sebelumnya"}.get(op, op or "langkah")
 
 
 @router.post(API + "/missions/{task_id}/pause")

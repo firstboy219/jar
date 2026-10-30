@@ -61,7 +61,7 @@ async def compose(theme: str = "", trigger: str = "owner") -> dict:
 
 
 async def tonight() -> dict | None:
-    r = await db.pool().fetchrow("SELECT * FROM stories WHERE created_at::date = (now() AT TIME ZONE 'Asia/Jakarta')::date ORDER BY id DESC LIMIT 1")
+    r = await db.pool().fetchrow("SELECT * FROM stories WHERE (created_at AT TIME ZONE 'Asia/Jakarta')::date = (now() AT TIME ZONE 'Asia/Jakarta')::date ORDER BY id DESC LIMIT 1")
     return dict(r) if r else None
 
 

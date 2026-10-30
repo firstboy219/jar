@@ -20,6 +20,10 @@ export default {
         <div class="g3">${Object.keys(s.moods).map((m) => html`<button class="tile" data-act="mood" data-m="${m}" style="padding:14px 8px;display:flex;flex-direction:column;align-items:center;gap:6px;background:var(--s1);border:1px solid var(--bd);border-radius:14px;cursor:pointer">
           ${icon(MOOD_ICON[m] || 'music', 22)}<span style="font-size:13px">${m}</span></button>`)}</div>
         <form class="cmd" id="mq" style="display:flex"><input name="q" placeholder="Cari lagu, penyanyi, atau suasana…" style="flex:1"><button class="ib sm" data-act="search" aria-label="Putar">${icon('play', 18)}</button></form>
+        <form class="card" id="mp3f" style="gap:8px"><span class="k cyan">YouTube / YouTube Music → MP3</span>
+          <div class="row" style="gap:8px"><input name="url" inputmode="url" placeholder="Tempel link lagu (music.youtube.com / youtu.be)" style="flex:1;min-width:0">
+            <button class="btn sm" data-act="mp3" ${s.converter ? '' : 'disabled'}>Jadikan MP3</button></div>
+          <span class="small">${s.converter ? 'Diputar langsung di pemutar JARVIS (tetap bunyi di layar lain) dan disimpan ke playlist-mu.' : 'Converter MP3 belum dinyalakan di server — lihat catatan pemasangan.'}</span></form>
         ${s.now ? html`<div class="card amber"><div class="row sb"><div><span class="k amber">Sedang diputar</span><div class="ttl">${s.now.title}</div><div class="small">${s.now.artist || ''}${s.now.playlist ? ` · ${s.now.playlist.name} · lagu ${s.now.playlist.index + 1} dari ${s.now.playlist.total}` : ''}</div></div>
           <button class="btn sm" data-act="saveNow">${icon('plus', 14)} Simpan ke playlist</button></div>
           <div class="btns"><button class="btn sm" data-act="ctl" data-a="prev" aria-label="Sebelumnya">⏮</button><button class="btn sm" data-act="ctl" data-a="stop" aria-label="Berhenti">${icon('stop', 14)}</button><button class="btn sm" data-act="ctl" data-a="next" aria-label="Berikutnya">⏭</button></div></div>` : ''}
@@ -39,6 +43,14 @@ export default {
     async mood(b) { toast(`Mencari musik ${b.dataset.m}…`); const r = await post('/api/v1/app/music/play', { mood: b.dataset.m }); toast(`▶ ${r.playing || 'diputar'}`); },
     async search(b, e) { e?.preventDefault(); const q = new FormData($('#mq')).get('q'); if (!q) return; toast('Mencari…'); const r = await post('/api/v1/app/music/play', { query: q }); toast(`▶ ${r.playing || 'diputar'}`); },
     async playlist(b) { const r = await post('/api/v1/app/music/playlist', { name: b.dataset.n }); toast(`▶ ${r.song?.title || r.playing || 'diputar'}`); },
+    async mp3(b, e) {
+      e?.preventDefault();
+      const url = new FormData($('#mp3f')).get('url');
+      if (!url) return toast('Tempel link YouTube dulu.', true);
+      b.disabled = true; toast('Mengubah ke MP3… (±10–60 detik)');
+      try { const r = await post('/api/v1/app/music/convert', { url, save: true }); toast(`▶ ${r.playing || 'diputar'} · disimpan ke playlist`); setTimeout(render, 800); }
+      catch (err) { toast(err.message || 'Konversi gagal', true); } finally { b.disabled = false; }
+    },
     async ctl(b) { await post(`/api/v1/app/music/${b.dataset.a}`); setTimeout(render, 600); },
     async saveNow() { const r = await post('/api/v1/app/music/save', {}); toast(`Disimpan: ${r.saved}`); render(); },
     async shuffle(b) { const r = await post('/api/v1/app/music/playlist', { name: b.dataset.n, shuffle: true }); toast(`🔀 ${r.song?.title || r.playing || 'diputar'}`); },

@@ -97,7 +97,8 @@ f.card=inp.some(function(x){return /cc-|card|kartu|cvv|cvc|expir|kadaluarsa/i.te
 f.payment=f.card||/metode pembayaran|pilih pembayaran|payment method|bayar sekarang|pay now|selesaikan pembayaran|virtual account|total pembayaran|complete payment/.test(low);
 f.cookie=/cookie|kuki/.test(low);
 var msgs=(window.__jvMsgs||[]).splice(0);
-return JSON.stringify({url:location.href,title:document.title,text:b.slice(0,15000),els:els,flags:f,msgs:msgs});})()"""
+var imgs=[].slice.call(document.images).filter(function(x){var r=x.getBoundingClientRect();return r.width>=90&&r.height>=60&&/^https:/.test(x.currentSrc||x.src||'');}).slice(0,24).map(function(x){var c=x.closest('a[href]');return {a:t(x.alt||x.title||(c?c.innerText:'')).slice(0,80),s:(x.currentSrc||x.src).slice(0,400)};});
+return JSON.stringify({url:location.href,title:document.title,text:b.slice(0,15000),els:els,flags:f,msgs:msgs,imgs:imgs});})()"""
 
 FILL_JS = r"""(function(F){var ok=[],bad=[];
 function setv(e,v){var p=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e,v);
@@ -176,6 +177,102 @@ def needs_owner(state: dict) -> str | None:
     if f.get("password") and LOGIN_WORDS.search(f"{state.get('title', '')} {(state.get('text') or '')[:1500]}"):
         return "masuk"
     return None
+
+
+CARD_KEYS = ("harga", "rating", "ulasan", "kutipan", "alamat")
+
+
+def option_cards(raw: list, imgs: list[dict]) -> list[dict]:
+    """The brain's options as cards: a plain text option, or a place with what the page says (its picture resolved from g#). Pure."""
+    out = []
+    for o in raw[:6]:
+        if isinstance(o, dict):
+            label = " ".join(str(o.get("label") or "").split())[:120]
+            if not label:
+                continue
+            c = {"label": label, **{k: " ".join(str(o.get(k) or "").split())[:200] for k in CARD_KEYS if o.get(k)}}
+            g = re.fullmatch(r"g?(\d+)", str(o.get("gambar") or "").strip())
+            if g and 0 < int(g.group(1)) <= len(imgs):
+                c["gambar"] = imgs[int(g.group(1)) - 1].get("s")
+            link = str(o.get("link") or "")
+            if host(link) and not financial(link):
+                c["link"] = link[:400]
+            out.append(c)
+        elif str(o).strip():
+            out.append({"label": " ".join(str(o).split())[:120]})
+    return out
+
+
+def maps_link(lat: float, lon: float) -> str:
+    return f"https://www.google.com/maps/search/?api=1&query={lat:.6f},{lon:.6f}"
+
+
+async def _nearest_station(lat: float, lon: float) -> dict | None:
+    """The nearest railway station (OpenStreetMap via Nominatim, within ±30 km): a KRL station first (the owner rides KRL), with the
+    nearest of any line beside it when that one is closer."""
+    from . import krl, places
+    d = 0.3
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "JARVIS/1.0"}) as c:
+        r = await c.get("https://nominatim.openstreetmap.org/search", params={
+            "q": "stasiun", "format": "jsonv2", "limit": 25, "countrycodes": "id", "bounded": 1,
+            "viewbox": f"{lon - d},{lat + d},{lon + d},{lat - d}"})
+    r.raise_for_status()
+    found = sorted(({"name": str(e.get("name") or "").removeprefix("Stasiun ").strip(), "lat": float(e["lat"]), "lon": float(e["lon"]),
+                     "m": places.distance_m(lat, lon, float(e["lat"]), float(e["lon"]))}
+                    for e in r.json() if e.get("category") == "railway" and e.get("type") in ("station", "halt") and e.get("name")), key=lambda x: x["m"])
+    if not found:
+        return None
+    try:
+        krl_names = {s["name"].lower() for s in await krl.stations()}
+    except Exception:
+        krl_names = set()
+    best = next((x for x in found if x["name"].lower() in krl_names), None) or found[0]
+    if found[0] is not best and found[0]["m"] < best["m"] - 2000:
+        best = {**best, "lain": found[0]}
+    return best
+
+
+async def enrich_places(cards: list[dict], goal: str) -> list[dict]:
+    """Where each place is and how the owner gets there: the map, by car from home, and the nearest station with the last leg. Best
+    effort — whatever cannot be found is left out, never guessed."""
+    from . import commute, maps, places
+    home = next((p for p in await places.listing() if p.get("name") == "rumah"), None)
+    area = " ".join(re.findall(r"\b(?:di|daerah|kawasan)\s+([A-Z][\w']+(?:\s+[A-Z][\w']+)?)", goal)[:1]) or ""
+    out = []
+    for c in cards:
+        c = dict(c)
+        g = None
+        for q in (f"{c['label']}, {c.get('alamat') or area}".strip(", "), c.get("alamat") or area):   # the place itself, else its area
+            if not q:
+                continue
+            try:
+                g = await maps.geocode(q)
+                if q != f"{c['label']}, {c.get('alamat') or area}".strip(", "):
+                    c["perkiraan"] = True   # only the area was found: the map and times are for the area
+                break
+            except Exception:
+                continue
+            finally:
+                await asyncio.sleep(1.1)   # Nominatim: one request a second
+        if not g:
+            out.append(c)
+            continue
+        c["peta"] = maps_link(g["lat"], g["lon"])
+        c["lokasi"] = str(g.get("address") or "")[:160]
+        if home and home.get("lat") is not None:
+            mins, km = await commute._leg({"lat": home["lat"], "lon": home["lon"]}, g)
+            c["dari_rumah"] = f"±{mins} mnt naik mobil dari rumah ({km:.0f} km)"
+        try:
+            st = await _nearest_station(g["lat"], g["lon"])
+        except Exception:
+            st = None
+        if st:
+            mins, km = await commute._leg({"lat": st["lat"], "lon": st["lon"]}, g)
+            c["dari_stasiun"] = f"Stasiun {st['name']} ({st['m'] / 1000:.1f} km) → ±{mins} mnt naik mobil/ojek"
+            if st.get("lain"):
+                c["dari_stasiun"] += f" · stasiun terdekat lain: {st['lain']['name']} ({st['lain']['m'] / 1000:.1f} km, bukan KRL)"
+        out.append(c)
+    return out
 
 
 SITE_ERROR = re.compile(r"\b(internal server error|502 bad gateway|503 service|504 gateway|application error|halaman tidak ditemukan|page not found|"
@@ -482,9 +579,12 @@ async def answer_wait(wait_id: int, who: str, approve: bool | None = None, optio
         raise WebError("sudah tidak menunggu")
     if w["kind"] == "pilih":
         opts = w["detail"].get("options") or []
-        if option is None or not 0 <= option < len(opts):
+        if option is None and text.strip():   # not yet: he wants to know more first (the agent looks, then asks again)
+            status, ans = "done", {"text": text.strip()[:500], "free": True}
+        elif option is None or not 0 <= option < len(opts):
             raise WebError("pilih salah satu")
-        status, ans = "done", {"option": option, "text": opts[option]}
+        else:
+            status, ans = "done", {"option": option, "text": opts[option]}
     elif w["kind"] == "tanya":
         if not text.strip():
             raise WebError("jawabannya kosong")
@@ -506,7 +606,11 @@ SYSTEM = (
     "1) Formulir: isi SEKALIGUS semua kolom yang kamu tahu dengan aksi 'isi' (sertakan 'lalu_klik' untuk tombol berikutnya bila jelas).\n"
     "2) Data pribadi JANGAN ditulis: pakai kunci {profil.KUNCI} (tersedia di bawah). Bila data yang perlu tidak ada di profil maupun tujuan, pakai 'tanya'.\n"
     "3) Jangan pernah mengisi kata sandi, PIN, OTP, nomor kartu, CVV — itu pemilik. Jangan klik top up, transfer, pinjaman, ubah akun.\n"
-    "4) Pilihan yang tidak bisa diputuskan dari tujuan (hotel/penerbangan/jam dengan harga berbeda): 'tanya' dengan 2–6 pilihan singkat lengkap dengan harga.\n"
+    "4) Pilihan yang tidak bisa diputuskan dari tujuan (hotel/penerbangan/jam dengan harga berbeda): 'tanya' dengan 2–6 pilihan. Untuk TEMPAT (hotel, villa, "
+    "restoran) tiap pilihan berupa objek berisi semua yang TERTULIS di halaman: {\"label\": \"nama\", \"harga\": \"\", \"rating\": \"4,6\", \"ulasan\": \"1,7 rb ulasan\", "
+    "\"kutipan\": \"cuplikan ulasan bila ada\", \"alamat\": \"daerah/alamat\", \"gambar\": \"g3 (nomor GAMBAR yang cocok)\", \"link\": \"https://halaman detailnya\"} — "
+    "kosongkan yang tidak ada, jangan mengarang. Pilihan lain cukup teks singkat lengkap dengan harga. Bila pemilik minta melihat detail/ulasan/lokasi "
+    "dulu, buka halaman yang ia minta lalu 'tanya' lagi dengan info yang lebih lengkap.\n"
     "5) Tombol yang membuat pesanan/booking/mengirim/mendaftar/menuju pembayaran: 'klik' dengan \"kirim\": true (pemilik meninjau dulu).\n"
     "6) Bila halaman tidak berubah setelah aksimu, JANGAN ulangi aksi yang sama: coba cara lain (tombol lain, gulir, isi kolom wajib yang kosong) atau 'macet'.\n"
     "7) Tujuan tercapai, atau sudah di halaman pembayaran yang harus pemilik selesaikan → 'selesai' dengan ringkasan dan hasil (kode booking, total, tanggal, nama tempat).\n"
@@ -523,7 +627,9 @@ async def _decide(wt: dict, state: dict, history: list[str], keys: list[str], fa
                 + f"KUNCI PROFIL TERSEDIA: {', '.join('{profil.' + k + '}' for k in keys) or '(belum diisi)'}\n"
                 + (f"PETUNJUK (langkah yang berhasil sebelumnya di situs ini): {hint}\n" if hint else "")
                 + "YANG SUDAH DILAKUKAN:\n" + ("\n".join(history[-12:]) or "-")
-                + f"\n\nHALAMAN: {state.get('title') or ''} — {state.get('url') or ''}\nKOLOM & TOMBOL (hanya nomor ini yang ada):\n{elements_text(state) or '(tidak ada)'}\n\nTEKS:\n{(state.get('text') or '')[:5000]}")}]
+                + f"\n\nHALAMAN: {state.get('title') or ''} — {state.get('url') or ''}\nKOLOM & TOMBOL (hanya nomor ini yang ada):\n{elements_text(state) or '(tidak ada)'}"
+                + (("\n\nGAMBAR:\n" + "\n".join(f"g{i + 1}. {g.get('a') or '(tanpa keterangan)'}" for i, g in enumerate(state.get("imgs") or []))) if state.get("imgs") else "")
+                + f"\n\nTEKS:\n{(state.get('text') or '')[:5000]}")}]
     r = await master.run(master.Job(wt["feature"], "web-langkah", f"langkah web: {wt['goal'][:80]}", messages=msgs, json_out=True, no_free=True, max_tokens=900))
     if r["status"] != "done" or not isinstance(r["result"], dict):   # one empty or broken answer must not end the task: the heavy brain tries once
         r = await master.run(master.Job(wt["feature"], "web-langkah", f"langkah web (ulang): {wt['goal'][:80]}", messages=msgs, json_out=True, heavy=True,
@@ -715,12 +821,22 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
                 continue
             if act == "tanya":
                 q = d.get("tanya") or {}
-                opts = [str(o)[:120] for o in q.get("pilihan") or []][:6]
-                w = await _wait(wt, "pilih" if opts else "tanya", str(q.get("pertanyaan") or "Bagaimana?")[:200], {"options": opts, "url": st.get("url")}, timeout=ASK_S)
+                cards = option_cards(q.get("pilihan") or [], st.get("imgs") or [])
+                opts = [c["label"] for c in cards]
+                if cards and any(c.get("alamat") or c.get("rating") for c in cards):   # places: where exactly, and how to get there
+                    await progress(min(90, 10 + n * 2), "Melengkapi lokasi & akses tiap pilihan…")
+                    cards = await enrich_places(cards, wt["goal"])
+                w = await _wait(wt, "pilih" if opts else "tanya", str(q.get("pertanyaan") or "Bagaimana?")[:200],
+                                {"options": opts, "cards": cards, "url": st.get("url")}, timeout=ASK_S)
                 if w["status"] != "done":
                     raise WebError("pertanyaan tidak dijawab")
-                facts.append(f"{q.get('pertanyaan')}: {(w['answer'] or {}).get('text')}")
-                history.append(f"pemilik menjawab: {(w['answer'] or {}).get('text')}")
+                ans = w["answer"] or {}
+                if ans.get("free"):   # he asked something first (reviews, the location, photos) instead of picking
+                    facts.append(f"pemilik belum memilih; ia meminta: {ans.get('text')}")
+                    history.append(f"pemilik meminta dulu: {ans.get('text')}")
+                    continue
+                facts.append(f"{q.get('pertanyaan')}: {ans.get('text')}")
+                history.append(f"pemilik menjawab: {ans.get('text')}")
                 continue
             if act == "isi":
                 fill, refused, missing = resolve(d.get("isi") or {}, st, profile)
@@ -803,6 +919,9 @@ async def _finish(wt: dict, sess, trace: list[dict], result: dict, ok: bool) -> 
         except Exception as e:
             log.warning("web routine learn: %s", e)
     hasil = result.get("hasil") or {}
+    if ok and wt.get("task_id"):   # the owner hears it is done, and the notice opens the mission with its result
+        await hub.broadcast({"type": "notify", "title": f"Hasil dari {wt['site']} siap", "text": str(result.get("ringkasan") or wt["goal"])[:160],
+                             "kind": "info", "route": f"#/misi/{wt['task_id']}"})
     lines = [result.get("ringkasan") or "Selesai."] + [f"{k}: {v}" for k, v in hasil.items()][:12]
     return "\n".join(lines) + f"\n\n(situs {wt['site']}{', lewat HP' if sess.backend == 'hp' else ''})"
 

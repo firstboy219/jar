@@ -168,6 +168,27 @@ def _save_meta(media_id: str, path: Path, meta: dict) -> dict:
     return {"media_id": media_id, "url": f"/api/v1/media/{media_id}", "size": path.stat().st_size, **meta}
 
 
+YOUTUBE_LINK = re.compile(r"^https://(?:www\.|m\.|music\.)?(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/)|youtu\.be/)([A-Za-z0-9_-]{11})")
+
+
+def youtube_link(text: str) -> str | None:
+    """A YouTube / YouTube Music link (watch, shorts, youtu.be, music.youtube.com) → its canonical watch URL; None otherwise. Pure."""
+    m = YOUTUBE_LINK.match(str(text or "").strip())
+    return f"https://www.youtube.com/watch?v={m.group(1)}" if m else None
+
+
+def converter_error(code: str) -> str:
+    """The converter's error code in words. Pure."""
+    c = str(code or "")
+    if "login" in c or "youtube.decipher" in c or "fetch.fail" in c or "content.video.unavailable" in c:
+        return "YouTube menolak converter dari server ini (cek bot) — coba lagi nanti, atau lagu lain"
+    if "content.too_long" in c or "duration" in c:
+        return "videonya terlalu panjang untuk dijadikan MP3"
+    if "link" in c:
+        return "link itu tidak dikenali converter"
+    return f"converter menolak ({c})"
+
+
 async def convert_link(link: str, title: str, artist: str) -> dict:
     """A YouTube share link → MP3 through the configured converter (cobalt API). Raises ValueError."""
     if not settings.mp3_converter_url:
@@ -179,8 +200,10 @@ async def convert_link(link: str, title: str, artist: str) -> dict:
         r = await c.post(settings.mp3_converter_url, headers=headers,
                          json={"url": link, "downloadMode": "audio", "audioFormat": "mp3", "audioBitrate": "128"})
         data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-        if data.get("status") not in ("tunnel", "redirect") or not str(data.get("url", "")).startswith("https://"):
-            raise ValueError(f"converter menolak: {(data.get('error') or {}).get('code') or r.status_code}")
+        url = str(data.get("url", ""))
+        own = url.startswith(settings.mp3_converter_url.rstrip("/") + "/")   # a self-hosted converter's tunnel on jarvis-network (http)
+        if data.get("status") not in ("tunnel", "redirect") or not (url.startswith("https://") or own):
+            raise ValueError(converter_error((data.get("error") or {}).get("code") or str(r.status_code)))
         ROOT.mkdir(parents=True, exist_ok=True)
         media_id = uuid.uuid4().hex
         path, size = ROOT / f"{media_id}.mp3", 0

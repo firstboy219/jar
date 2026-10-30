@@ -103,6 +103,18 @@ async def _announce(row, status: str) -> None:
     await hub.broadcast(ev if on_board(row["kind"]) else ev | {"type": "devtask"})
 
 
+PRODUCER_NOTE = {"web": "Dikerjakan agen web JARVIS (browser di HP) — tiap langkah lewat alur master",
+                 "hp": "Dikerjakan JARVIS di aplikasi HP-mu — tiap langkah lewat alur master",
+                 "tulis": "Ditulis langsung oleh JARVIS lewat alur master"}
+
+
+def core_producer(instruction: str) -> str | None:
+    """Which part of core does this task itself ('web', 'hp', 'tulis'), by the mark its instruction starts with; None = a worker. Pure."""
+    from . import phone_agent, webagent, writer
+    text = instruction or ""
+    return "web" if text.startswith(webagent.MARK) else "hp" if text.startswith(phone_agent.MARK) else "tulis" if text.startswith(writer.MARK) else None
+
+
 async def spawn(title: str, instruction: str, session_id: str, actor: str, device_id=None,
                 location: Location | None = None, kind: str = "owner", image: str | None = None,
                 category: str | None = None, private: bool = False, company_id: str | None = None, heavy: bool = False) -> dict:
@@ -115,8 +127,12 @@ async def spawn(title: str, instruction: str, session_id: str, actor: str, devic
     if private:
         category = "privat"
     # the lane (ADR-081): a simple look-up goes "ringan", a heavy task to OpenJarvis (only while the owner has it on and it answers), the rest to Hermes
-    runtime, why = await lanes.pick(kind=kind, category=category, instruction=instruction, image=image, private=private,
-                                    company_id=company_id, heavy=heavy)
+    producer = core_producer(instruction)
+    if producer:   # done by core itself (the web agent, the phone, the writer): never the light lane's quick look-up, and said so
+        runtime, why = "hermes", PRODUCER_NOTE[producer]
+    else:
+        runtime, why = await lanes.pick(kind=kind, category=category, instruction=instruction, image=image, private=private,
+                                        company_id=company_id, heavy=heavy)
     row = await db.pool().fetchrow(
         """INSERT INTO tasks (session_id, device_id, title, instruction, kind, image, category, private, goal, budget_usd, company_id, runtime, runtime_note)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)

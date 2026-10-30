@@ -1529,6 +1529,18 @@ menentukan berat/ringan/non-AI)".
   placed differently by Kemenag and the chronology, say the scholars differ), the Kemenag introduction of the surah and the Kemenag tafsir
   of the verse word for word (equran.id, cached), and a short summary of its occasion (asbabun nuzul) drawn by the light brain through the
   master flow from that tafsir only — when the tafsir names no occasion it says so — made once per verse and kept.
+- **Second round of fixes** (owner 2026-10-31, screenshots of a hotel pick and a mission page): a web task's choice between PLACES comes as
+  cards — the picture, price, rating, review count and a review line as the site shows them, the address, a map link, the drive from home,
+  and the nearest KRL station with the last leg by car (Nominatim + the routing already used by commute; the hotel itself, or only its
+  area marked "perkiraan"; nothing guessed) — and the owner may ask first ("lihat ulasan dan foto dulu") instead of picking: the agent looks
+  and asks again. The mission page of core's own work (web agent, phone, writer) says who does it (never "Hermes + alat"), shows its steps,
+  what it waits for (answered right there) and its result, refreshes when it starts or stops waiting, and the finished web task sends a
+  notice that opens the mission; such tasks no longer pass through the light lane first ("Jalur ringan tidak menemukan jawaban" was a
+  look-up attempted on the agent's own instruction). YouTube / YouTube Music links become MP3 through a self-hosted converter (cobalt,
+  docker-compose profile `converter`, off until the owner starts it) from the Musik page, played at once and kept in his playlist. The phone
+  agent reads a screen the app barely describes from its picture, hands the next steps to the heavy brain when the screen stops changing or
+  after 15 steps, and a failure keeps its last steps. Two date checks compared a UTC date with today in WIB (tonight's story, today's
+  calendar) and missed between 00:00 and 07:00 WIB.
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

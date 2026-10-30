@@ -2,8 +2,11 @@
 import { empty, get, go, header, html, icon, loading, on, post, render, sheet, speak, toast } from '../core.js';
 import { ago, dur, pct, usd } from '../lib.js';
 import { laneChip, liveFrame, resultView, statusPill } from '../ui.js';
+import { itemCard, needActions } from '../needsui.js';
 
 const LANE_OF_RUNTIME = { ringan: 'ringan', openjarvis: 'berat', hermes: 'hermes' };
+const PRODUCER = { web: ['Agen web HP', 'cyan'], hp: ['Operasi HP', 'amber'], tulis: ['Penulis JARVIS', 'violet'] };
+const who = (t) => (PRODUCER[t.producer] ? html`<span class="tag ${PRODUCER[t.producer][1]}" title="${t.runtime_note || ''}">${PRODUCER[t.producer][0]}</span>` : laneChip(LANE_OF_RUNTIME[t.runtime] || t.runtime, t.runtime_note));
 
 // a result kept, shared, read aloud, or asked about further (mockup "Hasil")
 export function resultText(t) {
@@ -35,7 +38,7 @@ function listView(ms) {
   const done = ms.filter((m) => !['queued', 'running'].includes(m.status));
   const row = (m) => html`<a class="li click" href="#/misi/${m.id}">
     <div class="grow"><div class="ttl">${m.title}</div><div class="small">${laneChip(LANE_OF_RUNTIME[m.runtime] || m.runtime)} ${m.progress || ''} · ${dur(m.seconds)}${m.cost ? ` · ${usd(m.cost)}` : ''}</div></div>
-    ${statusPill(m.status)}</a>`;
+    ${m.waiting ? html`<span class="pill" style="background:var(--amber-bg);color:var(--amber-t)"><span class="dot amber live"></span>Menunggu kamu</span>` : statusPill(m.status)}</a>`;
   return html`
     ${running.length ? html`<div class="sec"><span>Sedang dikerjakan · ${running.length}</span></div><div class="list">${running.map(row)}</div>` : empty('Tidak ada misi yang berjalan.', 'Minta apa saja lewat kolom di bawah — JARVIS menjadikannya misi.')}
     ${done.length ? html`<div class="sec"><span>Terakhir</span></div><div class="list">${done.slice(0, 25).map(row)}</div>` : ''}`;
@@ -60,8 +63,12 @@ function detailView(t) {
     <div class="scr">
       <div class="row sb"><span class="small">Misi · ${ago(t.created_at)}${t.started_at ? '' : ' · belum mulai'}</span>${statusPill(t.status)}</div>
       <h1 class="big" style="font-size:22px">${t.title}</h1>
-      <div class="row wrap" style="gap:6px">${laneChip(lane, t.runtime_note)}${t.model_used ? html`<span class="tag">${t.model_used.split('/').pop()}</span>` : ''}<span class="tag">${dur(t.seconds)}</span>${t.cost ? html`<span class="tag">${usd(t.cost)}</span>` : ''}</div>
-      ${t.runtime_note ? html`<p class="small" style="margin:0">Hermes: ${t.runtime_note}</p>` : ''}
+      <div class="row wrap" style="gap:6px">${who(t)}${t.model_used ? html`<span class="tag">${t.model_used.split('/').pop()}</span>` : ''}<span class="tag">${dur(t.seconds)}</span>${t.cost ? html`<span class="tag">${usd(t.cost)}</span>` : ''}</div>
+      ${t.runtime_note ? html`<p class="small" style="margin:0">${t.producer ? '' : 'Hermes: '}${t.runtime_note}</p>` : ''}
+      ${t.needs?.length ? html`<div class="card amber" style="gap:10px"><span class="k amber">Menunggu kamu · ${t.needs.length}</span>
+        <span class="small">Jawab di sini — misinya langsung lanjut.</span>${t.needs.map((it) => itemCard(it))}</div>` : ''}
+      ${t.status === 'running' && t.progress && !t.station ? html`<div class="card"><span class="k muted">Sedang</span><p class="sub" style="margin:0">${t.progress}</p></div>` : ''}
+      ${t.web ? webView(t) : ''}
       ${t.station?.has_frame || t.station?.browsing ? html`<div class="livebox"><div class="bar2"><span class="dot red live"></span>LANGSUNG · ${t.station.page_title || t.station.url || 'browser'}</div><img id="frame" alt="Layar langsung misi" data-act="zoom" style="cursor:zoom-in"></div>
         <div class="btns">${t.status === 'running' ? html`<button class="btn sm" data-act="${t.station.paused ? 'resume' : 'pause'}">${t.station.paused ? html`${icon('play', 14)} Lanjutkan` : html`${icon('stop', 14)} Jeda`}</button>` : ''}<button class="btn sm" data-act="zoom">Perbesar</button></div>
         ${t.station.paused ? html`<span class="small t-amber2">Dijeda — JARVIS diam sampai kamu lanjutkan.</span>` : ''}` : ''}
@@ -83,6 +90,17 @@ function detailView(t) {
         <button class="btn danger" data-act="stop" ${t.can_stop ? '' : 'disabled'} style="flex-direction:column;height:60px;font-size:11px">${icon('stop', 18)}Hentikan</button>
       </div>
     </div>`;
+}
+
+function webView(t) {
+  const w = t.web, res = w.result || {};
+  const hasil = res.hasil && typeof res.hasil === 'object' ? Object.entries(res.hasil).filter(([, v]) => v != null && v !== '') : [];
+  return html`
+    ${res.ringkasan || hasil.length ? html`<div class="card green"><span class="k green">Hasil di ${w.site}</span>${res.ringkasan ? html`<p class="sub" style="margin:0">${res.ringkasan}</p>` : ''}
+      ${hasil.length ? html`<div style="display:flex;flex-direction:column;gap:4px">${hasil.map(([k, v]) => html`<span class="small"><b>${k}</b>: ${typeof v === 'object' ? JSON.stringify(v) : v}</span>`)}</div>` : ''}</div>` : ''}
+    <details class="card" ${t.status === 'running' ? 'open' : ''}><summary class="small">Langkah di ${w.site} (${w.step_count}) · ${w.backend === 'hp' ? 'browser di HP' : 'browser server'}</summary>
+      <div style="display:flex;flex-direction:column;gap:4px;margin-top:8px">${w.steps.length ? w.steps.map((s) => html`<span class="small">• ${s}</span>`) : html`<span class="small">Membuka situs…</span>`}</div></details>
+    <div class="btns"><a class="btn sm" href="#/web">${icon('screen', 14)} Semua tugas web</a>${t.needs?.length ? html`<a class="btn sm" href="#/butuh">${icon('alert', 14)} Butuh kamu</a>` : ''}</div>`;
 }
 
 let currentId = null, current = null, tab = 'misi';
@@ -112,9 +130,11 @@ export default {
     let t = null;
     const off = on('task', (ev) => { if (!currentId || ev.id === currentId) { clearTimeout(t); t = setTimeout(paint, 600); } });
     const off2 = on('progress', (ev) => { if (currentId && ev.task_id === currentId) { clearTimeout(t); t = setTimeout(paint, 1200); } });
-    return () => { off(); off2(); stopFrame?.(); clearTimeout(t); };
+    const off3 = on('needs', () => { clearTimeout(t); t = setTimeout(paint, 500); });   // it now waits for the owner (or no longer does)
+    return () => { off(); off2(); off3(); stopFrame?.(); clearTimeout(t); };
   },
   actions: {
+    ...needActions,   // a pick / an answer / a review the mission waits for, given right here
     readResult() { speak(resultText(current)); },
     async saveResult() {
       const page = await post('/api/v1/notes', { title: `Hasil: ${current.title}`.slice(0, 200), icon: '📋', blocks: resultBlocks(current) });

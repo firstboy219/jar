@@ -502,7 +502,7 @@ async def _home_cal(m: home.Moment) -> list[dict]:
 @brief.context("email & WhatsApp")
 async def _brief() -> str:
     n = await db.pool().fetchval("SELECT count(*) FROM inbox_items WHERE triage = 'needs' AND status = 'open' AND received_at > now() - interval '1 day'")
-    ev = await db.pool().fetch("SELECT title, start_at FROM calendar_events WHERE start_at::date = (now() AT TIME ZONE 'Asia/Jakarta')::date ORDER BY start_at")
+    ev = await db.pool().fetch("SELECT title, start_at FROM calendar_events WHERE (start_at AT TIME ZONE 'Asia/Jakarta')::date = (now() AT TIME ZONE 'Asia/Jakarta')::date ORDER BY start_at")
     parts = [f"{n} pesan butuh balasan"] if n else []
     if ev:
         parts.append("agenda hari ini: " + ", ".join(f"{e['start_at'].astimezone(WIB):%H.%M} {e['title']}" for e in ev[:5]))

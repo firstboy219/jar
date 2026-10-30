@@ -252,7 +252,7 @@ async def _emergency(s: dict, start: date) -> dict:
     """Saved = what he said he had (on emergency_at) plus what went to savings since; the monthly need = the last three periods' spending
     (not counting savings and investing)."""
     since = s["emergency_at"][:10] if s["emergency_at"] else "1970-01-01"
-    added = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE direction = 'out' AND category = 'tabungan' AND at >= $1::date",
+    added = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE direction = 'out' AND category = 'tabungan' AND at >= ($1::date::timestamp AT TIME ZONE 'Asia/Jakarta')",
                                      date.fromisoformat(since))
     totals = []
     ps = start

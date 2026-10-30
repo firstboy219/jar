@@ -9,11 +9,13 @@ import logging
 from collections import Counter
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import appsettings, db, habits, home, master, media_tools, playlists, stage
 from .appauth import owner
+from .config import settings
 from .location import WIB
 
 log = logging.getLogger("jarvis-core")
@@ -76,7 +78,7 @@ async def state() -> dict:
     mood, why = usual_mood(plays, home.slot_of(now), now.weekday(), list(s["moods"]))
     recent = [dict(r) for r in await db.pool().fetch("SELECT mood, query, title, at FROM media_log WHERE kind = 'music' ORDER BY id DESC LIMIT 10")]
     return {"now": stage.desk_player(), "moods": s["moods"], "usual": {"mood": mood, "why": why, "slot": home.slot_of(now)},
-            "recent": recent, "playlists": await playlists.all_()}
+            "recent": recent, "playlists": await playlists.all_(), "converter": bool(settings.mp3_converter_url)}
 
 
 @habits.action("music.mood", "Putar musik sesuai mood yang biasa")
@@ -106,6 +108,47 @@ class PlaylistIn(BaseModel):
     name: str | None = Field(default=None, max_length=80)
     index: int = Field(default=0, ge=0, le=500)
     shuffle: bool = False
+
+
+class ConvertIn(BaseModel):
+    url: str = Field(min_length=10, max_length=300)
+    save: bool = True
+
+
+async def convert(url: str, save: bool, who: str = "owner") -> dict:
+    """A YouTube / YouTube Music link → MP3 through the owner's converter, played at once and (by default) kept in his playlist."""
+    from . import musiclib
+    link = musiclib.youtube_link(url)
+    if not link:
+        raise MusicError("tempel link YouTube atau YouTube Music")
+    if not settings.mp3_converter_url:
+        raise MusicError("converter MP3 belum dinyalakan di server")
+
+    async def run():
+        title, artist = "Lagu dari YouTube", ""
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                o = (await c.get("https://www.youtube.com/oembed", params={"url": link, "format": "json"})).json()
+            title, artist = o.get("title") or title, o.get("author_name") or ""
+        except Exception:
+            pass
+        m = await musiclib.convert_link(link, title, artist)
+        shown = await media_tools._show_song(m, "converter")
+        if save:
+            await playlists.add([{"title": title, "artist": artist}], None, "converter", who)
+        return {**shown, "media_url": m["url"], "saved": save}
+    r = await master.run(master.Job("musik", "konversi", f"jadikan MP3: {link}", skill=run))
+    if r["status"] != "done":
+        raise MusicError(r.get("error") or "konversi gagal")
+    return r["result"]
+
+
+@router.post(API + "/convert")
+async def api_convert(body: ConvertIn, device: dict = Depends(owner)):
+    try:
+        return await convert(body.url, body.save, "owner")
+    except MusicError as e:
+        raise HTTPException(409, str(e))
 
 
 class SaveIn(BaseModel):

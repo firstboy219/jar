@@ -186,6 +186,21 @@ services:
       jarvis-core:
         condition: service_started
 
+  # The MP3 converter (owner 2026-10-30: "converter untuk mengubah YouTube music to MP3"): cobalt (github.com/imputnet/cobalt, open
+  # source), self-hosted, jarvis-network only, no published port. Not part of a normal `up`: the owner starts it with
+  # `docker compose --profile converter up -d jarvis-converter` and sets MP3_CONVERTER_URL=http://jarvis-converter:9000/ in .env.
+  jarvis-converter:
+    image: ghcr.io/imputnet/cobalt:11
+    container_name: jarvis-converter
+    profiles: ["converter"]
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      - API_URL=http://jarvis-converter:9000/
+      - DURATION_LIMIT=1200
+    networks:
+      - jarvis-network
+
   # one-shot: least-privilege role + database for jarvis-core (idempotent)
   # OpenJarvis (Blueprint v4 Fase 2, ADR-043): optional heavy worker next to Hermes. Not part of a normal `up`: set it up with
   # scripts/openjarvis-setup.sh (keys, config, this service). jarvis-network only, no published port; thinks through jarvis-core's

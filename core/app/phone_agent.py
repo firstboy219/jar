@@ -487,8 +487,28 @@ async def _loop(task_id, app, a, goal, progress, emit, obs, *, max_steps: int = 
     `trace` with the element it touched — that is what a routine is learned from."""
     started = started or time.monotonic()
     history: list[str] = []
-    slips = 0
     system = SYSTEM.format(label=a["label"], hint=a["hint"])
+    try:
+        return await _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started, trace, history, system)
+    except PhoneError as e:
+        if history:   # what it did last, so a failure can be understood (owner's Pluang reads failed after 45 steps, with no trace)
+            log.warning("phone task %s (%s) failed: %s — last steps: %s", task_id, app, e, " | ".join(history[-8:]))
+            raise PhoneError(f"{e} — langkah terakhir: {'; '.join(h.split('. ', 1)[-1] for h in history[-3:])}"[:600]) from None
+        raise
+
+
+SPARSE_LABELS = 6     # fewer readable labels than this in the app: the screen is looked at as a picture too
+STUCK_STEPS = 3       # the screen unchanged this many steps in a row: the heavy brain takes the next steps
+HEAVY_AFTER = 15      # still not done after this many steps: the heavy brain takes over
+
+
+def sparse(obs: dict) -> bool:
+    """An app screen the accessibility tree barely describes (drawn by its own engine): text must come from the picture. Pure."""
+    return sum(1 for n in obs.get("nodes") or [] if (n.get("t") or n.get("d"))) < SPARSE_LABELS
+
+
+async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started, trace, history, system) -> tuple[str, dict]:
+    slips, still, pictures, heavy, blind = 0, 0, {}, False, 0
     for step in range(1, max_steps + 1):
         if time.monotonic() - started > MAX_MINUTES * 60:
             raise PhoneError(f"lebih dari {MAX_MINUTES} menit — dihentikan supaya HP tidak dikendalikan terlalu lama")
@@ -496,12 +516,36 @@ async def _loop(task_id, app, a, goal, progress, emit, obs, *, max_steps: int = 
             obs = await _wait_for_owner_secret(app, emit)
             history.append("(pemilik mengetik PIN/OTP sendiri)")
             continue
+        now = screen_text(obs)
+        picture = ""
+        if in_app(obs, app) and sparse(obs):   # the app draws its own screen: read the picture of it (once per screen)
+            if now not in pictures:
+                try:
+                    from . import screen_reader
+                    pictures[now] = (await screen_reader.read((await op("screenshot")).get("jpeg")))[:1500]
+                except Exception as e:
+                    log.info("phone picture for task %s: %s", task_id, e)
+                    pictures[now] = ""
+            picture = pictures[now]
+            labeled = sum(1 for n in obs.get("nodes") or [] if (n.get("t") or n.get("d")))
+            blind = blind + 1 if not picture.strip() and labeled <= 1 else 0
+            log.info("phone task %s: %s shows %d elements, %d with text; picture %s", task_id, obs.get("package"), len(obs.get("nodes") or []),
+                     sum(1 for n in obs.get("nodes") or [] if (n.get("t") or n.get("d"))), "read" if picture.strip() else "empty/blocked")
+            if blind >= 3:   # neither the accessibility tree nor the picture says anything: stop instead of tapping blind for 45 steps
+                raise PhoneError(f"layar {a['label']} tidak bisa dibaca JARVIS: aplikasinya tidak menjelaskan isi layarnya ke aksesibilitas dan "
+                                 "melindungi tangkapan layarnya (biasa di aplikasi keuangan)")
+        if not heavy and (still >= STUCK_STEPS or step > HEAVY_AFTER):
+            heavy = True
+            history.append(f"{step - 1}. (otak berat mengambil alih: {'layar tidak berubah' if still >= STUCK_STEPS else 'sudah banyak langkah'})")
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": f"TUGAS DARI PEMILIK: {goal}\n\nLANGKAH SEBELUMNYA:\n" + ("\n".join(history[-10:]) or "(belum ada)")
-                     + f"\n\nLAYAR SAAT INI (langkah {step}/{max_steps}):\n{screen_text(obs)}\n\nPanggil satu alat."}]
+                     + f"\n\nLAYAR SAAT INI (langkah {step}/{max_steps}):\n{now}"
+                     + (f"\n\nTEKS PADA GAMBAR LAYAR (aplikasi ini tidak menjelaskan layarnya; ketuk dengan nomor elemen terdekat, atau gulir):\n{picture}" if picture else "")
+                     + ("\n\nLayar TIDAK berubah beberapa langkah: jangan ulangi aksi yang sama — coba tab/menu lain, gulir, kembali, atau 'lihat_gambar'." if still >= 2 else "")
+                     + "\n\nPanggil satu alat."}]
         call = None
         for attempt in range(2):
-            async for ev in llm.stream_chat(messages, tools=TOOLS, category="hp", max_tokens=400, temperature=0.2,
+            async for ev in llm.stream_chat(messages, tools=TOOLS, category="berat" if heavy else "hp", max_tokens=400, temperature=0.2,
                                             caller="core", session_id=f"task-{task_id}"):
                 if ev["type"] == "done":
                     c = ev["completion"]
@@ -562,7 +606,9 @@ async def _loop(task_id, app, a, goal, progress, emit, obs, *, max_steps: int = 
                 await asyncio.sleep(2)
                 obs = await op("observe")
                 continue
-            history.append(f"{step}. {label}" + (" (layar tidak berubah)" if screen_text(obs) == before else ""))
+            unchanged = screen_text(obs) == before
+            still = still + 1 if unchanged else 0
+            history.append(f"{step}. {label}" + (" (layar tidak berubah)" if unchanged else ""))
         await emit({"type": "tool", "id": f"hp{step}", "name": f"hp_{name}", "label": label, "status": "completed"})
     raise PhoneError(f"belum selesai setelah {max_steps} langkah")
 
