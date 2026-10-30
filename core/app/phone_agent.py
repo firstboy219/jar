@@ -33,6 +33,9 @@ APPS = {
     "qpon": {"label": "Qpon", "packages": ["com.qpon.platform", "com.gojek.gopay", "com.gojek.app"], "words": r"qpon",
              "hint": "Qpon (aplikasi kupon diskon): cari merchant/menu di kolom pencarian, lihat kupon dengan harga diskon, beli kupon lalu bayar "
                      "(GoPay: PIN diketik pemilik); kupon dipakai di outlet."},
+    "jobstreet": {"label": "JobStreet", "packages": ["com.jobstreet.jobstreet"], "words": r"job ?street",
+                  "hint": "JobStreet: cari lowongan dengan kolom pencarian (judul + perusahaan) atau buka tautannya; di halaman lowongan tekan Lamar / Lamar Cepat, "
+                          "pilih CV yang tersimpan, isi surat lamaran, jawab pertanyaan penyaringan, lalu Kirim lamaran. Jangan ubah profil."},
     "pluang": {"label": "Pluang", "packages": ["com.EmasDigi"], "words": r"pluang",
                "hint": "Pluang: Beranda menunjukkan total portofolio; tab Portofolio/Aset berisi tiap aset (emas, saham AS, kripto, reksa dana) dengan "
                        "nilai dan untung/rugi. Membeli: pilih aset → Beli → isi nominal Rupiah → periksa harga & ringkasan → konfirmasi; menjual sama "

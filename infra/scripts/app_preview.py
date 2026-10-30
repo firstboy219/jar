@@ -51,8 +51,33 @@ async def seed() -> str:
         await seed_media(p)
     if {"alur", "bengkel"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_flow(p)
+    if {"karier"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+        await seed_jobs(p)
     await db.close()
     return token
+
+
+async def seed_jobs(p):
+    """The job hunt mid-week: scored postings, applications at every stage, an invitation answered inside its undo window."""
+    await p.execute("INSERT INTO settings_kv (key, value) VALUES ('app:jobs', $1)", {"roles": ["Product Manager", "Business Analyst"], "locations": ["Jakarta Raya"], "min_salary": 18000000,
+                    "min_match": 80, "auto_apply": True, "max_per_day": 5, "auto_reply_invites": True, "undo_min": 5, "profile": "8 tahun produk & analitik e-commerce; pendiri SaaS Autotoko", "times": ["07:00", "19:00"]})
+    posts = [("95600001", "Senior Product Manager — Marketplace", "PT Toko Nusantara Digital", "Jakarta Selatan", "Rp 28.000.000 – Rp 35.000.000", 92, ["8 th produk e-commerce", "SQL & analitik", "pengalaman marketplace"], ["OKR enterprise"], "scored"),
+             ("95600002", "Business Analyst Lead", "PT Bank Contoh Tbk", "Jakarta Pusat", "", 84, ["analisis proses", "stakeholder"], ["sertifikasi CBAP"], "scored"),
+             ("95600003", "Product Manager (Fintech)", "Dompet Kita", "Jakarta Barat (Hybrid)", "Rp 25 jt – 32 jt", 81, ["produk pembayaran", "data"], ["regulasi OJK"], "scored"),
+             ("95600010", "Head of Product", "Sayur Segar Group", "Jakarta Selatan", "", 90, [], [], "applied"),
+             ("95600011", "Product Owner", "PT Logistik Cepat", "Jakarta Utara", "", 86, [], [], "applied"),
+             ("95600012", "Product Analyst", "PT Media Kreatif", "Jakarta", "", 82, [], [], "applied")]
+    for pid, t, c, loc, sal, sc, ok, gap, st in posts:
+        await p.execute("INSERT INTO job_posts (id, title, company, location, salary, score, score_data, status, url, listed_at, questions, arrangement) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now() - interval '1 day', $10, 'Hybrid')",
+                        pid, t, c, loc, sal, sc, {"cocok": ok, "kurang": gap, "alasan": "pengalaman e-commerce & SaaS-mu sangat relevan"}, st, f"https://id.jobstreet.com/id/job/{pid}",
+                        ["Berapa tahun pengalaman Anda sebagai Product Manager?", "Berapa ekspektasi gaji bulanan Anda?"] if pid == "95600001" else [])
+    a1 = await p.fetchval("""INSERT INTO job_applications (post_id, status, via, applied_at, events, cover_letter) VALUES ('95600010', 'interview', 'jarvis', now() - interval '3 days', $1, 'Dengan hormat, …') RETURNING id""",
+                          [{"at": "2026-10-27T01:00:00+00:00", "kind": "terkirim", "text": "Lamaran terkirim lewat Lamar Cepat"}, {"at": "2026-10-29T03:00:00+00:00", "kind": "undangan", "text": "email dari HR Sayur Segar: Undangan Interview User"}])
+    await p.execute("""INSERT INTO job_applications (post_id, status, via, applied_at, events) VALUES ('95600011', 'viewed', 'jarvis', now() - interval '2 days', '[]'), ('95600012', 'applied', 'owner', now() - interval '1 day', '[]')""")
+    iid = await p.fetchval("INSERT INTO inbox_items (source, ext_id, sender, subject, snippet, received_at) VALUES ('outlook', 'X1', 'HR Sayur Segar', 'Undangan Interview User — Head of Product', 'Kami mengundang…', now()) RETURNING id")
+    await p.execute("""INSERT INTO job_replies (application_id, inbox_item_id, body, proposal, send_at, status) VALUES ($1, $2, $3, $4, now() + interval '3 minutes 40 seconds', 'pending')""",
+                    a1, iid, "Yth. Tim HR Sayur Segar,\n\nTerima kasih atas undangannya. Saya bersedia hadir pada Selasa, 3 November pukul 10.00 WIB.\n\nSalam,\nIlham",
+                    {"accept": "2026-11-03T10:00", "slots": [], "summary": "Menerima Selasa 3 Nov 10.00 — kalender kosong", "location": "Kantor Sayur Segar, Kemang", "online": False})
 
 
 async def seed_flow(p):

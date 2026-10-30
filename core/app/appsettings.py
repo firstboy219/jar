@@ -23,7 +23,7 @@ DEFAULTS: dict[str, dict] = {
     "brief": {"enabled": True, "time": "05:45", "topics": [], "speak": False},
     "story": {"child_name": "", "child_age": 5, "themes": ["hewan", "petualangan", "persahabatan"], "length_min": 5, "time": "20:00"},
     "jobs": {"roles": [], "min_salary": 0, "locations": [], "remote_ok": True, "auto_apply": False, "auto_reply_invites": True,
-             "undo_min": 5, "min_match": 80, "cv_doc_id": "", "times": ["07:00", "19:00"]},
+             "undo_min": 5, "min_match": 80, "cv_doc_id": "", "times": ["07:00", "19:00"], "cv_attachment": "", "profile": "", "exclude": [], "max_per_day": 8},
     "music": {"moods": {"fokus": "lofi fokus kerja", "semangat": "lagu semangat pagi", "olahraga": "musik olahraga energik",
                         "santai": "lagu santai akustik", "tidur": "musik tidur tenang"}},
     "home": {"hidden": []},
