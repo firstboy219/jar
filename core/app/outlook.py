@@ -187,6 +187,15 @@ async def create_reply_draft(ext_id: str, body: str) -> str:
     return d["id"]
 
 
+async def add_attachment(draft_id: str, name: str, data: bytes, content_type: str = "") -> None:
+    """A file on a draft (≤ 3 MB: Graph's simple upload)."""
+    if len(data) > 3_000_000:
+        raise OutlookError(f"{name} lebih dari 3 MB — lampirkan dari Outlook")
+    await graph("POST", f"/me/messages/{draft_id}/attachments", {"@odata.type": "#microsoft.graph.fileAttachment", "name": name[:150],
+                                                                  "contentType": content_type or "application/octet-stream",
+                                                                  "contentBytes": base64.b64encode(data).decode()})
+
+
 async def send_draft(draft_id: str) -> None:
     await graph("POST", f"/me/messages/{draft_id}/send")
 

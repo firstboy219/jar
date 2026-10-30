@@ -127,7 +127,7 @@ EXPECTED_DAILY = {"habits.learn", "bisnis.strategy", "bisnis.opportunities", "mo
 async def test_every_recurring_job_is_registered_and_survives_a_pass_without_network(pool, monkeypatch, caplog):
     import logging
     from app import appclock, attention, features  # noqa: F401
-    await pool.execute("TRUNCATE flow_runs, notifications, mail_items RESTART IDENTITY CASCADE")
+    await pool.execute("TRUNCATE flow_runs, notifications, mail_items, biz_sources, job_applications, job_replies, inbox_items RESTART IDENTITY CASCADE")
     attention._seen["mark"] = (None, None)
     assert EXPECTED_EVERY <= set(appclock._every), EXPECTED_EVERY - set(appclock._every)
     assert EXPECTED_DAILY <= set(appclock._daily), EXPECTED_DAILY - set(appclock._daily)

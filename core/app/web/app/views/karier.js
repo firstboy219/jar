@@ -1,7 +1,7 @@
 // Karier JobStreet (mockup 32): postings found on schedule and scored against his CV (what fits, what is missing), applied for by JARVIS within
 // his rules or by his tap, the progress of each application, and replies to interview invitations — sent after an undo window, or as a
 // draft for his Kirim — with the interview in his calendar.
-import { $, get, go, header, html, icon, loading, on, post, put, render, sheet, toast } from '../core.js';
+import { $, get, go, header, html, icon, loading, on, post, put, render, sheet, speak, toast } from '../core.js';
 import { pick, upload } from '../upload.js';
 
 const TABS = [['cocok', 'Cocok'], ['lamaran', 'Lamaran'], ['undangan', 'Undangan'], ['atur', 'Atur']];
@@ -50,10 +50,15 @@ function undangan(d) {
           : (r.proposal?.slots || []).length ? html`<span class="small">Menawarkan: ${r.proposal.slots.map((x) => new Date(x).toLocaleString('id-ID', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })).join(' · ')}</span>` : ''}
         ${['draft', 'failed'].includes(r.status) ? html`<textarea class="inp" id="rb${r.id}" style="min-height:160px">${r.body}</textarea>` : html`<details><summary class="small">Isi balasan</summary><p class="sub" style="white-space:pre-wrap">${r.body}</p></details>`}
         ${r.error ? html`<span class="small t-amber2">${r.error}</span>` : ''}
+        <a class="small" href="#/draf/${r.inbox_item_id}">${icon('mail', 12)} Lihat email undangannya</a>
         <div class="btns">${r.status === 'pending' ? html`<button class="btn danger" data-act="cancel" data-id="${r.id}">Batalkan</button>` : ''}
           ${['draft', 'failed'].includes(r.status) ? html`<button class="btn primary" data-act="send" data-id="${r.id}">${icon('send', 16)} Kirim</button>` : ''}</div></div>`;
     }) : html`<div class="card"><p class="sub">Belum ada undangan. Email undangan dari perusahaan yang kamu lamar dideteksi otomatis dari Perlu perhatian (Outlook/Gmail).</p></div>`}
-    ${iv.length ? html`<span class="sec">Wawancara</span>${iv.map((a) => html`<div class="card"><span class="ttl">${a.company}</span><span class="small">${a.title}${a.interview?.at ? ` · ${new Date(a.interview.at).toLocaleString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : ' · menunggu jadwal'}</span></div>`)}` : ''}`;
+    ${iv.length ? html`<span class="sec">Wawancara</span>${iv.map((a) => html`<div class="card"><span class="ttl">${a.company}</span><span class="small">${a.title}${a.interview?.at ? ` · ${new Date(a.interview.at).toLocaleString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}` : ' · menunggu jadwal'}</span>
+      ${a.interview?.prep ? html`<details><summary class="small" style="cursor:pointer">${icon('book', 12)} Persiapan & latihan</summary>
+        ${(a.interview.prep.pertanyaan || []).map((q) => html`<div style="margin-top:6px"><span style="font-size:14px">${q.tanya}</span><br><span class="small">${q.jawab_singkat}</span></div>`)}
+        ${a.interview.prep.tentang ? html`<span class="small">Tentang: ${a.interview.prep.tentang}</span>` : ''}${(a.interview.prep.bawa || []).length ? html`<span class="small">Bawa: ${a.interview.prep.bawa.join(', ')}</span>` : ''}
+        <button class="btn sm" data-act="practice" data-id="${a.id}">${icon('speaker', 14)} Latihan (dibacakan)</button></details>` : html`<span class="small">Catatan persiapan dibuat malam sebelum wawancara.</span>`}</div>`)}` : ''}`;
 }
 
 function atur(d) {
@@ -104,6 +109,10 @@ export default {
       if ((await sheet(String(html`<span class="ttl">Lamar ${p.title}?</span><p class="sub">JARVIS menulis surat lamaran & jawaban penyaringan, lalu melamar lewat aplikasi JobStreet di HP-mu dengan CV yang tersimpan di sana.</p>
         <div class="btns"><button class="btn" data-close="">Batal</button><button class="btn primary" data-close="y">Lamar</button></div>`))) !== 'y') return;
       await post(`/api/v1/app/jobs/post/${b.dataset.id}/apply`); toast('Menulis surat & membuka JobStreet di HP…'); render();
+    },
+    practice(b) {
+      const a = cur.applications.find((x) => String(x.id) === b.dataset.id);
+      speak((a?.interview?.prep?.pertanyaan || []).map((q, i) => `Pertanyaan ${i + 1}: ${q.tanya}`).join('. '));
     },
     async skip(b) { await post(`/api/v1/app/jobs/post/${b.dataset.id}/skip`); render(); },
     async cancel(b) { await post(`/api/v1/app/jobs/reply/${b.dataset.id}/cancel`); toast('Dibatalkan — tersimpan sebagai draf'); render(); },

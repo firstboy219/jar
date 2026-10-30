@@ -140,6 +140,17 @@ async def app_mission(task_id: int, device: dict = Depends(owner)):
 
 @router.get(API + "/pages")
 async def app_pages(device: dict = Depends(owner)):
+    pages = await _open_pages()
+    hidden = set((await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'pages:hidden'") or {}).get("ids", []))
+    return jsonable({"pages": [p for p in pages if _sig(p) not in hidden], "hidden": len([p for p in pages if _sig(p) in hidden])})
+
+
+def _sig(p: dict) -> str:
+    """A closed page stays closed until what it shows changes (a new video in the same slot comes back)."""
+    return f"{p['id']}|{p['title']}"
+
+
+async def _open_pages() -> list[dict]:
     from . import live, meetings, stage
     pages = []
     if p := stage.desk_player():
@@ -159,7 +170,24 @@ async def app_pages(device: dict = Depends(owner)):
         if s["status"] in ("queued", "running"):
             pages.append({"id": f"task:{s['task_id']}", "kind": "misi", "title": s["title"], "sub": s.get("page_title") or s.get("thought") or "berjalan",
                           "route": f"#/misi/{s['task_id']}", "frame": s["task_id"] if s.get("has_frame") else None})
-    return jsonable({"pages": pages})
+    return pages
+
+
+class PagesHideIn(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=50)
+
+
+@router.post(API + "/pages/hide")
+async def app_pages_hide(body: PagesHideIn, device: dict = Depends(owner)):
+    """Close pages on the Halaman aktif list (the music stops; other pages just leave the list until they change)."""
+    from . import stage
+    if "player" in body.ids and (cur := stage.current()) and cur.get("panel") in ("music", "audio", "video"):
+        await stage.close(cur["id"])
+    keep = (await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'pages:hidden'") or {}).get("ids", [])
+    want = set(body.ids) - {"player"}
+    ids = list(dict.fromkeys([*keep, *[_sig(p) for p in await _open_pages() if p["id"] in want]]))[-200:]
+    await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ('pages:hidden', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", {"ids": ids})
+    return {"hidden": len(ids)}
 
 
 # ---------- location in the background, and the owner's places ----------
@@ -197,7 +225,7 @@ async def app_place_delete(name: str, device: dict = Depends(owner)):
 
 # ---------- settings the screens keep (one JSON per feature) ----------
 
-SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home", "quran", "bisnis", "cinema"}
+SETTING_KEYS = {"ibadah", "alarm", "money", "coffee", "invest", "commute", "brief", "story", "jobs", "music", "home", "quran", "bisnis", "cinema", "inbox"}
 
 
 @router.get(API + "/settings/{key}")

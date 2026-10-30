@@ -1,6 +1,7 @@
 // Rekap hari ini (mockup 15): what the day was, what is still open, and the action plan — already tasks in Catatan, each with its source.
 import { get, header, html, icon, loading, post, render, speak, toast } from '../core.js';
 import { laneChip } from '../ui.js';
+import { rupiah } from '../lib.js';
 
 let cur = null;
 
@@ -21,7 +22,8 @@ export default {
       <div class="scr">
         <p class="lead" style="padding:0 4px">${d.ringkasan || ''}</p>
         <div class="g4"><div class="kpi"><b>${st.meetings ?? 0}</b><span>rapat</span></div><div class="kpi"><b>${st.tasks_done ?? 0}</b><span>misi selesai</span></div>
-          <div class="kpi"><b>${st.plan ?? 0}</b><span>action plan</span></div><div class="kpi"><b>${st.no_ai ?? 0}</b><span>kerja tanpa AI</span></div></div>
+          <div class="kpi"><b>${st.plan ?? 0}</b><span>action plan</span></div><div class="kpi"><b>${st.mail_done ?? 0}</b><span>email beres</span></div></div>
+        <div class="g2"><div class="kpi"><b>${st.no_ai ?? 0}</b><span>kerja JARVIS tanpa AI</span></div><div class="kpi"><b>${st.transport ? rupiah(st.transport, true) : '–'}</b><span>transport hari ini</span></div></div>
         ${(d.selesai || []).length ? html`<div class="card"><span class="k green">Selesai</span>${d.selesai.map((x) => html`<span class="sub">${x}</span>`)}</div>` : ''}
         ${(d.belum || []).length ? html`<div class="card"><span class="k muted">Belum selesai</span>${d.belum.map((x) => html`<span class="sub">${x}</span>`)}</div>` : ''}
         ${todos.length ? html`<div class="card amber"><div class="row sb"><span class="k amber">Action plan · ${todos.length}</span><span class="small t-amber2">sudah di Catatan</span></div>

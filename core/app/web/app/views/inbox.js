@@ -1,6 +1,6 @@
 // Perlu perhatian (mockups 13 & 30): Outlook, Gmail and WhatsApp in one list — what needs the owner, what is just good to know — with the same
 // matter across sources as one card, quick WhatsApp replies, drafts in his style, and errands taken out of messages for the trip home.
-import { $, del, get, go, header, html, icon, loading, on, post, put, render, sheet, toast } from '../core.js';
+import { $, del, get, go, header, html, icon, loading, on, post, put, render, sheet, speak, toast } from '../core.js';
 
 const SRC = { outlook: ['Outlook', 'mail', 'cyan'], gmail: ['Gmail', 'mail', 'violet'], whatsapp: ['WhatsApp', 'chat', 'green'] };
 let state = { source: '', data: null };
@@ -42,7 +42,8 @@ function itemRow(it) {
         ${wa ? html`<button class="chip" data-act="wacustom" data-id="${it.id}">${icon('send', 13)} Balas…</button>`
               : html`<button class="chip cyan" data-go="#/draf/${it.id}">${icon('text', 13)} Draf balasan</button>`}
         <button class="chip" data-act="state" data-id="${it.id}" data-s="done">${icon('check', 13)} Selesai</button>
-        <button class="chip" data-act="state" data-id="${it.id}" data-s="snoozed">${icon('clock', 13)} Nanti</button>
+        <button class="chip" data-act="snooze" data-id="${it.id}">${icon('clock', 13)} Nanti</button>
+        ${it.job_reply ? html`<a class="chip amber" href="#/karier?tab=undangan">${icon('job', 13)} balasan wawancara: ${{ pending: 'menunggu jeda', sent: 'terkirim', draft: 'draf', cancelled: 'batal', failed: 'gagal' }[it.job_reply] || it.job_reply}</a>` : ''}
       </div></div></div>`;
 }
 
@@ -69,11 +70,16 @@ export default {
       <div class="scr">
         ${d.needs.length && !o.pending ? '' : outlookCard(o)}
         ${!d.whatsapp_seen ? html`<div class="card"><span class="small">${icon('chat', 14)} WhatsApp belum terbaca — izinkan JARVIS membaca notifikasi di HP (Kontrol → Izin HP). Pesan OTP &amp; kata sandi tidak pernah dibaca.</span></div>` : ''}
-        <div class="chips">${chip('', 'Semua')}${chip('email', `Email · ${d.sources.outlook + d.sources.gmail}`)}${chip('whatsapp', `WhatsApp · ${d.sources.whatsapp}`)}</div>
+        <div class="chips">${chip('', 'Semua')}${chip('email', `Email · ${d.sources.outlook + d.sources.gmail}`)}${chip('whatsapp', `WhatsApp · ${d.sources.whatsapp}`)}${d.family.length ? chip('keluarga', 'Keluarga') : ''}
+          <button class="chip" data-act="readAll">${icon('speaker', 13)} Bacakan</button></div>
+        ${d.snoozed ? html`<span class="small" style="padding:0 4px">${icon('clock', 12)} ${d.snoozed} ditunda — muncul lagi pada waktunya</span>` : ''}
         ${d.errands.length ? html`<div class="card amber"><span class="k amber">Titipan pulang</span>${d.errands.map((e) => html`<span class="sub">• ${e}</span>`)}<span class="small">Ikut di rencana pulang &amp; Catatan.</span></div>` : ''}
         ${d.needs.length ? d.needs.map((x) => card(x, 'amber')) : html`<div class="card green"><span class="k green">Aman</span><p class="sub">Tidak ada yang butuh kamu sekarang.</p></div>`}
         ${o.connected && c.needs ? html`<button class="btn block" data-act="flag">${icon('alert', 16)} Tandai yang penting di Outlook</button>` : ''}
         ${d.fyi.length ? html`<details class="card"><summary class="ttl" style="cursor:pointer">Cukup tahu · ${d.fyi.length}</summary>${d.fyi.map((x) => card(x, ''))}</details>` : ''}
+        ${d.ignored.length ? html`<details class="card"><summary class="small" style="cursor:pointer">Diabaikan · ${d.counts.ignore} (promo, notifikasi otomatis)</summary>${d.ignored.map((x) => html`<span class="small">• ${x.sender}: ${x.subject}</span>`)}</details>` : ''}
+        <details class="card"><summary class="small" style="cursor:pointer">Keluarga</summary><form id="famf" style="display:flex;flex-direction:column;gap:8px">
+          <label class="field">Nama pengirim keluarga (pisah koma)<input name="family" value="${d.family.join(', ')}" placeholder="Istri, Ibu, Ayah"></label><button class="btn sm" data-act="saveFamily">Simpan</button></form></details>
         ${d.needs.length && !o.pending ? outlookCard(o) : ''}
         <p class="small" style="padding:0 4px">Dipilah tiap 5 menit lewat alur master (Hermes memilih otaknya; isi pesan tidak pernah ke model gratis).${o.connected ? ` Outlook: ${o.account}.` : ''}</p>
         ${o.connected ? html`<button class="btn ghost sm" data-act="disconnect">Putuskan Outlook</button>` : ''}
@@ -93,6 +99,18 @@ export default {
     async disconnect() { if ((await sheet(html`<p>Putuskan Outlook? JARVIS berhenti membaca email &amp; kalender kantormu.</p><div class="btns"><button class="btn" data-close="">Batal</button><button class="btn danger" data-close="y">Putuskan</button></div>`.toString())) !== 'y') return; await del('/api/v1/app/outlook'); render(); },
     async flag() { const r = await post('/api/v1/app/inbox/flag'); toast(`${r.flagged} email ditandai "JARVIS: Penting"`); render(); },
     async state(b) { await post(`/api/v1/app/inbox/item/${b.dataset.id}/${b.dataset.s}`); render(); },
+    async snooze(b) {
+      const v = await sheet(String(html`<span class="ttl">Ingatkan lagi</span><div class="g2">${[['1j', '1 jam lagi'], ['3j', '3 jam lagi'], ['14:00', 'Jam 14.00'], ['17:00', 'Jam 17.00'], ['besok', 'Besok pagi'], ['senin', 'Senin pagi']].map(([k, l]) => html`<button class="btn" data-close="${k}">${l}</button>`)}</div><button class="btn ghost" data-close="">Batal</button>`));
+      if (!v) return;
+      const r = await post(`/api/v1/app/inbox/item/${b.dataset.id}/snooze`, { until: v });
+      toast(`Diingatkan ${new Date(r.until).toLocaleString('id-ID', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`); render();
+    },
+    readAll() {
+      const d = state.data; const n = d.needs;
+      if (!n.length) return speak('Tidak ada pesan yang butuh kamu sekarang.');
+      speak(`${n.length} urusan butuh kamu. ` + n.slice(0, 6).map((c, i) => `${i + 1}. ${c.topic || c.items[0].sender}: ${c.items[0].reason || c.items[0].subject || c.items[0].snippet}`).join('. '));
+    },
+    async saveFamily(b, e) { e?.preventDefault(); await put('/api/v1/app/settings/inbox', { family: new FormData($('#famf')).get('family').split(',').map((x) => x.trim()).filter(Boolean) }); toast('Tersimpan'); render(); },
     async wa(b) { const r = await post(`/api/v1/app/inbox/item/${b.dataset.id}/reply`, { text: b.dataset.text }); toast(`Terkirim ke ${r.to || 'WhatsApp'}`); render(); },
     async wacustom(b) {
       const v = await sheet(String(html`<form><label class="field">Balasan WhatsApp<textarea name="text" required maxlength="2000"></textarea></label>

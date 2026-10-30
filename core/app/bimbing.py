@@ -104,6 +104,21 @@ async def api_step(gid: int, body: StepIn, device: dict = Depends(owner)):
         raise HTTPException(409, str(e))
 
 
+@router.post(API + "/{gid}/repeat")
+async def api_repeat(gid: int, device: dict = Depends(owner)):
+    """Say the last step again (the phone shows and speaks it)."""
+    steps = await db.pool().fetchval("SELECT steps FROM guide_sessions WHERE id = $1", gid) or []
+    if not steps:
+        raise HTTPException(409, "belum ada langkah")
+    s = steps[-1]
+
+    async def say():
+        await hub.broadcast({"type": "guide", "id": gid, "mode": "step", **{k: s.get(k) for k in ("instruksi", "target", "posisi", "status", "n")}})
+        return s
+    await master.run(master.Job("bimbing", "ulangi", "ulangi langkah bimbingan", skill=say))
+    return s
+
+
 @router.post(API + "/{gid}/stop")
 async def api_stop(gid: int, device: dict = Depends(owner)):
     await stop(gid)

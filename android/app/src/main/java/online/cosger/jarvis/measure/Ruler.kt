@@ -14,6 +14,20 @@ object Ruler {
     /** Metres between consecutive points. */
     fun segments(points: List<P>): List<Float> = points.zipWithNext { a, b -> distance(a, b) }
 
+    /** Area of the polygon the points outline (3+ points, any plane), m². */
+    fun area(points: List<P>): Float {
+        if (points.size < 3) return 0f
+        var cx = 0f; var cy = 0f; var cz = 0f
+        for (i in points.indices) {
+            val a = points[i]; val b = points[(i + 1) % points.size]
+            cx += a.y * b.z - a.z * b.y; cy += a.z * b.x - a.x * b.z; cz += a.x * b.y - a.y * b.x
+        }
+        return 0.5f * sqrt(cx * cx + cy * cy + cz * cz)
+    }
+
+    /** The vertical extent of the points (ARCore's y is up), m. */
+    fun height(points: List<P>): Float = if (points.size < 2) 0f else points.maxOf { it.y } - points.minOf { it.y }
+
     /** "1,42 m" / "86 cm". */
     fun label(m: Float): String = if (m < 1f) "${Math.round(m * 100)} cm" else String.format(java.util.Locale("id", "ID"), "%.2f m", m)
 

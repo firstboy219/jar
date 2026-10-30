@@ -398,6 +398,59 @@ async def watch_mail() -> dict:
     return {"checked": len(rows), "matched": found}
 
 
+VIEWED = re.compile(r"\b(dilihat|telah melihat|viewed|membuka lamaran|lamaranmu dilihat)\b", re.I)
+
+
+async def watch_phone() -> int:
+    """JobStreet's own notifications on his phone: 'lamaranmu dilihat oleh …' → the application is viewed."""
+    seen = (await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'jobs:last_notif'") or {}).get("id", 0)
+    rows = await db.pool().fetch("SELECT id, title, text FROM notifications WHERE package = 'com.jobstreet.jobstreet' AND id > $1 AND NOT sensitive ORDER BY id", seen)
+    apps = [dict(r) for r in await db.pool().fetch(
+        "SELECT a.id, a.status, p.company, p.title FROM job_applications a JOIN job_posts p ON p.id = a.post_id WHERE a.status = 'applied'")]
+    n = 0
+    for r in rows:
+        text = f"{r['title']} {r['text']}"
+        a = next((x for x in apps if company_match(x["company"], text) or (x["title"].lower() in text.lower())), None)
+        if a and VIEWED.search(text):
+            await _event(a["id"], "dilihat", text[:200], "viewed")
+            a["status"] = "viewed"
+            n += 1
+    if rows:
+        await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ('jobs:last_notif', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", {"id": rows[-1]["id"]})
+    return n
+
+
+async def prep_interviews(day: date | None = None) -> list[int]:
+    """The evening before an interview: what they will probably ask, about the company, what to bring — written for him, and a reminder."""
+    day = day or (datetime.now(WIB) + timedelta(days=1)).date()
+    rows = [dict(r) for r in await db.pool().fetch(
+        """SELECT a.id, a.interview, a.cover_letter, p.title, p.company, p.description FROM job_applications a JOIN job_posts p ON p.id = a.post_id
+           WHERE a.status = 'interview' AND a.interview ? 'at' AND NOT (a.interview ? 'prep')""")]
+    done = []
+    profile = None
+    for a in rows:
+        at = datetime.fromisoformat(a["interview"]["at"])
+        if at.astimezone(WIB).date() != day:
+            continue
+        profile = profile if profile is not None else await cv_profile()
+        msgs = [{"role": "system", "content": ("Siapkan pemilik untuk wawancara kerja besok. JSON: {\"pertanyaan\": [{\"tanya\": \"…\", \"jawab_singkat\": \"poin jawaban dari profilnya\"}] (6–8), "
+                                               "\"tentang\": \"yang perlu diketahui tentang perusahaan/posisi dari lowongan\", \"bawa\": [\"…\"], \"tanya_balik\": [\"pertanyaan untuk pewawancara\"]}")},
+                {"role": "user", "content": f"Posisi: {a['title']} di {a['company']}\nLowongan: {(a['description'] or '')[:3000]}\nProfil: {json.dumps(profile, ensure_ascii=False)[:2000]}\nSurat lamaran: {a['cover_letter'][:1000]}"}]
+        r = await master.run(master.Job("karier", "persiapan", f"persiapan wawancara {a['company']}", trigger="schedule", messages=msgs, json_out=True, no_free=True, max_tokens=1500))
+        if r["status"] != "done" or not isinstance(r["result"], dict):
+            continue
+        await db.pool().execute("UPDATE job_applications SET interview = interview || $2::jsonb WHERE id = $1", a["id"], {"prep": r["result"]})
+        await hub.broadcast({"type": "notify", "title": f"Besok wawancara {a['company']} {at.astimezone(WIB):%H.%M}", "text": "Catatan persiapan sudah siap — ketuk untuk latihan.",
+                             "kind": "info", "route": "#/karier?tab=undangan"})
+        done.append(a["id"])
+    return done
+
+
+@appclock.daily(lambda: "19:30", "jobs.prep")
+async def _prep() -> None:
+    await prep_interviews()
+
+
 async def plan_reply(m: dict, app: dict) -> dict | None:
     s = await appsettings.get("jobs")
     now = datetime.now(WIB)
@@ -482,7 +535,9 @@ async def _replies_tick() -> list[int] | None:
 async def _mail_tick() -> dict | None:
     if not await db.pool().fetchval("SELECT 1 FROM job_applications WHERE status IN ('applied', 'viewed', 'interview') LIMIT 1"):
         return None
-    r = await master.run(master.Job("karier", "cek-email", "cocokkan email dengan lamaran kerja", trigger="schedule", skill=watch_mail))
+    async def both():
+        return {**(await watch_mail()), "viewed": await watch_phone()}
+    r = await master.run(master.Job("karier", "cek-email", "cocokkan email & notifikasi JobStreet dengan lamaran kerja", trigger="schedule", skill=both))
     return r.get("result")
 
 

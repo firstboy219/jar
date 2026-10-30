@@ -116,8 +116,10 @@ def _client() -> httpx.AsyncClient:   # seam for tests
     return httpx.AsyncClient(timeout=20, headers={"User-Agent": "Mozilla/5.0 (JARVIS)"}, follow_redirects=True)
 
 
-async def _city() -> str:
+async def _city(where: str = "") -> str:
     s = await appsettings.get("cinema")
+    if where == "kantor" and s["office_city"]:
+        return city_slug(s["office_city"])
     if s["city"]:
         return city_slug(s["city"])
     from . import ibadah
@@ -154,10 +156,10 @@ async def read_today(city: str, picks: list[str], limit: int) -> dict:
     return {"city": city, "cinemas": out, "all": all_, "date": "", "source": "jadwalnonton.com"}
 
 
-async def today(force: bool = False, trigger: str = "owner") -> dict:
+async def today(force: bool = False, trigger: str = "owner", where: str = "") -> dict:
     s = await appsettings.get("cinema")
-    city = await _city()
-    key = f"{city}:{datetime.now(WIB).date()}"
+    city = await _city(where)
+    key = f"{city}{'@kantor' if where == 'kantor' else ''}:{datetime.now(WIB).date()}"
     row = await db.pool().fetchrow("SELECT data, fetched_at FROM cinema_cache WHERE key = $1", key)
     if row and not force and (datetime.now(WIB) - row["fetched_at"]).total_seconds() < CACHE_MIN * 60:
         data = row["data"]
@@ -165,8 +167,9 @@ async def today(force: bool = False, trigger: str = "owner") -> dict:
         instruction = (f"Buka jadwalnonton.com (atau situs 21cineplex/CGV/Cinépolis) dan baca jadwal film HARI INI di bioskop di {city}. Jawab HANYA JSON: "
                        "{\"cinemas\": [{\"name\": \"\", \"films\": [{\"title\": \"\", \"rating\": \"\", \"genre\": \"\", \"minutes\": 0, \"shows\": "
                        "[{\"type\": \"Reguler 2D\", \"price\": 40000, \"times\": [\"19:05\"]}]}]}]}")
+        picks = s["cinemas"] if where != "kantor" else s["office_cinemas"]
         r = await master.run(master.Job("bioskop", "jadwal", f"jadwal film bioskop hari ini di {city}", trigger=trigger,
-                                        skill=lambda: read_today(city, s["cinemas"], int(s["max"])), tools=True, instruction=instruction,
+                                        skill=lambda: read_today(city, picks, int(s["max"])), tools=True, instruction=instruction,
                                         title=f"Jadwal bioskop {city}", on_done="bioskop:_hermes_done", data={"key": key, "city": city}))
         if r["status"] == "waiting":
             return {"city": city, "waiting": True, "task_id": r.get("task_id"), "films": []}
@@ -177,7 +180,7 @@ async def today(force: bool = False, trigger: str = "owner") -> dict:
     now_hm = datetime.now(WIB).strftime("%H:%M")
     return {"city": data["city"], "date": data.get("date", ""), "source": data.get("source", ""), "films": by_film(data["cinemas"], now_hm), "presale": presale(data["cinemas"]),
             "cinemas": [{"slug": c.get("slug", ""), "name": c["name"], "chain": c.get("chain", ""), "films": len(c.get("films") or [])} for c in data["cinemas"]],
-            "all": data.get("all", []), "picks": s["cinemas"]}
+            "all": data.get("all", []), "picks": s["cinemas"] if where != "kantor" else s["office_cinemas"], "where": where or "rumah", "office_city": s["office_city"]}
 
 
 async def _hermes_done(run_id: int, result: dict) -> None:
@@ -208,18 +211,22 @@ async def _home(m: home.Moment) -> list[dict]:
 class PicksIn(BaseModel):
     city: str = Field(default="", max_length=60)
     cinemas: list[str] = Field(default_factory=list, max_length=12)
+    where: str = Field(default="rumah", pattern="^(rumah|kantor)$")
 
 
 @router.get(API)
-async def api_today(refresh: bool = False, device: dict = Depends(owner)):
+async def api_today(refresh: bool = False, where: str = "", device: dict = Depends(owner)):
     try:
-        return await today(refresh, "owner")
+        return await today(refresh, "owner", where if where in ("rumah", "kantor") else "")
     except (CinemaError, httpx.HTTPError) as e:
         raise HTTPException(502, str(e) or "jadwal tidak terbaca")
 
 
 @router.put(API + "/picks")
 async def api_picks(body: PicksIn, device: dict = Depends(owner)):
-    await appsettings.put("cinema", {"city": body.city, "cinemas": [c[:80] for c in body.cinemas]}, "owner")
+    if body.where == "kantor":
+        await appsettings.put("cinema", {"office_city": body.city, "office_cinemas": [c[:80] for c in body.cinemas]}, "owner")
+    else:
+        await appsettings.put("cinema", {"city": body.city, "cinemas": [c[:80] for c in body.cinemas]}, "owner")
     await db.pool().execute("DELETE FROM cinema_cache WHERE key LIKE $1", f"%:{datetime.now(WIB).date()}")
     return await appsettings.get("cinema")

@@ -105,6 +105,11 @@ class PlayIn(BaseModel):
 class PlaylistIn(BaseModel):
     name: str | None = Field(default=None, max_length=80)
     index: int = Field(default=0, ge=0, le=500)
+    shuffle: bool = False
+
+
+class SaveIn(BaseModel):
+    name: str | None = Field(default=None, max_length=80)
 
 
 @router.get(API)
@@ -123,7 +128,12 @@ async def api_play(body: PlayIn, device: dict = Depends(owner)):
 @router.post(API + "/playlist")
 async def api_playlist(body: PlaylistIn, device: dict = Depends(owner)):
     async def run():
-        r = await playlists.play(body.name, body.index)
+        index = body.index
+        if body.shuffle:
+            import random
+            songs = await playlists.items(body.name)
+            index = random.randrange(len(songs)) if songs else 0
+        r = await playlists.play(body.name, index)
         if "error" in r:
             raise RuntimeError(r["error"])
         return r
@@ -131,6 +141,21 @@ async def api_playlist(body: PlaylistIn, device: dict = Depends(owner)):
     if r["status"] != "done":
         raise HTTPException(409, r.get("error") or "playlist tidak bisa diputar")
     return r["result"]
+
+
+@router.post(API + "/save")
+async def api_save(body: SaveIn, device: dict = Depends(owner)):
+    """What is playing now → a playlist (his main one unless he names another)."""
+    now = stage.desk_player()
+    if not now or not now.get("title"):
+        raise HTTPException(409, "tidak ada lagu yang sedang diputar")
+    async def keep():
+        return await playlists.add([{"title": now["title"], "artist": now.get("artist") or ""}], body.name, "simpan", "owner")
+    r = await master.run(master.Job("musik", "simpan", f"simpan {now['title']} ke playlist", skill=keep))
+    if r["status"] != "done":
+        raise HTTPException(409, r.get("error") or "lagu tidak bisa disimpan")
+    res = r["result"]
+    return {"saved": now["title"], **({"playlist": res.get("playlist")} if isinstance(res, dict) else {})}
 
 
 @router.post(API + "/{action}")

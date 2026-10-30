@@ -28,7 +28,7 @@ function source(t) {
 function taskRow(t) {
   const late = t.due && !t.checked && new Date(`${t.due}T23:59:59`) < new Date();
   return html`<div class="li"><button class="switch ${t.checked ? 'on' : ''}" style="width:24px;height:24px;border-radius:7px;padding:0;align-items:center;justify-content:center;${t.checked ? '' : `background:transparent;border:1.5px solid var(--${late ? 'red' : t.priority === 3 ? 'amber' : 'mu'})`}" data-act="tick" data-page="${t.page_id}" data-id="${t.id}" data-on="${t.checked ? 1 : 0}" aria-label="Selesai">${t.checked ? icon('check', 14, 'var(--bg)') : ''}</button>
-    <div class="grow"><div class="ttl" style="font-weight:500;${t.checked ? 'text-decoration:line-through;color:var(--mu)' : ''}">${t.text}</div><div class="row wrap" style="gap:6px;margin-top:4px">${source(t)}${t.who ? html`<span class="tag">${t.who}</span>` : ''}</div></div>
+    <div class="grow"><div class="ttl" style="font-weight:500;${t.checked ? 'text-decoration:line-through;color:var(--mu)' : ''}">${t.text}</div><div class="row wrap" style="gap:6px;margin-top:4px">${source(t)}${t.who ? html`<span class="tag">${t.who}</span>` : ''}${t.link ? html`<a class="tag cyan" href="${t.link}">${t.link.startsWith('#/draf') ? '✉ buat draf / buka email' : '↗ buka sumber'}</a>` : ''}</div></div>
     <span class="mono" style="font-size:11px;color:var(--${late ? 'red-t' : 'amber-t'})">${due(t.due)}</span></div>`;
 }
 

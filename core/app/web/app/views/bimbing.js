@@ -1,6 +1,6 @@
 // Bimbing layar (mockup 8): tell JARVIS what you want to do in an app; the phone shares its screen and JARVIS says the one next step each time
 // the screen changes (a floating bubble on the phone, spoken too) until it is done. Here: start, follow the steps, stop, see past sessions.
-import { $, embedded, get, header, html, icon, loading, on, openNative, post, render, toast } from '../core.js';
+import { $, embedded, get, header, html, icon, loading, on, openNative, post, render, speak, toast } from '../core.js';
 import { laneChip } from '../ui.js';
 
 export default {
@@ -16,7 +16,7 @@ export default {
             ${(a.steps || []).length ? html`<div class="steps">${a.steps.map((s, i) => html`<div class="step"><div class="rail"><span class="n ${i < a.steps.length - 1 ? 'done' : 'now'}">${i < a.steps.length - 1 ? icon('check', 13) : s.n}</span>${i < a.steps.length - 1 ? html`<span class="ln"></span>` : ''}</div>
               <div class="body"><span style="font-size:14px;${i === a.steps.length - 1 ? 'font-weight:600' : ''}">${s.instruksi}</span>${s.target ? html`<span class="small">"${s.target}" · ${s.posisi}</span>` : ''}</div></div>`)}</div>`
               : html`<span class="small">${embedded ? 'Bagikan layar dari gelembung JARVIS, lalu buka aplikasinya.' : 'Buka aplikasi JARVIS di HP: layar dibagikan dari sana.'}</span>`}
-            <div class="btns">${embedded ? html`<button class="btn" data-act="share">${icon('screen', 16)} Bagikan layar</button>` : ''}<button class="btn danger" data-act="stop" data-id="${a.id}">Selesai</button></div></div>`
+            <div class="btns">${embedded ? html`<button class="btn" data-act="share">${icon('screen', 16)} Bagikan layar</button>` : ''}${(a.steps || []).length ? html`<button class="btn" data-act="repeat" data-id="${a.id}">${icon('repeat', 16)} Ulangi</button>` : ''}<button class="btn danger" data-act="stop" data-id="${a.id}">Selesai</button></div></div>`
           : html`<form class="card" id="gf"><span class="k">Mau dibimbing apa?</span><label class="field">Tujuan<input name="goal" required minlength="4" placeholder="mis. cara mengaktifkan notifikasi tagihan di BCA mobile"></label>
             <button class="btn primary lg" data-act="start">${icon('screen', 18)} Mulai bimbing</button>
             <span class="small">JARVIS hanya membimbing — kamu yang mengetuk. PIN/OTP tidak pernah dibaca.</span></form>`}
@@ -34,6 +34,7 @@ export default {
       render();
     },
     share() { openNative('guide'); },
+    async repeat(b) { const s = await post(`/api/v1/app/guide/${b.dataset.id}/repeat`); speak(s.instruksi); },
     async stop(b) { await post(`/api/v1/app/guide/${b.dataset.id}/stop`); render(); },
   },
 };

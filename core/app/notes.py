@@ -51,6 +51,8 @@ def clean_block(b: dict) -> dict | None:
             out["priority"] = b["priority"]
         if b.get("who"):
             out["who"] = str(b["who"])[:60]
+        if isinstance(b.get("link"), str) and b["link"].startswith("#/"):
+            out["link"] = b["link"][:200]   # where the task came from (an email's draft, a meeting): opened from the task (ADR-087)
     if t == "code" and b.get("lang"):
         out["lang"] = str(b["lang"])[:20]
     if t == "callout" and b.get("emoji"):
@@ -197,7 +199,7 @@ async def tasks(view: str = "all", today: date | None = None) -> list[dict]:
         b = json.loads(r["block"]) if isinstance(r["block"], str) else r["block"]
         t = {"page_id": str(r["page_id"]), "page_title": r["page_title"], "page_icon": r["page_icon"], "page_kind": r["page_kind"],
              "id": b["id"], "text": b.get("text", ""), "checked": bool(b.get("checked")), "due": b.get("due"),
-             "priority": b.get("priority"), "who": b.get("who")}
+             "priority": b.get("priority"), "who": b.get("who"), "link": b.get("link")}
         if in_view(t, view, today):
             out.append(t)
     out.sort(key=sort_key)
@@ -238,9 +240,9 @@ def parse_due(text: str, today: date | None = None) -> tuple[str, str | None]:
     return text[:m.start()].strip(" ,"), (today + timedelta(days=days)).isoformat()
 
 
-async def add_task(text: str, due: str | None = None, priority: int | None = None, actor: str = "owner") -> dict:
+async def add_task(text: str, due: str | None = None, priority: int | None = None, actor: str = "owner", link: str | None = None) -> dict:
     page = await ensure_special("tasks")
-    block = clean_block({"type": "todo", "text": text, "due": due, "priority": priority})
+    block = clean_block({"type": "todo", "text": text, "due": due, "priority": priority, "link": link})
     saved = await save(str(page["id"]), page["title"], page["icon"], page["blocks"] + [block], page["version"], actor)
     return {"page_id": str(saved["id"]), "task": block}
 

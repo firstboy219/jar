@@ -131,6 +131,7 @@ async def seed_media(p):
                      "Krek-krek… terdengar suara dari semak. Ternyata itu Kunang, si kunang-kunang yang tersesat dan menangis karena tidak bisa pulang.",
                      "Cilo tersenyum. “Ayo, aku antar pulang,” katanya lembut. Mereka berjalan pelan menyusuri sungai sampai tiba di pohon besar tempat keluarga Kunang tinggal."]})
     await p.execute("""INSERT INTO measures (label, kind, data) VALUES ('Lebar meja kerja', 'ar', '{"segmen": [1.42, 0.68], "total": 2.1, "unit": "m"}'),
+        ('Dinding ruang tamu', 'ar', '{"segmen": [4.2], "total": 4.2, "tinggi": 2.9, "luas": 12.2, "unit": "m"}'),
         ('Depan rumah tetangga', 'foto', '{"objek": "rumah 2 lantai", "ukuran": {"lebar": {"perkiraan": 8.5, "min": 7.5, "max": 9.5}, "tinggi": {"perkiraan": 6.8, "min": 6.0, "max": 7.5}}, "acuan": ["pintu", "motor di carport"], "yakin": "sedang", "catatan": "Dua lantai ≈ 3 m per lantai + atap."}')""")
     await p.execute("INSERT INTO guide_sessions (goal, status, steps) VALUES ('aktifkan notifikasi tagihan di BCA mobile', 'active', $1)", [
         {"n": 1, "instruksi": "Ketuk ikon profil di kanan atas", "target": "Akun", "posisi": "kanan atas", "status": "lanjut", "lane": "ringan"},

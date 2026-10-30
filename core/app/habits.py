@@ -39,6 +39,7 @@ BUILTIN = [
      "action": "recap.compose", "mode": "auto"},
     {"key": "malam.recap", "title": "Rekap hari ini (kalau belum sampai rumah)", "trigger": {"type": "time", "at": "21:00", "days": [0, 1, 2, 3, 4, 5, 6]},
      "action": "recap.compose", "mode": "auto"},
+    {"key": "rapat.rekam", "title": "Rapat di kalender: tawarkan rekam", "trigger": {"type": "calendar", "before": 5, "place": "kantor"}, "action": "meeting.offer", "mode": "auto"},   # the action itself only offers
     {"key": "malam.dongeng", "title": "Dongeng untuk si kecil", "trigger": {"type": "time", "at": "20:00", "days": [0, 1, 2, 3, 4, 5, 6], "place": "rumah"},
      "action": "story.offer", "mode": "ask"},
 ]
@@ -66,6 +67,14 @@ def time_due(trigger: dict, now: datetime, last_fired: datetime | None) -> bool:
     if not 0 <= m - t <= WINDOW_MIN:
         return False
     return not (last_fired and last_fired.astimezone(WIB).date() == now.date())
+
+
+def calendar_due(trigger: dict, event_start: datetime, event_id: int, now: datetime, fired_for: int | None) -> bool:
+    """A calendar habit: an event starts within `before` minutes (and has not been offered yet). Pure."""
+    if trigger.get("type") != "calendar" or fired_for == event_id:
+        return False
+    mins = (event_start - now).total_seconds() / 60
+    return -2 <= mins <= int(trigger.get("before") or 5)
 
 
 def place_due(trigger: dict, kind: str, place: str, now: datetime, last_fired: datetime | None) -> bool:
@@ -155,7 +164,7 @@ async def fire(h: dict, why: str, at: datetime | None = None) -> dict:
 
 
 ROUTES = {"commute.plan_out": "#/berangkat", "commute.plan_back": "#/pulang", "inbox.triage": "#/inbox", "coffee.offer": "#/kopi",
-          "recap.compose": "#/rekap", "story.offer": "#/dongeng", "music.mood": "#/musik"}
+          "recap.compose": "#/rekap", "story.offer": "#/dongeng", "music.mood": "#/musik", "meeting.offer": "#/rapat"}
 
 
 def offer_route(action_name: str) -> str:
@@ -197,7 +206,39 @@ async def tick(now: datetime | None = None) -> list[str]:
                                         skill=lambda h=h, t=t: fire(h, f"jam {t['at']}", now)))
         fired.append(h["key"])
         log.info("habit %s fired: %s", h["key"], r.get("result"))
+    fired += await _calendar(now, here)
     return fired
+
+
+async def _calendar(now: datetime, here: str | None) -> list[str]:
+    """Calendar habits: an event about to start (the record-the-meeting offer)."""
+    hs = [h for h in await listing() if h["status"] == "active" and h["mode"] != "off" and (h["trigger"] or {}).get("type") == "calendar"]
+    if not hs:
+        return []
+    ev = await db.pool().fetchrow("SELECT id, title, start_at FROM calendar_events WHERE start_at BETWEEN $1::timestamptz - interval '2 minutes' AND $1::timestamptz + interval '30 minutes' ORDER BY start_at LIMIT 1", now)
+    if not ev:
+        return []
+    out = []
+    for h in hs:
+        t = h["trigger"]
+        last = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", f"habit:cal:{h['key']}") or {}
+        if t.get("place") and here and here != t["place"]:
+            continue
+        if not calendar_due(t, ev["start_at"], ev["id"], now, last.get("event")):
+            continue
+        await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", f"habit:cal:{h['key']}", {"event": ev["id"]})
+        await master.run(master.Job("kebiasaan", h["action"], f"kebiasaan: {h['title']}", trigger="habit",
+                                    skill=lambda h=h, ev=ev: fire({**h, "title": f"{ev['title']} mulai {ev['start_at'].astimezone(WIB):%H.%M} — rekam?"}, f"kalender {ev['title']}", now)))
+        out.append(h["key"])
+    return out
+
+
+@action("meeting.offer", "Tawarkan rekam rapat")
+async def _meeting_offer(h: dict) -> dict:
+    from . import meetings
+    meetings.want_to_record(title=h.get("title", "").split(" mulai ")[0])
+    await hub.broadcast({"type": "notify", "title": h.get("title") or "Rapat mulai", "text": "Ketuk untuk mulai merekam (semua peserta setuju).", "kind": "info", "route": "#/rapat"})
+    return {"offered": True}
 
 
 async def on_event(ev: dict) -> None:

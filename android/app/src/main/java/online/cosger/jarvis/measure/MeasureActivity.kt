@@ -179,7 +179,9 @@ class MeasureActivity : Activity(), GLSurfaceView.Renderer {
                 pts.isEmpty() -> "Ketuk titik awal di layar"
                 else -> "Ketuk titik berikutnya (bisa beberapa sisi)"
             }
-            total.text = if (segs.isEmpty()) "" else "Total ${Ruler.label(segs.sum())}" + if (segs.size > 1) "  (${segs.joinToString(" + ") { Ruler.label(it) }})" else ""
+            val area = Ruler.area(pts)
+            total.text = if (segs.isEmpty()) "" else "Total ${Ruler.label(segs.sum())}" + (if (segs.size > 1) "  (${segs.joinToString(" + ") { Ruler.label(it) }})" else "") +
+                (if (area > 0.01f) "\nLuas ${String.format(java.util.Locale("id", "ID"), "%.2f", area)} m²" else "")
         }
     }
 
@@ -187,7 +189,10 @@ class MeasureActivity : Activity(), GLSurfaceView.Renderer {
     private fun clear() = synchronized(anchors) { anchors.forEach { it.detach() }; anchors.clear() }
 
     private fun save() {
-        val segs = synchronized(anchors) { Ruler.segments(anchors.map { val p = it.pose; Ruler.P(p.tx(), p.ty(), p.tz()) }) }
+        val pts = synchronized(anchors) { anchors.map { val p = it.pose; Ruler.P(p.tx(), p.ty(), p.tz()) } }
+        val segs = Ruler.segments(pts)
+        val area = Ruler.area(pts)
+        val height = Ruler.height(pts)
         if (segs.isEmpty()) { Toast.makeText(this, "Ketuk minimal dua titik", Toast.LENGTH_SHORT).show(); return }
         val name = EditText(this).apply { hint = "mis. lebar meja" }
         AlertDialog.Builder(this).setTitle("Simpan ukuran ${Ruler.label(segs.sum())}").setView(name)
@@ -197,6 +202,8 @@ class MeasureActivity : Activity(), GLSurfaceView.Renderer {
                         (application as JarvisApp).engine.console.post("/api/v1/app/measure/ar", buildJsonObject {
                             put("label", name.text.toString().ifBlank { "Ukuran AR" }.take(80))
                             put("segments", JsonArray(segs.map { JsonPrimitive(Math.round(it * 1000) / 1000.0) }))
+                            if (area > 0.01f) put("area_m2", Math.round(area * 100) / 100.0)
+                            if (height > 0.05f) put("height_m", Math.round(height * 100) / 100.0)
                         })
                     }.onSuccess { Toast.makeText(this@MeasureActivity, "Tersimpan di Kamera ukur", Toast.LENGTH_SHORT).show() }
                         .onFailure { Toast.makeText(this@MeasureActivity, "Gagal menyimpan: ${it.message}", Toast.LENGTH_LONG).show() }

@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import appclock, approvals, brief, db, habits, home, hub, master, notes, outlook, recap, setup_status
+from . import appclock, approvals, attachments, brief, db, habits, home, hub, master, notes, outlook, recap, setup_status
 from .appauth import actor, owner
 from .location import WIB
 
@@ -193,7 +193,8 @@ async def _take_task(v: dict) -> None:
             items.append(v["task"])
         await db.pool().execute("""INSERT INTO settings_kv (key, value) VALUES ('commute:errands', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
                                 {"day": today, "items": items[-10:]})
-    await notes.add_task(f"{v['task']} — dari {src}", date.today().isoformat() if is_errand(v["task"]) else None, None, "jarvis-inbox")
+    await notes.add_task(f"{v['task']} — dari {src}", date.today().isoformat() if is_errand(v["task"]) else None, None, "jarvis-inbox",
+                         f"#/draf/{v['id']}" if it["source"] != "whatsapp" else "#/inbox?src=whatsapp")
     await db.pool().execute("UPDATE inbox_items SET data = data || '{\"task_added\": true}'::jsonb WHERE id = $1", v["id"])
 
 
@@ -241,6 +242,45 @@ async def _habit(h: dict) -> dict:
     return r
 
 
+# ---------- snoozing: a message comes back at its time ----------
+
+def snooze_until(preset: str, now: datetime) -> datetime:
+    """'1j' / '3j' / '14:00' / 'besok' (08.00) / 'senin' (08.00) → when it comes back. Pure."""
+    p = (preset or "").strip().lower()
+    if m := re.fullmatch(r"(\d{1,2})j", p):
+        return now + timedelta(hours=int(m.group(1)))
+    if m := re.fullmatch(r"(\d{1,2})[:.](\d{2})", p):
+        t = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        return t if t > now else t + timedelta(days=1)
+    if p == "besok":
+        return (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
+    if p == "senin":
+        return (now + timedelta(days=(7 - now.weekday()) % 7 or 7)).replace(hour=8, minute=0, second=0, microsecond=0)
+    raise ValueError("kapan diingatkan?")
+
+
+async def snooze(item_id: int, preset: str) -> dict:
+    until = snooze_until(preset, datetime.now(WIB))
+    await db.pool().execute("UPDATE inbox_items SET status = 'snoozed', snoozed_until = $2 WHERE id = $1", item_id, until)
+    return {"until": until.isoformat()}
+
+
+async def wake_snoozed() -> list[int]:
+    rows = await db.pool().fetch("UPDATE inbox_items SET status = 'open', snoozed_until = NULL WHERE status = 'snoozed' AND snoozed_until <= now() "
+                                 "RETURNING id, sender, subject, snippet")
+    for r in rows:
+        await hub.broadcast({"type": "notify", "title": f"Pengingat: {r['sender']}", "text": (r["subject"] or r["snippet"] or "")[:160], "kind": "info", "route": f"#/inbox"})
+    return [r["id"] for r in rows]
+
+
+@appclock.every(60, "inbox.snooze")
+async def _snooze_tick() -> list[int] | None:
+    if not await db.pool().fetchval("SELECT 1 FROM inbox_items WHERE status = 'snoozed' AND snoozed_until <= now() LIMIT 1"):
+        return None
+    r = await master.run(master.Job("inbox", "ingatkan", "buka lagi pesan yang ditunda", trigger="schedule", skill=wake_snoozed))
+    return r.get("result")
+
+
 # ---------- reading for the screens ----------
 
 async def listing(source: str | None = None, days: int = 3) -> dict:
@@ -254,9 +294,20 @@ async def listing(source: str | None = None, days: int = 3) -> dict:
     rows = [dict(r) for r in await db.pool().fetch(q + " ORDER BY received_at DESC NULLS LAST LIMIT 400", *args)]
     counts = {k: sum(1 for r in rows if r["triage"] == k) for k in ("needs", "fyi", "ignore", "new")}
     by_src = {k: sum(1 for r in rows if r["source"] == k) for k in ("outlook", "gmail", "whatsapp")}
+    from . import appsettings
+    fam = [f.lower() for f in (await appsettings.get("inbox"))["family"] if f.strip()]
+    if source == "keluarga":
+        rows = [r for r in rows if any(f in (r["sender"] or "").lower() for f in fam)]
+        counts = {k: sum(1 for r in rows if r["triage"] == k) for k in ("needs", "fyi", "ignore", "new")}
+    jobs = {r["inbox_item_id"]: r["status"] for r in await db.pool().fetch("SELECT inbox_item_id, status FROM job_replies")}
+    for r in rows:
+        if r["id"] in jobs:
+            r["job_reply"] = jobs[r["id"]]   # an interview invitation JARVIS answers (Karier)
     needs = group([r for r in rows if r["triage"] in ("needs", "new")])
     fyi = group([r for r in rows if r["triage"] == "fyi"])
-    return {"needs": needs, "fyi": fyi[:30], "counts": counts, "sources": by_src, "outlook": await outlook.status(),
+    ignored = [{"id": r["id"], "sender": r["sender"], "subject": r["subject"] or r["snippet"][:80], "source": r["source"]} for r in rows if r["triage"] == "ignore"][:40]
+    snoozed = await db.pool().fetchval("SELECT count(*) FROM inbox_items WHERE status = 'snoozed'")
+    return {"needs": needs, "fyi": fyi[:30], "ignored": ignored, "snoozed": snoozed, "family": fam, "counts": counts, "sources": by_src, "outlook": await outlook.status(),
             "whatsapp_seen": bool(await db.pool().fetchval("SELECT 1 FROM notifications WHERE package = ANY($1) AND posted_at > now() - interval '7 days' LIMIT 1", list(WA))),
             "errands": await _errands()}
 
@@ -301,16 +352,23 @@ async def draft(item_id: int, style: str = "kamu", instruction: str = "") -> dic
     r = await master.run(master.Job("inbox", "draf", f"tulis draf balasan email ke {it['sender']}", messages=msgs, no_free=True, max_tokens=900))
     if r["status"] != "done":
         raise ValueError(r.get("error") or "draf gagal")
-    d = {"body": str(r["result"]).strip(), "style": style, "lane": r.get("lane"), "at": datetime.now(timezone.utc).isoformat()}
+    d = {"body": str(r["result"]).strip(), "style": style, "lane": r.get("lane"), "at": datetime.now(timezone.utc).isoformat(),
+         "context": {"samples": len(samples[:6]), "facts": len(facts[:10]), "instruction": bool(instruction), "chars": len(it["body"][:6000])},
+         "attachments": (it.get("draft") or {}).get("attachments", [])}
     await db.pool().execute("UPDATE inbox_items SET draft = $2 WHERE id = $1", item_id, d)
     return d
 
 
-async def save_draft(item_id: int, body: str) -> dict:
+async def save_draft(item_id: int, body: str, attach: list[str] | None = None) -> dict:
     it = await item(item_id)
     d = {**(it.get("draft") or {}), "body": body[:8000]}
+    if attach is not None:
+        d["attachments"] = [a for a in attach if attachments.meta(a)][:5]
     if it["source"] == "outlook":
         d["draft_id"] = await outlook.create_reply_draft(it["ext_id"], d["body"])   # it is in his Outlook Drafts folder too
+        for aid in d.get("attachments") or []:
+            m = attachments.meta(aid)
+            await outlook.add_attachment(d["draft_id"], m["name"], (attachments._path(aid) / "file").read_bytes(), m.get("content_type") or "")
     await db.pool().execute("UPDATE inbox_items SET draft = $2 WHERE id = $1", item_id, d)
     return d
 
@@ -322,7 +380,7 @@ async def send(item_id: int, body: str, who: str) -> dict:
     if not body:
         raise ValueError("draf kosong")
     if it["source"] == "outlook":
-        d = await save_draft(item_id, body)
+        d = await save_draft(item_id, body, (it.get("draft") or {}).get("attachments"))
         a = await approvals.create("outlook_send", f"Kirim balasan ke {it['sender_addr'] or it['sender']}: {it['subject']}"[:200],
                                    {"item_id": item_id, "draft_id": d["draft_id"], "to": it["sender_addr"], "preview": body[:1500]}, "jarvis-inbox", "medium")
     else:
@@ -435,6 +493,11 @@ class DraftIn(BaseModel):
 
 class BodyIn(BaseModel):
     body: str = Field(default="", max_length=8000)
+    attachments: list[str] | None = Field(default=None, max_length=5)
+
+
+class SnoozeIn(BaseModel):
+    until: str = Field(min_length=2, max_length=10)
 
 
 class TextIn(BaseModel):
@@ -486,7 +549,7 @@ async def api_draft(item_id: int, body: DraftIn, device: dict = Depends(owner)):
 @router.put(API + "/item/{item_id}/draft")
 async def api_save(item_id: int, body: BodyIn, device: dict = Depends(owner)):
     try:
-        return await save_draft(item_id, body.body)
+        return await save_draft(item_id, body.body, body.attachments)
     except (ValueError, outlook.OutlookError) as e:
         _err(e)
 
@@ -503,6 +566,14 @@ async def api_send(item_id: int, body: BodyIn, device: dict = Depends(owner)):
 async def api_reply(item_id: int, body: TextIn, device: dict = Depends(owner)):
     try:
         return await wa_reply(item_id, body.text)
+    except ValueError as e:
+        _err(e)
+
+
+@router.post(API + "/item/{item_id}/snooze")
+async def api_snooze(item_id: int, body: SnoozeIn, device: dict = Depends(owner)):
+    try:
+        return await snooze(item_id, body.until)
     except ValueError as e:
         _err(e)
 

@@ -67,6 +67,35 @@ async def from_photo(attachment_id: str, target: str, reference: str = "") -> di
     return {"id": mid, "kind": "foto", "label": target or d["objek"], **d, "lane": r.get("lane")}
 
 
+MODES = {
+    "kenali": "Kenali benda/tempat utama di foto: apa itu, ciri pentingnya, dan hal berguna untuk pemilik (harga kira-kira, cara pakai, peringatan). Singkat.",
+    "baca": "Salin semua teks yang terlihat di foto apa adanya (dokumen, papan, label), rapikan per baris. Tanpa komentar.",
+    "terjemah": "Baca teks di foto lalu terjemahkan ke bahasa Indonesia. Tampilkan: teks asli singkat, lalu terjemahannya.",
+}
+COVERAGE_M2_PER_L = 10.0   # typical wall paint, one coat
+
+
+def paint_estimate(width: float, height: float, coats: int = 2, openings_m2: float = 0.0) -> dict:
+    """Paint for a wall from its size: litres (and 2.5 L / 5 L cans). Pure."""
+    area = max(0.0, width * height - openings_m2)
+    litres = round(area * coats / COVERAGE_M2_PER_L, 1)
+    return {"luas_m2": round(area, 1), "lapis": coats, "liter": litres, "kaleng_5l": int(-(-litres // 5)), "kaleng_2_5l": int(-(-litres // 2.5))}
+
+
+async def look(attachment_id: str, mode: str, question: str = "") -> dict:
+    """Recognise / read / translate what is on a photo — the eyes, through the master flow."""
+    m = attachments.meta(attachment_id)
+    if not m or m["kind"] != "image":
+        raise MeasureError("kirim foto (gambar) dulu")
+    b64 = attachments.image_b64(attachment_id, 1600)
+    msgs = [{"role": "system", "content": MODES[mode] + " Bahasa Indonesia."},
+            {"role": "user", "content": [{"type": "text", "text": question or "Lihat foto ini."}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}]
+    r = await master.run(master.Job("kamera", mode, f"{mode} dari foto", messages=msgs, vision=True, no_free=True, max_tokens=1200))
+    if r["status"] != "done":
+        raise MeasureError(r.get("error") or "foto tidak terbaca")
+    return {"mode": mode, "text": str(r["result"]), "lane": r.get("lane")}
+
+
 class ArIn(BaseModel):
     label: str = Field(default="", max_length=80)
     segments: list[float] = Field(min_length=1, max_length=20)   # metres between consecutive taps
@@ -78,6 +107,8 @@ class PhotoIn(BaseModel):
     attachment_id: str = Field(min_length=8, max_length=64)
     target: str = Field(default="", max_length=120)
     reference: str = Field(default="", max_length=200)
+    mode: str = Field(default="ukur", pattern="^(ukur|kenali|baca|terjemah|cat)$")
+    coats: int = Field(default=2, ge=1, le=4)
 
 
 @router.get(API)
@@ -101,9 +132,24 @@ async def api_ar(body: ArIn, device: dict = Depends(owner)):
 @router.post(API + "/photo")
 async def api_photo(body: PhotoIn, device: dict = Depends(owner)):
     try:
-        return await from_photo(body.attachment_id, body.target, body.reference)
+        if body.mode in MODES:
+            return await look(body.attachment_id, body.mode, body.target)
+        r = await from_photo(body.attachment_id, body.target or ("dinding yang akan dicat" if body.mode == "cat" else ""), body.reference)
+        if body.mode == "cat":
+            w, h = (r["ukuran"].get("lebar") or {}).get("perkiraan"), (r["ukuran"].get("tinggi") or {}).get("perkiraan")
+            if w and h:
+                r["cat"] = paint_estimate(w, h, body.coats)
+        return r
     except (MeasureError, attachments.AttachmentError) as e:
         raise HTTPException(409, str(e))
+
+
+@router.post(API + "/paint")
+async def api_paint(width: float, height: float, coats: int = 2, openings: float = 0.0, device: dict = Depends(owner)):
+    """Paint for a wall measured with AR (or typed): litres and cans."""
+    if not (0 < width < 200 and 0 < height < 50):
+        raise HTTPException(422, "ukuran tidak masuk akal")
+    return paint_estimate(width, height, max(1, min(coats, 4)), max(0.0, openings))
 
 
 @router.delete(API + "/{measure_id}")

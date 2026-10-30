@@ -7,7 +7,11 @@ const NEXT = { auto: 'ask', ask: 'off', off: 'auto' };
 const DAYS = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 let data = null;
 
+let tab = 'kerja';
+const onDay = (h) => h.trigger.type !== 'time' || (h.trigger.days || []).some((d) => (tab === 'kerja' ? d < 5 : d >= 5));
+
 function when(t) {
+  if (t.type === 'calendar') return { top: `-${t.before || 5}m`, sub: 'RAPAT' };
   if (t.type === 'time') return { top: t.at, sub: t.days?.length === 7 ? 'TIAP HARI' : (t.days?.join() === '0,1,2,3,4' ? 'HARI KERJA' : (t.days || []).map((d) => DAYS[d]).join(' ')) };
   return { top: t.place, sub: t.type === 'arrive' ? 'SAMPAI' : 'KELUAR' };
 }
@@ -18,11 +22,12 @@ export default {
     root.innerHTML = String(html`${header('Kebiasaanmu', { sub: 'dipelajari dari pemakaianmu' })}<div class="scr">${loading()}</div>`);
     data = await get('/api/v1/app/habits');
     const sug = data.habits.filter((h) => h.status === 'suggested');
-    const act = data.habits.filter((h) => h.status === 'active');
+    const act = data.habits.filter((h) => h.status === 'active' && onDay(h));
     root.innerHTML = String(html`${header('Kebiasaanmu', { sub: 'yang JARVIS kerjakan tanpa disuruh', right: html`<button class="ib box" data-act="add" aria-label="Ajari kebiasaan">${icon('plus', 18)}</button>` })}
       <div class="scr">
         ${sug.map((h) => html`<div class="card cyan"><span class="k cyan">Usulan baru</span><span style="font-size:14px">${h.title} — terlihat ${h.seen} dari ${h.of_days} hari kerja.</span>
           <div class="btns"><button class="btn primary" data-act="accept" data-id="${h.id}">Ya, jadikan kebiasaan</button><button class="btn" data-act="reject" data-id="${h.id}" style="flex:0 0 96px">Jangan</button></div></div>`)}
+        <div class="chips"><button class="chip ${tab === 'kerja' ? 'on' : ''}" data-act="tab" data-k="kerja">Hari kerja</button><button class="chip ${tab === 'libur' ? 'on' : ''}" data-act="tab" data-k="libur">Akhir pekan</button></div>
         <div class="list">${act.map((h) => { const w = when(h.trigger); const m = MODES[h.mode]; return html`<div class="li">
           <div style="width:58px;display:flex;flex-direction:column"><span class="mono" style="font-size:13px">${w.top}</span><span style="font-size:10px;letter-spacing:.08em;color:var(--mu)">${w.sub}</span></div>
           <div class="grow"><div class="ttl" style="font-weight:500;font-size:13px">${h.title}</div><div class="small">${h.seen ? `${h.seen} dari ${h.of_days} hari` : (h.source === 'builtin' ? 'bawaan' : h.source)}${h.last_fired ? ` · terakhir ${new Date(h.last_fired).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })}` : ''}</div></div>
@@ -33,6 +38,7 @@ export default {
       </div>`);
   },
   actions: {
+    tab(b) { tab = b.dataset.k; render(); },
     async mode(b) { await put(`/api/v1/app/habits/${b.dataset.id}/mode`, { mode: b.dataset.next }); render(); },
     async accept(b) { await post(`/api/v1/app/habits/${b.dataset.id}/accept`); toast('Kebiasaan ditambahkan.'); render(); },
     async reject(b) { await post(`/api/v1/app/habits/${b.dataset.id}/reject`); toast('Tidak akan diusulkan lagi.'); render(); },

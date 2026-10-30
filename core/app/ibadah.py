@@ -7,10 +7,11 @@ or the city he picked. A reminder is quiet (vibration only) while a meeting is b
 import logging
 import math
 import re
+import time
 from datetime import date, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from . import appclock, appsettings, db, home, hub, master, setup_status
 from .appauth import owner
@@ -292,7 +293,15 @@ async def today_view(now: datetime | None = None) -> dict:
             "hijri": hijri_text(h), "hijri_num": list(h), "today_events": events_for(now.date(), h),
             "times": {k: times[k][:5] for k in ("imsak", "subuh", "terbit", "dzuhur", "ashar", "maghrib", "isya") if k in times},
             "next": nxt, "reminders": s["reminders"], "qibla": qibla(coords["lat"], coords["lon"]) if coords else qibla(-6.2, 106.82),
-            "quiet": await _quiet_reason()}
+            "quiet": await _quiet_reason(), "trip": await _safe_trip_note(times), "before_min": s.get("before_min", 0)}
+
+
+async def _safe_trip_note(times: dict) -> dict | None:
+    try:
+        return await trip_note(times)
+    except Exception as e:
+        log.info("trip prayer note: %s", e)
+        return None
 
 
 async def calendar(days: int = 210) -> list[dict]:
@@ -418,6 +427,86 @@ async def _ready() -> dict:
 
 # ---------- API ----------
 
+# ---------- mosques nearby; a prayer that falls during the trip ----------
+
+MOSQUE_WORDS = re.compile(r"\b(masjid|mesjid|musholl?a|mushol+a|musala|surau|langgar|al[- ])", re.I)
+_mosque_cache: dict[str, tuple[float, list]] = {}
+
+
+def mosques_from(hits: list[dict], lat: float, lon: float) -> list[dict]:
+    """Nominatim's places of worship → the mosques/mushollas, nearest first. Pure."""
+    from .places import distance_m
+    out = []
+    for h in hits:
+        name = (h.get("name") or h.get("display_name", "").split(",")[0]).strip()
+        if not name or not MOSQUE_WORDS.search(name + " " + h.get("display_name", "")):
+            continue
+        d = distance_m(lat, lon, float(h["lat"]), float(h["lon"]))
+        out.append({"name": name, "lat": float(h["lat"]), "lon": float(h["lon"]), "m": int(d),
+                    "maps": f"https://www.google.com/maps/dir/?api=1&destination={h['lat']},{h['lon']}&travelmode=walking"})
+    return sorted(out, key=lambda x: x["m"])[:8]
+
+
+async def mosques(lat: float, lon: float) -> list[dict]:
+    key = f"{round(lat, 3)},{round(lon, 3)}"
+    hit = _mosque_cache.get(key)
+    if hit and time.monotonic() - hit[0] < 86400:
+        return hit[1]
+    from .maps import UA
+    d = 0.012
+    async with _client() as c:
+        r = await c.get("https://nominatim.openstreetmap.org/search", headers=UA,
+                        params={"amenity": "place_of_worship", "format": "jsonv2", "limit": 40, "bounded": 1,
+                                "viewbox": f"{lon - d},{lat + d},{lon + d},{lat - d}", "accept-language": "id"})
+    found = mosques_from(r.json() if r.status_code == 200 else [], lat, lon)
+    _mosque_cache[key] = (time.monotonic(), found)
+    return found
+
+
+def during(times: dict, start_hm: str, end_hm: str) -> list[str]:
+    """The prayers whose time falls between leaving and arriving (a trip on the train). Pure."""
+    a, b = int(start_hm[:2]) * 60 + int(start_hm[3:5]), int(end_hm[:2]) * 60 + int(end_hm[3:5])
+    if b < a:
+        b += 1440
+    return [n for n in PRAYERS if n in times and a <= int(times[n][:2]) * 60 + int(times[n][3:5]) <= b]
+
+
+async def trip_note(times: dict) -> dict | None:
+    """A prayer during the trip home/to work: say so, and the nearest mosque after getting off."""
+    from . import commute
+    t = await commute.active()
+    if not t or not t["chosen"] or t["chosen"].get("kind") == "car":
+        return None
+    o = t["chosen"]
+    hit = during(times, o.get("dep") or o.get("leave"), o.get("arrive"))
+    if not hit:
+        return None
+    st = t["plan"]["to"]["name"]
+    pos = await commute._station_pos(st)
+    near = []
+    if pos:
+        try:
+            near = (await mosques(pos["lat"], pos["lon"]))[:2]
+        except Exception:
+            near = []
+    n = hit[0]
+    return {"prayer": n, "time": times[n][:5], "station": st, "arr": o.get("arr"),
+            "text": f"{n.capitalize()} {times[n][:5]} saat kamu di KRL — turun di {st} {str(o.get('arr', '')).replace(':', '.')}" + (f"; terdekat: {near[0]['name']} ({near[0]['m']} m)" if near else ""),
+            "mosques": near}
+
+
+@router.get(API + "/mosques")
+async def api_mosques(device: dict = Depends(owner)):
+    from . import location
+    last = await location.last() or {}
+    if last.get("lat") is None:
+        raise HTTPException(409, "lokasi HP belum diketahui")
+    try:
+        return {"mosques": await mosques(last["lat"], last["lon"]), "from": {"lat": last["lat"], "lon": last["lon"]}}
+    except httpx.HTTPError as e:
+        raise HTTPException(503, f"peta belum terjangkau ({type(e).__name__})")
+
+
 @router.get(API + "/today")
 async def api_today(device: dict = Depends(owner)):
     return await today_view()
@@ -427,6 +516,27 @@ async def api_today(device: dict = Depends(owner)):
 async def api_calendar(days: int = 210, device: dict = Depends(owner)):
     v = await today_view()
     return {"hijri": v["hijri"], "today_events": v["today_events"], "events": await calendar(max(7, min(days, 400)))}
+
+
+@router.get(API + "/month")
+async def api_month(offset: int = 0, device: dict = Depends(owner)):
+    """A whole Hijri month as a grid (the current one, or `offset` months away): each day with its Gregorian date and its events."""
+    off = await hijri_offset()
+    today = datetime.now(WIB).date()
+    y, m, _ = hijri_of(today, off)
+    m += offset
+    while m > 12:
+        y, m = y + 1, m - 12
+    while m < 1:
+        y, m = y - 1, m + 12
+    start = today + timedelta(days=int(offset * 29.53) - 31)
+    days = []
+    for i in range(0, 95):
+        d = start + timedelta(days=i)
+        h = hijri_of(d, off)
+        if (h[0], h[1]) == (y, m):
+            days.append({"date": d.isoformat(), "day": h[2], "weekday": d.weekday(), "today": d == today, "events": [e["title"] for e in events_for(d, h)]})
+    return {"title": hijri_text((y, m, 1)).split(" ", 1)[1], "days": days}
 
 
 @router.get(API + "/cities")
