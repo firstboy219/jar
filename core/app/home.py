@@ -251,7 +251,7 @@ async def _needs(m: Moment) -> list[Card]:
     out = []
     for i, n in enumerate(await needs_mod.listing()):
         out.append({"id": f"need:{n['kind']}:{n['id']}", "title": n["title"], "sub": n.get("sub", ""), "route": "#/butuh",
-                    "icon": n.get("icon", "shield"), "tone": "amber", "cta": n.get("cta", "Tinjau"), "score": 100 - i})
+                    "icon": n.get("icon", "shield"), "tone": "amber", "cta": n.get("cta", "Tinjau"), "score": 100 - i, "need": n})   # answered right on the card
     return out
 
 
@@ -264,7 +264,22 @@ async def _missions(m: Moment) -> list[Card]:
     top = running[0]
     sub = f"{len(running)} misi berjalan" if len(running) > 1 else ("antre" if top["status"] == "queued" else "sedang dikerjakan")
     return [{"id": "missions", "title": top.get("title") or "Misi", "sub": sub, "route": f"#/misi/{top['task_id']}", "icon": "layers",
-             "tone": "violet", "score": 45, "count": len(running)}]
+             "tone": "violet", "score": 45, "count": len(running),
+             "list": [{"id": w["task_id"], "title": (w.get("title") or "Misi")[:80], "status": w["status"], "progress": w.get("progress"),
+                       "phase": w.get("phase") or w.get("runtime_note") or "", "route": f"#/misi/{w['task_id']}"} for w in running[:4]]}]
+
+
+@provider("scheduled")
+async def _scheduled(m: Moment) -> list[Card]:
+    """Recurring missions: his projects with a schedule, the next run within a day."""
+    from . import projects
+    rows = await db.pool().fetch("SELECT id, name, schedule, at_time, weekday, next_run FROM projects WHERE schedule <> 'manual' AND next_run IS NOT NULL "
+                                 "AND next_run < now() + interval '24 hours' ORDER BY next_run LIMIT 3")
+    if not rows:
+        return []
+    items = [{"id": r["id"], "title": r["name"], "when": r["next_run"].astimezone(m.now.tzinfo).strftime("%H.%M"), "repeat": projects.schedule_text(dict(r))} for r in rows]
+    return [{"id": "scheduled", "title": f"Terjadwal: {items[0]['title']}", "sub": f"{items[0]['repeat']} · berikutnya {items[0]['when']}" + (f" · +{len(items) - 1}" if len(items) > 1 else ""),
+             "route": "#/misi?tab=jadwal", "icon": "clock", "tone": "cyan", "score": 22, "list": items}]
 
 
 @provider("tasks")

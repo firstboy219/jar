@@ -34,6 +34,12 @@
     <!-- ADR-077: the apps JARVIS may open on the owner's phone (Android 11+ package visibility) -->
     <queries>
         <package android:name="com.gojek.app" />
+        <!-- ADR-087: the other apps JARVIS may operate (and GoPay's payment screen) must be visible to open them -->
+        <package android:name="com.gojek.gopay" />
+        <package android:name="com.kopikenangan" />
+        <package android:name="com.qpon.platform" />
+        <package android:name="com.EmasDigi" />
+        <package android:name="com.jobstreet.jobstreet" />
     </queries>
 
     <application

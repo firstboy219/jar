@@ -1,6 +1,7 @@
 // Beranda pintar (mockup 40): the hero card, two supporting cards and seven shortcuts — all picked by the server for this moment.
 import { $, empty, errorBox, get, html, icon, loading, on } from '../core.js';
 import { tone } from '../lib.js';
+import { itemCard, needActions } from '../needsui.js';
 
 let timer = null;
 
@@ -8,12 +9,20 @@ function card(c, wide = false) {
   if (!c) return '';
   const t = tone(c.tone);
   return wide
-    ? html`<a class="card ${t}" href="${c.route}"><div class="row"><span class="ico ${t}">${icon(c.icon || 'grid', 20)}</span><div class="grow"><div class="ttl">${c.title}</div><div class="sub">${c.sub || ''}</div></div>${icon('right', 16)}</div></a>`
-    : html`<a class="card mini" href="${c.route}"><span style="color:var(--${t === 'amber' ? 'amber' : t})">${icon(c.icon || 'grid', 20)}</span><div class="ttl">${c.title}</div><div class="small">${c.sub || ''}</div></a>`;
+    ? html`<div class="card ${t}"><a class="row" href="${c.route}"><span class="ico ${t}">${icon(c.icon || 'grid', 20)}</span><div class="grow"><div class="ttl">${c.title}</div><div class="sub">${c.sub || ''}</div></div>${icon('right', 16)}</a>${sublist(c)}</div>`
+    : html`<a class="card mini" href="${c.route}"><span style="color:var(--${t === 'amber' ? 'amber' : t})">${icon(c.icon || 'grid', 20)}</span><div class="ttl">${c.title}</div><div class="small">${c.sub || ''}</div>${c.list?.length ? html`<span class="small">${c.list.length} item</span>` : ''}</a>`;
+}
+
+function sublist(c) {   // a card's own items: running missions, today's agenda, scheduled projects
+  if (!c.list?.length) return '';
+  return html`<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">${c.list.map((x) => html`<a class="row sb" href="${x.route || c.route}" style="font-size:13px;gap:8px">
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.status === 'running' ? html`<span class="dot violet live"></span> ` : ''}${x.title}</span>
+    <span class="mono small" style="flex:none">${x.when || (x.progress != null ? `${Math.round(x.progress)}%` : x.status === 'queued' ? 'antre' : '')}</span></a>`)}</div>`;
 }
 
 function hero(c) {
   if (!c) return '';
+  if (c.kind === 'needs' && c.need) return html`<span class="k amber" style="padding:0 4px">Sekarang untukmu</span>${itemCard(c.need, true)}`;   // answered right here
   const t = tone(c.tone);
   return html`<a class="card hero ${t}" href="${c.route}" style="border-color: var(--${t})">
     <span class="k ${t}">Sekarang untukmu</span>
@@ -52,7 +61,8 @@ export default {
             ${d.shortcuts.map((s) => html`<a class="tile" href="${s.route}"><span class="sq">${icon(s.icon, 20)}</span><span>${s.label}</span></a>`)}
             <a class="tile" href="#/fitur"><span class="sq primary">${icon('grid', 20)}</span><b style="color:var(--tx)">Semua fitur</b></a>
           </div>
-          ${d.all.length > 3 ? html`<div class="sec"><span>Lainnya sekarang</span></div><div class="list">${d.all.filter((c) => c !== d.hero && !d.cards.some((x) => x.id === c.id) && c.id !== d.hero?.id).slice(0, 5).map((c) => html`<a class="li click" href="${c.route}"><span class="ico ${tone(c.tone)}">${icon(c.icon || 'grid', 18)}</span><div class="grow"><div class="ttl">${c.title}</div><div class="small">${c.sub || ''}</div></div>${icon('right', 16)}</a>`)}</div>` : ''}
+          ${d.all.filter((c) => ['missions', 'calendar', 'scheduled'].includes(c.kind) && c.list?.length && c.id !== d.hero?.id && !d.cards.some((x) => x.id === c.id)).map((c) => card(c, true))}
+          ${d.all.length > 3 ? html`<div class="sec"><span>Lainnya sekarang</span></div><div class="list">${d.all.filter((c) => c !== d.hero && !d.cards.some((x) => x.id === c.id) && c.id !== d.hero?.id && !(['missions', 'calendar', 'scheduled'].includes(c.kind) && c.list?.length)).slice(0, 5).map((c) => html`<a class="li click" href="${c.route}"><span class="ico ${tone(c.tone)}">${icon(c.icon || 'grid', 18)}</span><div class="grow"><div class="ttl">${c.title}</div><div class="small">${c.sub || ''}</div></div>${icon('right', 16)}</a>`)}</div>` : ''}
         </div>`);
     };
     await paint();
@@ -61,4 +71,5 @@ export default {
     const tick = setInterval(paint, 60000);
     return () => { offs.forEach((f) => f()); clearInterval(tick); clearTimeout(timer); };
   },
+  actions: needActions,
 };

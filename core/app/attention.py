@@ -384,13 +384,20 @@ async def _home(m: home.Moment) -> list[dict]:
 @home.provider("calendar")
 async def _home_cal(m: home.Moment) -> list[dict]:
     now = m.now
+    out = []
     e = await db.pool().fetchrow("SELECT * FROM calendar_events WHERE start_at > $1::timestamptz - interval '10 minutes' AND start_at < $1::timestamptz + interval '3 hours' ORDER BY start_at LIMIT 1", now)
-    if not e:
-        return []
-    mins = int((e["start_at"] - now).total_seconds() // 60)
-    soon = mins <= 10
-    return [{"id": f"cal:{e['id']}", "title": e["title"], "sub": (f"mulai {mins} menit lagi" if mins > 0 else "sedang berlangsung") + (f" · {e['location']}" if e["location"] else ""),
-             "route": "#/rapat", "icon": "meet", "tone": "violet", "score": 90 if soon else 45, "cta": "Rekam rapat" if soon else None}]
+    if e:
+        mins = int((e["start_at"] - now).total_seconds() // 60)
+        soon = mins <= 10
+        out.append({"id": f"cal:{e['id']}", "title": e["title"], "sub": (f"mulai {mins} menit lagi" if mins > 0 else "sedang berlangsung") + (f" · {e['location']}" if e["location"] else ""),
+                    "route": "#/rapat", "icon": "meet", "tone": "violet", "score": 90 if soon else 45, "cta": "Rekam rapat" if soon else None})
+    day = await db.pool().fetch("""SELECT id, title, start_at, end_at, location FROM calendar_events
+                                   WHERE (start_at AT TIME ZONE 'Asia/Jakarta')::date = ($1::timestamptz AT TIME ZONE 'Asia/Jakarta')::date AND end_at > $1::timestamptz ORDER BY start_at""", now)
+    if day:   # today's agenda ("HARI INI")
+        out.append({"id": "agenda", "title": f"Agenda hari ini · {len(day)}", "sub": " · ".join(f"{r['start_at'].astimezone(WIB):%H.%M} {r['title']}" for r in day[:3])[:120],
+                    "route": "#/rapat", "icon": "cal", "tone": "cyan", "score": 30 if m.slot in ("pagi", "kerja", "siang") else 12,
+                    "list": [{"id": r["id"], "title": r["title"], "when": f"{r['start_at'].astimezone(WIB):%H.%M}–{r['end_at'].astimezone(WIB):%H.%M}", "where": r["location"]} for r in day[:8]]})
+    return out
 
 
 @brief.context("email & WhatsApp")

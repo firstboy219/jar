@@ -1,6 +1,7 @@
 // Obrolan (mockup 3): the conversation with JARVIS over the same live connection as the phone — replies stream in, a task asked here
 // shows its progress and opens as a mission, results come back as cards.
-import { $, get, header, host, html, icon, on, render, send, toast } from '../core.js';
+import { $, get, header, host, html, icon, on, post, render, send, speak, toast } from '../core.js';
+import { pick, upload } from '../upload.js';
 import { clock } from '../lib.js';
 
 const SKEY = 'jarvis_app_session';
@@ -10,8 +11,27 @@ const sid = () => {
   return s;
 };
 
-let log, typing, bubble = null;
+let log, typing, bubble = null, files = [];
 const bars = new Map();
+const ROUTE = { core: 'perintah langsung · tanpa AI', assistant: 'otak percakapan', blocked: 'ditahan', silent: '' };
+
+function chips(list) {   // quick replies under JARVIS' last answer
+  log.querySelector('.qchips')?.remove();
+  if (!list.length) return;
+  const d = document.createElement('div');
+  d.className = 'chips qchips';
+  d.innerHTML = String(html`${list.map(([label, act, val]) => html`<button class="chip" data-act="${act}" data-v="${val || label}">${label}</button>`)}`);
+  log.append(d);
+}
+
+function reportCard(ev) {
+  const m = document.createElement('div');
+  m.className = 'msg jarvis card';
+  m.innerHTML = String(html`<span class="k violet">${icon('check', 13)} Hasil misi</span><span class="sub" style="white-space:pre-wrap">${ev.text}</span>
+    <div class="row" style="gap:6px;flex-wrap:wrap">${ev.task_id ? html`<a class="chip" href="#/misi/${ev.task_id}">Buka laporan</a>` : ''}<button class="chip" data-act="readText" data-v="${ev.text}">${icon('speaker', 13)} Bacakan</button></div>`);
+  log.append(m);
+  m.scrollIntoView({ block: 'end' });
+}
 
 function add(role, text, at) {
   const m = document.createElement('div');
@@ -43,13 +63,20 @@ function progress(ev) {
 }
 
 function say(text) {
-  const t = String(text || '').trim();
+  const t = String(text || '').trim() || (files.length ? 'Tolong lihat lampiran ini.' : '');
   if (!t) return false;
-  add('user', t);
-  send({ user_command: t, session_id: sid() });
+  add('user', files.length ? `${t}\n📎 ${files.map((f) => f.name).join(', ')}` : t);
+  send({ user_command: t, session_id: sid(), ...(files.length ? { attachments: files.map((f) => f.id) } : {}) });
+  files = []; paintFiles();
   bubble = null;
+  chips([]);
   setTyping('JARVIS berpikir…');
   return true;
+}
+
+function paintFiles() {
+  const el = document.getElementById('chatfiles');
+  if (el) el.innerHTML = String(html`${files.map((f, i) => html`<span class="chip">📎 ${f.name}<button type="button" class="ib sm" data-act="unattach" data-i="${i}" aria-label="Buang">${icon('close', 12)}</button></span>`)}`);
 }
 
 function listenWeb() {
@@ -69,7 +96,9 @@ export default {
   async render(root, route) {
     root.innerHTML = String(html`${header('Obrolan', { back: false, sub: 'percakapan dengan JARVIS', right: html`<button class="btn sm" data-act="fresh">Topik baru</button>` })}
       <div class="chat" id="log"></div><p class="typing" id="typing" hidden></p>
+      <div class="chips" id="chatfiles" style="padding:0 16px"></div>
       <form class="chatbar" id="chatf" autocomplete="off">
+        <button type="button" class="ib box" data-act="attach" aria-label="Lampirkan berkas" style="width:48px;height:48px;flex:none">${icon('upload', 18)}</button>
         <label class="cmd" style="height:48px"><input id="chatin" placeholder="Balas JARVIS…" enterkeyhint="send"></label>
         <button type="button" class="mic" style="width:48px;height:48px" data-act="mic" aria-label="Bicara">${icon('mic', 20)}</button>
       </form>`);
@@ -88,10 +117,18 @@ export default {
       on('thought', (ev) => mine(ev) && setTyping(`💭 ${ev.text}`.slice(0, 140))),
       on('tool', (ev) => mine(ev) && setTyping(`🔧 ${ev.title || ev.name}${ev.label ? `: ${ev.label}` : ''}`.slice(0, 140))),
       on('delta', (ev) => { if (!mine(ev)) return; if (!bubble) bubble = add('jarvis', ''); bubble.textContent += ev.text; bubble.scrollIntoView({ block: 'end' }); }),
-      on('reply', (ev) => { if (!mine(ev)) return; if (ev.text) { if (!bubble) bubble = add('jarvis', ev.text); else bubble.textContent = ev.text; } bubble = null; setTyping(''); }),
+      on('reply', (ev) => {
+        if (!mine(ev)) return;
+        if (ev.text) {
+          if (!bubble) bubble = add('jarvis', ev.text); else bubble.textContent = ev.text;
+          if (ROUTE[ev.route]) { const s = document.createElement('span'); s.className = 'small'; s.textContent = ROUTE[ev.route]; s.style.display = 'block'; bubble.append(s); }
+          chips([['Ringkas', 'quick', 'Ringkas jawabanmu tadi jadi 2 kalimat.'], ['Lebih detail', 'quick', 'Jelaskan lebih detail.'], ['Bacakan', 'readText', ev.text], ['Jadikan tugas', 'toTask', ev.text]]);
+        }
+        bubble = null; setTyping('');
+      }),
       on('transcript', (ev) => { if (mine(ev) && ev.text) { add('user', `🎤 ${ev.text}`); setTyping('JARVIS berpikir…'); } }),
       on('progress', (ev) => { if (ev.session_id === sid()) progress(ev); }),
-      on('report', (ev) => add('jarvis', `🔔 ${ev.text}`)),
+      on('report', (ev) => reportCard(ev)),
       on('proactive', (ev) => add('jarvis', `🔔 ${ev.text}`)),
       on('error', (ev) => { if (mine(ev)) { setTyping(''); toast(ev.message || 'Terjadi kesalahan', true); bubble = null; } }),
     ];
@@ -103,5 +140,16 @@ export default {
       render();
     },
     mic() { if (host.has('talk')) host.call('talk'); else listenWeb(); },
+    async attach() {
+      const picked = await pick({ multiple: true, accept: 'image/*,.pdf,.docx,.xlsx,.pptx,.txt,.csv' });
+      if (!picked.length) return;
+      toast('Mengunggah…');
+      files = [...files, ...(await upload(picked.slice(0, 5 - files.length)))].slice(0, 5);
+      paintFiles();
+    },
+    unattach(b) { files.splice(Number(b.dataset.i), 1); paintFiles(); },
+    quick(b) { say(b.dataset.v); },
+    readText(b) { speak(b.dataset.v); },
+    async toTask(b) { await post('/api/v1/notes/tasks', { text: String(b.dataset.v).split('\n')[0].slice(0, 300) }); toast('Masuk ke Catatan sebagai tugas'); },
   },
 };

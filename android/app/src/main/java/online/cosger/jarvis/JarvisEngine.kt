@@ -539,7 +539,7 @@ class JarvisEngine(private val context: Context, val settingsStore: SecureSettin
                 route = event.route)
             is ServerEvent.OwnerChoice -> onOwnerChoice(event)
             is ServerEvent.SettingsChanged -> if (event.key == "alarm") syncAlarm()
-            is ServerEvent.Trip -> if (event.status == "active" && event.title.isNotBlank()) online.cosger.jarvis.notify.TripNotice.show(context, event.title, event.text, event.route)
+            is ServerEvent.Trip -> if (event.status == "active" && event.title.isNotBlank()) online.cosger.jarvis.notify.TripNotice.show(context, event.title, event.text, event.route, event.leg, event.driver)
                 else if (event.status in setOf("done", "cancelled")) online.cosger.jarvis.notify.TripNotice.clear(context)
             is ServerEvent.Guide -> onGuide(event)
             is ServerEvent.Transcript -> {

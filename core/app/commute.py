@@ -7,13 +7,14 @@ watching are fixed procedures (no AI), the ride is a phone job (a learned routin
 Needs: the owner's places (rumah, kantor — learned from the phone or set) and his two stations (Berangkat screen)."""
 
 import logging
+import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from . import appclock, appsettings, db, habits, home, hub, krl, master, setup_status
-from .appauth import owner
+from .appauth import actor, owner
 from .location import WIB
 
 log = logging.getLogger("jarvis-core")
@@ -26,6 +27,9 @@ RIDE_BASE, RIDE_PER_KM, CAR_BASE, CAR_PER_KM = 10000, 2500, 15000, 4000
 
 
 # ---------- pure ----------
+
+HELD_MIN = 8          # minutes without moving between stations = a held train
+
 
 def ride_cost(km: float, car: bool = False) -> int:
     base, per = (CAR_BASE, CAR_PER_KM) if car else (RIDE_BASE, RIDE_PER_KM)
@@ -151,7 +155,7 @@ async def plan(direction: str, now: datetime | None = None) -> dict:
     w = await weather.here()
     rain = (w or {}).get("rain")
     return {"direction": direction, "from": home_st if direction == "out" else office_st, "to": office_st if direction == "out" else home_st,
-            "options": opts, "car": car, "best": best, "weather": w, "rain_note": f"Kemungkinan hujan {rain['pct']}% sekitar jam {int(rain['hour'])}." if rain else "",
+            "options": opts, "car": car, "best": best, "weather": w, "errands": await errands() if direction == "back" else [], "rain_note": f"Kemungkinan hujan {rain['pct']}% sekitar jam {int(rain['hour'])}." if rain else "",
             "made_at": now.isoformat(), "no_places": [n for n in ("rumah", "kantor") if n not in pl]}
 
 
@@ -176,9 +180,9 @@ async def active() -> dict | None:
     return dict(row) if row else None
 
 
-async def _event(trip_id: int, kind: str, text: str) -> None:
+async def _event(trip_id: int, kind: str, text: str, data: dict | None = None) -> None:
     await db.pool().execute("UPDATE commute_trips SET events = events || $2::jsonb WHERE id = $1", trip_id,
-                            [{"at": datetime.now(WIB).isoformat(), "kind": kind, "text": text}])
+                            [{"at": datetime.now(WIB).isoformat(), "kind": kind, "text": text, **({"data": data} if data else {})}])
 
 
 async def choose(trip_id: int, index: int, actor: str) -> dict:
@@ -225,12 +229,51 @@ async def order_ride(trip_id: int, car: bool = False) -> dict:
 async def trip_view(trip_id: int) -> dict:
     row = await db.pool().fetchrow("SELECT * FROM commute_trips WHERE id = $1", trip_id)
     t = dict(row)
+    er = await errands() if t["direction"] == "back" else []
+    drv = next((e.get("data") for e in reversed(t["events"] or []) if e.get("kind") == "driver"), None)
     return {"id": t["id"], "direction": t["direction"], "status": t["status"], "plan": t["plan"], "chosen": t["chosen"], "events": t["events"],
-            "steps": steps(t["direction"], t["plan"], t["chosen"]) if t["chosen"] else []}
+            "steps": steps(t["direction"], t["plan"], t["chosen"], er) if t["chosen"] else [], "errands": er, "driver": drv}
 
 
-def steps(direction: str, p: dict, o: dict) -> list[dict]:
-    """The legs of a chosen option, in order, for the live trip screen and the lock screen. Pure."""
+PLATE = re.compile(r"\b([A-Z]{1,2}\s?\d{1,4}\s?[A-Z]{1,3})\b")
+
+
+def driver_of(text: str) -> dict | None:
+    """A Gojek notification about the ride → {driver, plate, eta_min, state}. Pure."""
+    t = text or ""
+    if not re.search(r"\b(driver|pengemudi|goride|gocar|menuju|sampai|tiba|dijemput|perjalanan)\b", t, re.I):
+        return None
+    plate = PLATE.search(t)
+    eta = re.search(r"(\d{1,2})\s*(?:menit|mnt|min)\b", t, re.I)
+    name = (re.search(r"\b(?:Pak|Bu|Mas|Mbak|Bang)\s+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)", t)
+            or re.search(r"\b(?:[Dd]river(?:mu)?|[Pp]engemudi(?:mu)?|bersama|oleh)\s+(?!Ditemukan|Sudah|Sedang|Menuju|Kamu|Anda)([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)", t))
+    state = ("arrived" if re.search(r"\b(sudah (sampai|tiba)|telah tiba|menunggu di|sampai di lokasi)\b", t, re.I) else
+             "riding" if re.search(r"\b(dalam perjalanan|perjalanan dimulai)\b", t, re.I) else
+             "done" if re.search(r"\b(selesai|sampai tujuan|terima kasih telah)\b", t, re.I) else "coming")
+    if not (plate or eta or name):
+        return None
+    return {"driver": name.group(1).title() if name else "", "plate": plate.group(1).replace(" ", " ") if plate else "", "eta_min": int(eta.group(1)) if eta else None, "state": state}
+
+
+def stalled_min(fixes: list[tuple[datetime, float, float]], stations: list[dict], radius_m: float = 150) -> int:
+    """How long the phone has not moved (minutes) away from any station — a train held between stations. Pure."""
+    from .places import distance_m
+    if len(fixes) < 2:
+        return 0
+    fixes = sorted(fixes)
+    last_t, la, lo = fixes[-1]
+    if any(distance_m(la, lo, s["lat"], s["lon"]) <= 400 for s in stations if s):
+        return 0
+    start = last_t
+    for t, a, b in reversed(fixes[:-1]):
+        if distance_m(a, b, la, lo) > radius_m:
+            break
+        start = t
+    return int((last_t - start).total_seconds() // 60)
+
+
+def steps(direction: str, p: dict, o: dict, errands: list[str] | None = None) -> list[dict]:
+    """The legs of a chosen option, in order, for the live trip screen and the lock screen; on the way home, his errands too. Pure."""
     if o.get("kind") == "car":
         return [{"at": o["leave"], "text": "GoCar langsung", "kind": "car"}, {"at": o["arrive"], "text": "Tiba", "kind": "end"}]
     out = []
@@ -247,16 +290,28 @@ def steps(direction: str, p: dict, o: dict) -> list[dict]:
         if o.get("ride"):
             out.append({"at": o["ride"]["order_at"], "text": "GoRide dipesan otomatis, menunggu di stasiun", "kind": "ride"})
         out.append({"at": o["arr"], "text": f"Tiba di {p['to']['name']}" + (", naik GoRide ke rumah" if o.get("ride") else ""), "kind": "walk"})
+    if direction == "back" and errands:
+        out.append({"at": o["arr"], "text": "Titipan: " + ", ".join(errands[:4]), "kind": "errand"})
     out.append({"at": o["arrive"], "text": "Sampai kantor" if direction == "out" else "Sampai rumah", "kind": "end"})
     return out
+
+
+async def errands() -> list[str]:
+    cur = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'commute:errands'") or {}
+    return cur.get("items", []) if cur.get("day") == datetime.now(WIB).date().isoformat() else []
 
 
 async def _broadcast_trip(trip_id: int) -> None:
     v = await trip_view(trip_id)
     o = v["chosen"] or {}
-    nxt = next((s for s in v["steps"] if hhmm_to(s["at"]) >= krl.now_minutes()), v["steps"][-1] if v["steps"] else None)
+    st = v["steps"]
+    i = next((k for k, s in enumerate(st) if hhmm_to(s["at"]) >= krl.now_minutes()), len(st) - 1)
+    nxt = st[i] if st else None
+    d = v.get("driver") or {}
+    drv = " · ".join(x for x in (d.get("driver"), d.get("plate"), f"{d['eta_min']} mnt" if d.get("eta_min") else "") if x)
     await hub.broadcast({"type": "trip", "id": trip_id, "status": v["status"], "title": nxt["text"] if nxt else "Perjalanan",
-                         "text": f"{nxt['at'] if nxt else ''} · tiba {o.get('arrive', '')}", "route": "#/perjalanan"})
+                         "text": f"{nxt['at'] if nxt else ''} · tiba {o.get('arrive', '')}" + (f" · {o['delay_min']} mnt tertahan" if o.get("delay_min") else ""),
+                         "leg": f"{i + 1}/{len(st)}" if st else "", "driver": drv, "route": "#/perjalanan"})
 
 
 # ---------- the clock: reminders, rides at the right moment, a missed train ----------
@@ -292,16 +347,101 @@ async def watch(now: datetime | None = None) -> list[str]:
     if t["direction"] == "back" and o.get("ride") and after_ref(o["ride"]["order_at"], ref) <= m <= after_ref(o["arr"], ref) + 5 and not await _done_today(t["id"], "ride"):
         await order_ride(t["id"])
         did.append("ride_home")
+    if await _driver_news(t):
+        did.append("driver")
     dep = after_ref(o["dep"], ref)
     if dep + 6 <= m <= dep + 30 and not await _done_today(t["id"], "replan"):
         if await _still_near(p["from"]["name"]):
             await _replan(t, now)
             did.append("replan")
+    if dep + 5 <= m <= after_ref(o["arr"], ref) + 30 and await _held(t, now):
+        did.append("held")
     if m > after_ref(o["arrive"], ref) + 90:
         await _finish(t["id"], "selesai (waktu)")
     if did:
         await _broadcast_trip(t["id"])
     return did
+
+
+async def _driver_news(t: dict) -> bool:
+    """Gojek's own notifications about the ride (driver, plate, minutes away) → the trip and the lock screen."""
+    seen = max([e.get("data", {}).get("notif", 0) for e in t["events"] or [] if e.get("kind") == "driver"] + [0])
+    rows = await db.pool().fetch("""SELECT id, title, text FROM notifications WHERE package = 'com.gojek.app' AND NOT sensitive AND id > $1
+                                    AND received_at >= coalesce($2, now() - interval '3 hours') ORDER BY id""", seen, t.get("started_at"))
+    got = False
+    for r in rows:
+        d = driver_of(f"{r['title']} {r['text']}")
+        if d:
+            await _event(t["id"], "driver", " · ".join(x for x in (d["driver"], d["plate"], f"{d['eta_min']} menit lagi" if d["eta_min"] else "", d["state"]) if x), {**d, "notif": r["id"]})
+            got = True
+    return got
+
+
+async def _held(t: dict, now: datetime) -> bool:
+    """The phone has not moved for a while between stations: the train is held — the arrival and the ride home move with it."""
+    fixes = [(r["at"], r["lat"], r["lon"]) for r in await db.pool().fetch("SELECT at, lat, lon FROM location_history WHERE at > $1::timestamptz - interval '30 minutes' ORDER BY at", now)]
+    p = t["plan"]
+    stalled = stalled_min(fixes, [await _station_pos(p["from"]["name"]), await _station_pos(p["to"]["name"])])
+    o = dict(t["chosen"])
+    if stalled < HELD_MIN or stalled <= int(o.get("delay_min") or 0):
+        return False
+    o["delay_min"] = stalled
+    if o.get("ride") and t["direction"] == "back":
+        o["ride"] = {**o["ride"], "order_at": krl.hhmm(hhmm_to(o["ride"]["order_at"]) + stalled - int(t["chosen"].get("delay_min") or 0))}
+    await db.pool().execute("UPDATE commute_trips SET chosen = $2 WHERE id = $1", t["id"], o)
+    await _event(t["id"], "held", f"kereta tertahan ±{stalled} menit — tiba lebih lambat" + (", GoRide dipesan menyesuaikan" if o.get("ride") and t["direction"] == "back" else ""))
+    if stalled == HELD_MIN or stalled % 10 == 0:
+        await hub.broadcast({"type": "notify", "title": "KRL tertahan", "text": f"Sudah ±{stalled} menit tidak bergerak. Perkiraan tiba bergeser.", "kind": "info", "route": "#/berubah"})
+    return True
+
+
+async def alternatives(trip_id: int) -> dict:
+    """Other ways from here and now (the next trains, a car) — for the Rencana berubah screen."""
+    row = await db.pool().fetchrow("SELECT direction FROM commute_trips WHERE id = $1", trip_id)
+    if not row:
+        raise ValueError("perjalanan tidak ada")
+    p = await plan(row["direction"])
+    return {"options": p["options"][:4], "car": p["car"], "from": p["from"], "to": p["to"]}
+
+
+async def switch(trip_id: int, index: int, actor: str) -> dict:
+    alt = await alternatives(trip_id)
+    opt = alt["car"] if index == -1 else (alt["options"][index] if 0 <= index < len(alt["options"]) else None)
+    if not opt:
+        raise ValueError("opsi tidak ada")
+    old = (await db.pool().fetchval("SELECT chosen FROM commute_trips WHERE id = $1", trip_id)) or {}
+    opt = {**opt, "replanned_from": old.get("dep")}
+    await db.pool().execute("UPDATE commute_trips SET chosen = $2 WHERE id = $1", trip_id, opt)
+    await _event(trip_id, "replan", f"diganti oleh {actor}: {opt.get('dep') or 'mobil'} → tiba {opt.get('arrive')}")
+    await _broadcast_trip(trip_id)
+    if opt.get("kind") == "car":
+        await order_ride(trip_id, car=True)
+    return await trip_view(trip_id)
+
+
+def home_message(v: dict) -> str:
+    """'Kabari rumah' — where he is and when he gets home. Pure."""
+    o = v.get("chosen") or {}
+    if o.get("kind") == "car":
+        return f"Aku naik GoCar, perkiraan sampai rumah {o.get('arrive', '').replace(':', '.')}."
+    late = f" (kereta sempat tertahan ±{o['delay_min']} menit)" if o.get("delay_min") else ""
+    return (f"Aku naik KRL {o.get('dep', '').replace(':', '.')} dari {v['plan']['from']['name']}, tiba di {v['plan']['to']['name']} "
+            f"{o.get('arr', '').replace(':', '.')}, sampai rumah sekitar {o.get('arrive', '').replace(':', '.')}{late}.")
+
+
+async def tell_home(trip_id: int) -> dict:
+    from . import phone_agent
+    v = await trip_view(trip_id)
+    msg = home_message(v)
+    who = (await appsettings.get("commute"))["home_contact"].strip()
+    if who:
+        try:
+            await phone_agent.op("notif_reply", title=who, text=msg)
+            await _event(trip_id, "kabar", f"dikabari ke {who}: {msg}")
+            return {"sent": True, "to": who, "text": msg}
+        except phone_agent.PhoneError as e:
+            return {"sent": False, "text": msg, "why": str(e)}
+    return {"sent": False, "text": msg, "why": "atur kontak rumah di Kontrol → Perjalanan"}
 
 
 async def _still_near(station: str) -> bool:
@@ -471,3 +611,24 @@ async def api_cancel(trip_id: int, device: dict = Depends(owner)):
     await cancel(trip_id)
     return {"ok": True}
 
+
+
+@router.get(API + "/trip/{trip_id}/alternatives")
+async def api_alternatives(trip_id: int, device: dict = Depends(owner)):
+    try:
+        return await alternatives(trip_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post(API + "/trip/{trip_id}/switch")
+async def api_switch(trip_id: int, body: ChooseIn, device: dict = Depends(owner)):
+    try:
+        return await switch(trip_id, body.index, actor(device))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@router.post(API + "/trip/{trip_id}/tell-home")
+async def api_tell_home(trip_id: int, device: dict = Depends(owner)):
+    return await tell_home(trip_id)

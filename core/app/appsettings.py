@@ -19,7 +19,7 @@ DEFAULTS: dict[str, dict] = {
     "invest": {"app": "pluang", "limit": 2000000, "price_guard_pct": 1.0, "targets": {}, "check_day": "monday", "check_at": "08:00", "risk": "sedang",
                "goal": "", "password": True},
     "commute": {"home_station": "", "office_station": "", "walk_min": 6, "arrive_before": "09:00", "leave_after": "17:00",
-                "ride_app": "gojek", "ride_to_station": True, "ride_from_station": True},
+                "ride_app": "gojek", "ride_to_station": True, "ride_from_station": True, "home_contact": ""},
     "brief": {"enabled": True, "time": "05:45", "topics": [], "speak": False},
     "story": {"child_name": "", "child_age": 5, "themes": ["hewan", "petualangan", "persahabatan"], "length_min": 5, "time": "20:00"},
     "jobs": {"roles": [], "min_salary": 0, "locations": [], "remote_ok": True, "auto_apply": False, "auto_reply_invites": True,

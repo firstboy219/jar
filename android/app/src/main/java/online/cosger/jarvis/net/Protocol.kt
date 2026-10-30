@@ -89,7 +89,9 @@ sealed interface ServerEvent {
         override val sessionId: String? = null
     }
     /** ADR-087: the live trip (its next leg) for the ongoing notification; status done/cancelled clears it. */
-    data class Trip(val id: Long, val status: String, val title: String, val text: String, val route: String) : ServerEvent { override val sessionId: String? = null }
+    data class Trip(val id: Long, val status: String, val title: String, val text: String, val route: String, val leg: String = "", val driver: String = "") : ServerEvent {
+        override val sessionId: String? = null
+    }
     /** ADR-079: a project asks the owner to pick one option (status "open"), or the pick was settled (answered / expired / cancelled). */
     data class OwnerChoice(val id: Long, val status: String, val title: String, val prompt: String, val options: List<ChoiceOption>,
                            val expiresInS: Long) : ServerEvent { override val sessionId: String? = null }
@@ -203,7 +205,7 @@ object Protocol {
             "settings" -> ServerEvent.SettingsChanged(o.str("key"))
             "guide" -> ServerEvent.Guide(o["id"]?.jsonPrimitive?.longOrNull ?: 0, o.str("mode"), o.str("goal"), o.str("instruksi"), o.str("target"), o.str("status"),
                 o["n"]?.jsonPrimitive?.intOrNull ?: 0)
-            "trip" -> ServerEvent.Trip(o["id"]?.jsonPrimitive?.longOrNull ?: 0, o.str("status"), o.str("title"), o.str("text"), o.str("route"))
+            "trip" -> ServerEvent.Trip(o["id"]?.jsonPrimitive?.longOrNull ?: 0, o.str("status"), o.str("title"), o.str("text"), o.str("route"), o.str("leg"), o.str("driver"))
             "owner_choice" -> ServerEvent.OwnerChoice(
                 o.long("id") ?: return null, o.str("status").ifEmpty { "open" }, o.str("title"), o.str("prompt"),
                 o["options"]?.jsonArray?.mapNotNull {

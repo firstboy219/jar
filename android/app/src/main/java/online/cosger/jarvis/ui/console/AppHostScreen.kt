@@ -159,6 +159,18 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
     @JavascriptInterface fun syncAlarm(json: String?) { online.cosger.jarvis.alarm.AlarmScheduler.save(view.context, json.orEmpty().take(2000)) }
     @JavascriptInterface fun speak(text: String?) { val t = text.orEmpty().take(6000); view.post { (view.context.applicationContext as JarvisApp).engine.speakText(t) } }
     @JavascriptInterface fun stopSpeaking() { view.post { (view.context.applicationContext as JarvisApp).engine.stopSpeaking() } }
+    /** Fingerprint approval (ADR-087): the page keeps the admin password here after a successful approval it typed … */
+    @JavascriptInterface fun rememberPassword(pw: String?) { (view.context.applicationContext as JarvisApp).engine.settingsStore.setAdminSecret(pw) }
+    @JavascriptInterface fun hasBiometric(): Boolean = (view.context.applicationContext as JarvisApp).engine.settingsStore.adminSecret() != null
+    /** … and gets it back only after a strong biometric (or the phone's own lock); "" when cancelled or the phone has no lock. */
+    @JavascriptInterface fun biometric(reason: String?) {
+        val secret = (view.context.applicationContext as JarvisApp).engine.settingsStore.adminSecret()
+        view.post {
+            online.cosger.jarvis.ui.console.unlockSecret(view.context, reason.orEmpty().take(120), secret) { pw ->
+                view.evaluateJavascript("window.__jarvisBio && window.__jarvisBio(${org.json.JSONObject.quote(pw)})", null)
+            }
+        }
+    }
     /** The phone's last known place as {"lat","lon"} — for "tandai di sini" — or "" when it is not known or not allowed. */
     @JavascriptInterface fun location(): String {
         val app = view.context.applicationContext as JarvisApp
