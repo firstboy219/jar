@@ -84,7 +84,8 @@ def clean(data: dict) -> dict:
             raise ProjectError(f"peran {role}: mulai 0–180 menit sebelum jam pilihan")
         roles.append({"role": role, "brief": str(r.get("brief") or "").strip()[:3000], "workers": 1 if app else max(1, min(5, workers)),
                       "model": model, "web": bool(r.get("web")) and not app, "app": app,   # the phone has one screen: one app worker
-                      "after_prev": after_prev, "ask_owner": ask_owner, "start_offset_min": offset})
+                      "after_prev": after_prev, "ask_owner": ask_owner, "start_offset_min": offset,
+                      "per_item": bool(r.get("per_item")) and bool(app) and after_prev})   # once per item of the previous stage (one job → one application)
     if not roles:
         raise ProjectError("tambahkan minimal satu peran pekerja")
     for r, st in zip(roles, project_flow.stages_of(roles)):
@@ -154,10 +155,10 @@ async def save(data: dict, actor: str, project_id: int | None = None) -> dict:
                 """INSERT INTO projects (name, goal, schedule, at_time, weekday, next_run) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""",
                 p["name"], p["goal"], p["schedule"], p["at_time"], p["weekday"], nxt)
         for i, r in enumerate(p["roles"]):
-            await conn.execute("""INSERT INTO project_roles (project_id, role, brief, workers, model, web, sort, app, stage, after_prev, ask_owner, start_offset_min)
-                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+            await conn.execute("""INSERT INTO project_roles (project_id, role, brief, workers, model, web, sort, app, stage, after_prev, ask_owner, start_offset_min, per_item)
+                                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
                                row["id"], r["role"], r["brief"], r["workers"], r["model"], r["web"], i, r["app"], r["stage"], r["after_prev"],
-                               r["ask_owner"], r["start_offset_min"])
+                               r["ask_owner"], r["start_offset_min"], r["per_item"])
     await audit.record(actor, "project.saved", f"project:{row['id']}", name=p["name"])
     return await get(row["id"])
 
@@ -225,6 +226,49 @@ def phone_goal(p: dict, n_run: int, r: dict, context: str) -> str:
             + (f" — tujuan proyek: {p['goal']}" if p["goal"] else "") + (f"\n{context}" if context else ""))
 
 
+MAX_ITEMS = 10
+
+
+def clean_items(data) -> list[dict]:
+    """The items the light brain read out of the previous stage (jobs: position, company, place, pay, link), deduplicated. Pure."""
+    rows = data.get("item") if isinstance(data, dict) else data
+    out, seen = [], set()
+    for x in rows if isinstance(rows, list) else []:
+        if not isinstance(x, dict):
+            continue
+        it = {k: " ".join(str(x.get(k) or "").split())[:160] for k in ("judul", "perusahaan", "lokasi", "gaji", "link", "catatan")}
+        key = (it["judul"].lower(), it["perusahaan"].lower())
+        if not it["judul"] or key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out[:MAX_ITEMS]
+
+
+async def item_goals(p: dict, n_run: int, r: dict, context: str) -> list[str]:
+    """The previous stage's list read into items by the light brain (master flow), then one phone goal per item."""
+    from . import master
+    if not context.strip():
+        return []
+    msgs = [{"role": "system", "content": (
+        "Dari HASIL TAHAP SEBELUMNYA, ambil daftar item (mis. lowongan kerja) apa adanya — jangan menambah item yang tidak tertulis. "
+        f'Urutkan dari yang paling sesuai dengan tujuan. JSON: {{"item": [{{"judul": "posisi", "perusahaan": "", "lokasi": "", "gaji": "", "link": "", '
+        f'"catatan": "singkat"}}]}} (maks {MAX_ITEMS}).')},
+        {"role": "user", "content": f"TUJUAN PROYEK: {p['goal'] or p['name']}\n\n{context[:9000]}"}]
+    res = await master.run(master.Job("proyek", "uraikan-item", f"uraikan daftar untuk {r['role']}", trigger="schedule", messages=msgs,
+                                      json_out=True, max_tokens=2500))
+    items = clean_items(res["result"]) if res["status"] == "done" else []
+    remembered = await phone_agent.remembered_answers(r["app"])
+    goals = []
+    for i, it in enumerate(items, 1):
+        line = " · ".join(x for x in (it["judul"], it["perusahaan"], it["lokasi"], it["gaji"], it["link"]) if x)
+        goals.append(f"[PROYEK: {p['name']} · run #{n_run} · peran {r['role']} · item {i}/{len(items)}] {r['brief'] or r['role']}"
+                     + (f" — tujuan proyek: {p['goal']}" if p["goal"] else "")
+                     + f"\nITEM INI: {line}" + (f" ({it['catatan']})" if it["catatan"] else "")
+                     + ("\nJAWABAN PEMILIK YANG SUDAH ADA (pakai bila pertanyaannya sama):\n" + remembered if remembered else ""))
+    return goals
+
+
 async def spawn_roles(p: dict, n_run: int, roles: list[dict], actor: str, trigger: str, context: str = "", asks_next: bool = False) -> tuple[list, list]:
     """Start the workers of `roles` (one stage). A project run never asks for the admin password (the owner's rule, ADR-079): the phone worker
     starts with the project — its own safety rules (no PIN/OTP, only the approved app, no top-ups) still hold."""
@@ -232,6 +276,13 @@ async def spawn_roles(p: dict, n_run: int, roles: list[dict], actor: str, trigge
     spawned, asked = [], []
     project_id = p["id"]
     for r in roles:
+        if r.get("app") and r.get("per_item"):   # one phone run per item the previous stage found (each job its own application)
+            for goal in await item_goals(p, n_run, r, context):
+                pr = await phone_agent.request(goal, r["app"], actor, f"project-{project_id}", scheduled=True,
+                                               by="jadwal" if trigger == "schedule" else "proyek",
+                                               project={"project_id": project_id, "role_id": r["id"], "run": n_run, "model": r["model"]})
+                (spawned.append(pr["task_id"]) if pr.get("task_id") else asked.append(pr["id"]))
+            continue
         if r.get("app"):
             pr = await phone_agent.request(phone_goal(p, n_run, r, context), r["app"], actor, f"project-{project_id}", scheduled=True,
                                            by="jadwal" if trigger == "schedule" else "proyek",

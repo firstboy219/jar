@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from . import db, home, needs, places, workers
+from . import audit, db, home, needs, places, workers
 from .appauth import actor, owner, require_password
 from .location import Location, remember_last
 
@@ -103,6 +103,45 @@ async def app_need_answer(kind: str, item_id: int, body: AnswerIn, device: dict 
         return jsonable(await needs.answer(kind, item_id, who, approve=body.approve, option=body.option, text=body.text))
     except needs.NeedError as e:
         raise HTTPException(409, str(e))
+
+
+# ---------- approvals with the phone's own lock (owner 2026-10-31) ----------
+
+class ApprovalKeyIn(BaseModel):
+    public_key: str = Field(min_length=60, max_length=400)
+    password: str = Field(min_length=1, max_length=200)
+
+
+@router.get(API + "/approval/key")
+async def api_approval_key_state(device: dict = Depends(owner)):
+    row = await db.pool().fetchrow("SELECT created_at, last_used FROM device_keys WHERE device_id = $1", device["id"])
+    return jsonable({"enrolled": bool(row), "since": row["created_at"] if row else None, "last_used": row["last_used"] if row else None})
+
+
+@router.post(API + "/approval/key")
+async def api_approval_key_register(body: ApprovalKeyIn, device: dict = Depends(owner)):
+    """Once per phone: the admin password, then approvals are signed with the phone's PIN / fingerprint."""
+    from . import appauth
+    if body.password.startswith(appauth.PHONE_PREFIX):
+        raise HTTPException(422, "pendaftaran pertama butuh password admin")
+    try:
+        __import__("base64").b64decode(body.public_key, validate=True)
+    except ValueError:
+        raise HTTPException(422, "kunci HP tidak valid")
+    await require_password(device, body.password, "approval_key")
+    await db.pool().execute("""INSERT INTO device_keys (device_id, public_key) VALUES ($1, $2)
+                               ON CONFLICT (device_id) DO UPDATE SET public_key = EXCLUDED.public_key, created_at = now(), last_used = NULL""",
+                            device["id"], body.public_key)
+    await audit.record(actor(device), "app.approval_key", f"device:{device['id']}")
+    return {"enrolled": True}
+
+
+@router.post(API + "/approval/nonce")
+async def api_approval_nonce(device: dict = Depends(owner)):
+    from . import appauth
+    if not await db.pool().fetchval("SELECT 1 FROM device_keys WHERE device_id = $1", device["id"]):
+        raise HTTPException(409, "HP ini belum didaftarkan untuk persetujuan")
+    return {"nonce": appauth.new_nonce(device)}
 
 
 # ---------- missions ----------

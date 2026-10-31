@@ -47,7 +47,7 @@ FEATURES: list[dict] = [
     {"id": "rekap", "label": "Rekap harian", "icon": "recap", "group": "Kerja", "route": "#/rekap", "slots": ["malam"]},
     {"id": "misi", "label": "Misi", "icon": "layers", "group": "Kerja", "route": "#/misi", "slots": []},
     {"id": "karier", "label": "Karier JobStreet", "icon": "job", "group": "Kerja", "route": "#/karier", "slots": ["pagi", "malam"]},
-    {"id": "brief", "label": "Brief pagi", "icon": "news", "group": "Info hari ini", "route": "#/brief", "slots": ["subuh", "pagi"]},
+    {"id": "brief", "label": "Cek berita", "icon": "news", "group": "Info hari ini", "route": "#/brief", "slots": ["subuh", "pagi"]},
     {"id": "bioskop", "label": "Film bioskop", "icon": "film", "group": "Info hari ini", "route": "#/bioskop", "slots": ["sore", "malam", "akhir-pekan"]},
     {"id": "bisnis", "label": "Bisnis hari ini", "icon": "chart", "group": "Bisnis", "route": "#/bisnis", "slots": ["kerja", "siang", "sore"]},
     {"id": "tren", "label": "Tren & strategi", "icon": "invest", "group": "Bisnis", "route": "#/tren", "slots": []},

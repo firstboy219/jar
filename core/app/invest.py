@@ -356,6 +356,25 @@ async def state() -> dict:
             "allocation": allocation(snap["data"]) if snap else {}}
 
 
+@brief.context("investasi")
+async def _brief() -> str:
+    """For Cek berita's opportunities: the mix of his holdings (shares, not amounts), how it moved, and what is left in his investing pot."""
+    snap = await db.pool().fetchrow("SELECT at, data FROM invest_snapshots ORDER BY id DESC LIMIT 1")
+    parts = []
+    if snap and snap["data"].get("aset"):
+        mix = allocation(snap["data"])
+        parts.append("porsi portofolio: " + ", ".join(f"{k} {v:.0f}%" for k, v in sorted(mix.items(), key=lambda x: -x[1])))
+        names = [a["nama"] for a in snap["data"]["aset"]][:8]
+        parts.append("aset: " + ", ".join(names))
+    b = await pot_budget()
+    if b:
+        parts.append(f"sisa pos investasi periode gaji ini {rp_short(b['left'])}")
+    s = await appsettings.get("invest")
+    if s.get("risk"):
+        parts.append(f"profil risiko: {s['risk']}")
+    return "; ".join(parts)
+
+
 @home.provider("invest")
 async def _home(m: home.Moment) -> list[dict]:
     prop = await db.pool().fetchrow("SELECT data, created_at FROM invest_proposals WHERE status = 'new' AND created_at > now() - make_interval(hours => $1) ORDER BY id DESC LIMIT 1",

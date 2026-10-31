@@ -1555,6 +1555,27 @@ menentukan berat/ringan/non-AI)".
   voiced once by ElevenLabs through OpenRouter in JARVIS's own voice setting (model and character; eleven-v4 when that is not ElevenLabs; long ones in sentence pieces),
   through the master flow, and kept for good in /data/voice/quran (a new voice or text makes a new file); the reader fetches the next
   verse's audio while the qari recites, and falls back to the device's own voice when the cloud voice cannot be had (no key, budget).
+- **Approvals with the phone's own lock** (owner 2026-10-31: "Approval dibikin dari apps saja pakai pin/konfirmasi hp"; supersedes the
+  kept-password fingerprint): APK ≥ 0.28 makes an EC P-256 signing key in the Android Keystore that can only be used after the phone's
+  PIN / pattern / fingerprint and never leaves it; the owner registers its public half once with the admin password (that request is
+  approved by the same password). Each approval then asks the server for a one-time code (2 minutes, for this device only), the phone
+  signs "jarvis-approve:<code>" after its lock, and `require_password` accepts "hp1:<code>:<signature>" in place of the password — a code
+  works once, another device's or an unregistered key's signature is refused and counts as a wrong try. In a browser the app says
+  approvals are given in the app on the phone; an older APK keeps the old way until it is updated; the admin site is unchanged.
+- **Cek berita** (was Brief pagi; owner 2026-10-31: "bukan lg listing berita tp smartnews bisa menyimpulkan situasi saat ini dan
+  mengumpulkan indikator reasonnya, dan peluang apa yg bisa diambil … yg menguntungkan bagi ekonomi saya"): the same news and more market
+  indicators (IHSG, rupiah, gold, S&P 500, Nasdaq, Bitcoin, Brent, the US 10-year yield, the dollar index), with what JARVIS knows of his
+  money (pots, his holdings' mix and investing pot, his businesses), go to the heavy brain (no free endpoint) for an analysis: the
+  situation and its mood, 2–4 themes each with indicators (numbers from the data or the news only), reasons linked to their news and what
+  it means for him, 2–5 opportunities (what, why, linked to emas/saham/kripto/bisnis/karier…, horizon, risk, how sure — never an order to
+  buy or sell), and what to watch.
+- **Applying through the JobStreet app, one job at a time** (owner 2026-10-31): a project role that operates a phone app can run once PER
+  ITEM of the previous stage (`per_item`): the light brain reads the previous stage's results into items (position, company, place, pay,
+  link — nothing added), and one phone run per item starts (one after another: the phone has one screen), within the project's rule (no
+  admin password, the app's own guards). For JobStreet the agent searches the job by title + company in the app, skips one that is not
+  there or already applied to, applies with the saved CV, answers screening questions from the owner's earlier answers or profile and
+  asks him (tanya_pemilik) what it does not know; his answers are kept per app and given to the next runs. The search stage stays as it
+  was. The chat's project tool can now set a role's app, "after the previous one" and per item.
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

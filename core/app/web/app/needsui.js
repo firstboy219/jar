@@ -1,6 +1,6 @@
 // What waits for the owner (ADR-087), drawn the same on the front page and on Butuh kamu: a run on his phone (route, the learned routine's
 // track record, the rules it keeps; admin password), an approval, a pick between options (★ the one he usually takes), a question.
-import { html, icon, post, raw, render, sheet, toast } from './core.js';
+import { get, html, icon, post, raw, render, sheet, toast } from './core.js';
 
 let byKey = new Map();
 const key = (kind, id) => `${kind}:${id}`;
@@ -99,9 +99,42 @@ function webCard(it, compact) {
 const host = () => window.JarvisHost;
 
 /** {password, remember, bio}: the fingerprint first when the phone keeps the password (APK ≥ 0.26), else typed. */
+/** The phone's own lock (PIN / pattern / fingerprint) signs a one-time code from the server (APK ≥ 0.28). The first time, the admin password
+ *  registers this phone once — and also approves this request. Returns what goes where the password would, or null. */
+async function phoneApproval(title, force = false) {
+  const st = force ? { enrolled: false } : await get('/api/v1/app/approval/key').catch(() => ({ enrolled: false }));
+  if (!st.enrolled) {
+    const pub = host().approvalKey();
+    if (!pub) { toast('Pasang kunci layar (PIN/pola/sidik jari) di HP dulu — persetujuan memakai kunci layar HP.', true); return null; }
+    const r = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:14px">
+      <span class="k amber">Persetujuan dengan kunci layar HP</span><h3 style="margin:0;font:600 20px var(--f-head)">${force ? 'Daftarkan ulang HP ini' : 'Aktifkan sekali'}</h3>
+      <p class="small" style="margin:0">Mulai sekarang setiap persetujuan cukup PIN/sidik jari HP. Masukkan password admin <b>sekali</b> untuk mendaftarkan HP ini (dan menyetujui: ${title}).</p>
+      <label class="field">Password admin <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+      <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn amber">Daftarkan &amp; setujui</button></div></form>`));
+    if (!r?.password) return null;
+    await post('/api/v1/app/approval/key', { public_key: pub, password: r.password });
+    toast('HP terdaftar — berikutnya cukup PIN/sidik jari.');
+    return r.password;
+  }
+  const { nonce } = await post('/api/v1/app/approval/nonce');
+  const sig = await new Promise((ok) => { window.__jarvisApprove = ok; host().approvalSign(nonce, title); });
+  return sig ? `hp1:${nonce}:${sig}` : null;
+}
+
 async function askPassword(title, { kicker = 'Izin operasi HP', button = 'Setujui &amp; jalankan',
   note = 'Dari jadwal, proyek, atau kebiasaan yang kamu setujui: tanpa password, pengaman tetap sama.' } = {}) {
-  if (host()?.hasBiometric?.()) {
+  if (host()?.approvalSign) {   // the app on the phone: its own lock (owner 2026-10-31: "Approval dibikin dari apps saja pakai pin/konfirmasi hp")
+    const token = await phoneApproval(title);
+    return token ? { password: token, phone: token.startsWith('hp1:') } : null;
+  }
+  if (!host()) {   // a browser: approvals are given in the app on the phone
+    await sheet(String(html`<div style="display:flex;flex-direction:column;gap:12px"><span class="k amber">${kicker}</span>
+      <h3 style="margin:0;font:600 20px var(--f-head)">${title}</h3>
+      <p class="sub" style="margin:0">Persetujuan diberikan dari aplikasi JARVIS di HP dengan PIN atau sidik jari HP — tidak diketik di browser.</p>
+      <button class="btn" data-close="">Mengerti</button></div>`));
+    return null;
+  }
+  if (host()?.hasBiometric?.()) {   // an older app (before APK 0.28): the kept password behind the fingerprint
     const pw = await new Promise((ok) => { window.__jarvisBio = ok; host().biometric(title); });
     if (pw) return { password: pw, bio: true };
   }
@@ -115,7 +148,8 @@ async function askPassword(title, { kicker = 'Izin operasi HP', button = 'Setuju
   return r && r.password ? { password: r.password, remember: !!r.remember } : null;
 }
 
-/** Ask for the admin password (fingerprint when kept), then run `fn(password)`; a wrong kept password is forgotten. Null when cancelled. */
+/** The owner's approval (the phone's lock in the app), then `fn(approval)`. A phone signature the server no longer knows (the app was
+ *  reinstalled) → this phone is registered again once and `fn` runs with that. Null when cancelled. */
 export async function withPassword(title, fn, opts = {}) {
   const pw = await askPassword(title, opts);
   if (!pw) return null;
@@ -125,6 +159,10 @@ export async function withPassword(title, fn, opts = {}) {
     return r;
   } catch (e) {
     if (pw.bio && e.status === 422) host()?.rememberPassword?.('');
+    if (pw.phone && e.status === 422 && /HP tidak sah/.test(e.message || '')) {
+      const again = await phoneApproval(title, true);
+      return again ? fn(again) : null;
+    }
     throw e;
   }
 }

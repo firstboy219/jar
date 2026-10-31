@@ -411,7 +411,11 @@ TOOLS = [
             "hari": {"type": "integer", "description": "0=Senin … 6=Minggu, untuk weekly"},
             "peran": {"type": "array", "items": {"type": "object", "properties": {
                 "role": {"type": "string"}, "brief": {"type": "string"}, "workers": {"type": "integer"},
-                "model": {"type": "string"}, "web": {"type": "boolean"}}, "required": ["role"]}}},
+                "model": {"type": "string"}, "web": {"type": "boolean"},
+                "app": {"type": "string", "description": "aplikasi HP yang dioperasikan peran ini (gojek, kopikenangan, qpon, pluang, jobstreet), bila ada"},
+                "after_prev": {"type": "boolean", "description": "mulai setelah peran sebelumnya selesai (memakai hasilnya)"},
+                "per_item": {"type": "boolean", "description": "peran aplikasi HP: dijalankan sekali per item hasil peran sebelumnya (mis. satu lamaran per lowongan)"}},
+                "required": ["role"]}}},
             "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "close_stage",

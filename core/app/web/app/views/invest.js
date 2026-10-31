@@ -26,7 +26,7 @@ function settingsForm(st) {
     <div class="g2"><label class="field">Profil risiko<select name="risk">${['rendah', 'sedang', 'tinggi'].map((r) => html`<option ${st.risk === r ? 'selected' : ''}>${r}</option>`)}</select></label>
       <label class="field">Cek tiap<select name="check_day">${['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((d, i) => html`<option value="${d}" ${st.check_day === d ? 'selected' : ''}>${['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'][i]}</option>`)}</select></label></div>
     <div class="g2"><label class="field">Jam<input name="check_at" type="time" value="${st.check_at}"></label><label class="field">Tujuan<input name="goal" value="${st.goal}" placeholder="mis. dana pendidikan 2035"></label></div>
-    <button class="btn" data-act="saveSettings">Simpan</button><span class="small">${icon('lock', 12)} Menaikkan batas atau melonggarkan pengaman harga butuh password admin.</span></form></details>`;
+    <button class="btn" data-act="saveSettings">Simpan</button><span class="small">${icon('lock', 12)} Menaikkan batas atau melonggarkan pengaman harga butuh persetujuanmu (PIN/sidik jari HP).</span></form></details>`;
 }
 
 // Eksekusi (mockup 31): his pick being carried out in Pluang — the checks passed before the app was opened, each order, the phone's live
@@ -94,7 +94,7 @@ export default {
             <span class="sub">${o.alasan}</span>${o.risiko ? html`<span class="small t-amber2">Risiko: ${o.risiko}</span>` : ''}${o.disarankan ? html`<span class="small t-green2">Disarankan JARVIS</span>` : ''}
             <button class="btn ${o.aksi.length ? 'primary' : ''}" data-act="choose" data-o="${o.id}">${o.aksi.length ? `Pilih ${o.id} — JARVIS kerjakan di Pluang` : 'Pilih: tahan dulu'}</button></div>`)}
           <button class="btn" data-act="discuss">${icon('chat', 16)} Diskusi dulu</button>
-          <span class="small" style="padding:0 4px">${icon('lock', 12)} Butuh password admin. Batas Rp${(s.settings.limit || 0).toLocaleString('id-ID')} per opsi; dibatalkan bila harga bergeser > ${String(s.settings.price_guard_pct).replace('.', ',')}% dari saat dibaca. PIN Pluang kamu yang ketik.</span>`
+          <span class="small" style="padding:0 4px">${icon('lock', 12)} Butuh persetujuanmu (PIN/sidik jari HP). Batas Rp${(s.settings.limit || 0).toLocaleString('id-ID')} per opsi; dibatalkan bila harga bergeser > ${String(s.settings.price_guard_pct).replace('.', ',')}% dari saat dibaca. PIN Pluang kamu yang ketik.</span>`
           : p ? html`<div class="card ${p.status === 'done' ? 'green' : p.status === 'failed' ? 'red' : ''}"><span class="k">Terakhir: ${{ done: 'selesai', failed: 'gagal', running: 'berjalan', expired: 'kedaluwarsa', new: 'kedaluwarsa' }[p.status] || p.status}</span>
             <span class="small">${p.chosen ? `Pilihan ${p.chosen}` : ''}${p.result?.tahan ? ' · ditahan' : ''}</span>
             ${(p.result?.berhasil || []).map((b) => html`<span class="small">✓ ${b.jenis} ${b.aset} ${rupiah(Number(b.nominal) || 0)}${b.harga ? ` @ ${rupiah(Number(b.harga))}` : ''}</span>`)}

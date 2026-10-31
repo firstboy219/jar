@@ -87,11 +87,15 @@ def test_the_brief_parses_feeds_and_links_its_sources():
     assert brief.parse_feed("bukan xml", "x", now) == []
     assert brief.change_pct([100, None, 101.5]) == 1.5 and brief.change_pct([None]) is None
     news = {"indonesia": items, "dunia": [{"title": "Minyak naik", "source": "BBC", "link": "https://b/1"}]}
-    out = brief.link_sources({"perlu": [{"judul": "Suku bunga", "isi": "cicilan tetap", "nomor": "INDONESIA 1"}],
-                              "dunia": ["Minyak naik 4%"], "indonesia": [{"isi": "x", "nomor": "INDONESIA 9"}], "ucapan": "Pagi."}, news)
-    assert out["perlu"][0]["link"] == "https://a/1" and out["perlu"][0]["sumber"] == "Antara"
-    assert out["dunia"][0]["isi"] == "Minyak naik 4%" and out["dunia"][0]["link"] == ""
-    assert out["indonesia"][0]["link"] == "" and out["ucapan"] == "Pagi."
+    out = brief.clean_analysis({"judul": "Suku bunga ditahan", "situasi": "Stabil.", "suasana": "aneh",
+                                "tema": [{"judul": "Suku bunga", "kesimpulan": "BI menahan", "indikator": [{"nama": "BI rate", "nilai": "6%"}],
+                                          "alasan": [{"isi": "BI tahan suku bunga", "nomor": "INDONESIA 1"}, "Minyak naik 4%", {"isi": "x", "nomor": "INDONESIA 9"}]}],
+                                "peluang": [{"aksi": "Tambah emas sedikit", "kaitan": "emas", "yakin": "pasti", "horizon": "besok"}, {"kenapa": "tanpa aksi"}],
+                                "waspada": [{"isi": "Minyak naik", "nomor": "DUNIA 1"}], "ucapan": "Pagi."}, news)
+    assert out["suasana"] == "campuran" and out["tema"][0]["alasan"][0]["link"] == "https://a/1" and out["tema"][0]["alasan"][0]["sumber"] == "Antara"
+    assert out["tema"][0]["alasan"][1] == {"isi": "Minyak naik 4%", "sumber": "", "link": ""} and out["tema"][0]["alasan"][2]["link"] == ""
+    assert out["peluang"] == [{"aksi": "Tambah emas sedikit", "kenapa": "", "risiko": "", "kaitan": "emas", "horizon": "minggu ini", "yakin": "sedang"}]
+    assert out["waspada"][0]["link"] == "https://b/1" and out["ucapan"] == "Pagi."
 
 
 def test_weather_rain_window_and_clock():
@@ -199,8 +203,10 @@ async def test_the_brief_is_written_through_the_master_flow(pool, monkeypatch):
 
     async def fake(category, body, **kw):
         asked.append(category)
-        return {"choices": [{"message": {"content": '{"perlu": [{"judul": "Biaya admin naik", "isi": "margin turun", "nomor": "EKONOMI 1"}],'
-                                                    ' "indonesia": [{"isi": "x", "nomor": "INDONESIA 1"}], "dunia": [], "ucapan": "Selamat pagi."}'}}]}
+        return {"choices": [{"message": {"content": '{"judul": "Biaya jualan online naik", "situasi": "Marketplace menaikkan biaya.", "suasana": "waspada",'
+                                                    ' "tema": [{"judul": "Biaya marketplace", "alasan": [{"isi": "Biaya admin naik", "nomor": "EKONOMI 1"}],'
+                                                    ' "dampak": "margin Autotoko turun"}], "peluang": [{"aksi": "Dorong penjualan lewat website sendiri",'
+                                                    ' "kaitan": "bisnis"}], "ucapan": "Selamat pagi."}'}}]}
     monkeypatch.setattr(gateway, "complete", fake)
     sent = []
 
@@ -209,9 +215,10 @@ async def test_the_brief_is_written_through_the_master_flow(pool, monkeypatch):
             sent.append(ev)
     hub.tap(tap)
     d = await brief.compose()
-    assert asked == ["ringan"] and d["perlu"][0]["link"] == "https://n/1" and d["markets"][0]["change"] == 1.0 and d["weather"]
-    assert sent and sent[-1]["route"] == "#/brief" and (await brief.today())["data"]["ucapan"] == "Selamat pagi."
-    assert await pool.fetchval("SELECT lane FROM flow_runs WHERE feature = 'brief'") == "ringan"
+    assert asked == ["berat"] and d["tema"][0]["alasan"][0]["link"] == "https://n/1" and d["markets"][0]["change"] == 1.0 and d["weather"]
+    assert d["peluang"][0]["kaitan"] == "bisnis" and d["suasana"] == "waspada"
+    assert sent and sent[-1]["route"] == "#/brief" and sent[-1]["title"] == "Cek berita siap" and (await brief.today())["data"]["ucapan"] == "Selamat pagi."
+    assert await pool.fetchval("SELECT lane FROM flow_runs WHERE feature = 'brief'") == "berat"     # an analysis: the heavy brain
 
 
 @needs_db

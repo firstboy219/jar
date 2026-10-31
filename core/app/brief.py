@@ -1,9 +1,12 @@
-"""Brief pagi (ADR-087): every morning (05.45 by default) the state of Indonesia and the world, the markets, the weather — and first, the
-few things that touch the owner himself (his business, his investments, his trip, his day).
+"""Cek berita (ADR-087; was "Brief pagi" — owner 2026-10-31: "bukan lg listing berita tp smartnews bisa menyimpulkan situasi saat ini dan
+mengumpulkan indikator reasonnya, dan peluang apa yg bisa diambil dari situasi tersebut yg menguntungkan bagi ekonomi saya").
 
-Gathering is a fixed procedure (RSS from several newsrooms, market quotes, Open-Meteo); writing it is one job of the master flow (Hermes
-decides which brain; the light one normally, the heavy one when the light one fails). Each item keeps its source link. The result is kept
-per day and the phone gets a notification that opens it."""
+Every morning (05.45 by default, or when he asks) the news of the last day from several newsrooms and the market indicators are gathered (a
+fixed procedure, no AI), then the heavy brain (master flow; personal context, so never a free endpoint) reads them together with what JARVIS
+knows of his money — salary pots, his investments' mix, his businesses, his job search — and writes an ANALYSIS, not a list: what the
+situation is, the themes behind it each with its indicators (numbers from the market data or the news only) and the reasons (each linked to
+its news), what it means for him, and the opportunities he could take (with the risk and how sure it is) — never an order to buy or sell.
+Kept per day; the phone gets a notice that opens it."""
 
 import asyncio
 import html as htmlmod
@@ -31,7 +34,8 @@ FEEDS = {
     "ekonomi": [("CNBC Indonesia", "https://www.cnbcindonesia.com/news/rss"), ("Antara Ekonomi", "https://www.antaranews.com/rss/ekonomi.xml")],
     "dunia": [("BBC", "https://feeds.bbci.co.uk/news/world/rss.xml"), ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml")],
 }
-MARKETS = [("IHSG", "^JKSE"), ("Rupiah/USD", "IDR=X"), ("Emas", "GC=F"), ("S&P 500", "^GSPC"), ("Bitcoin", "BTC-USD")]
+MARKETS = [("IHSG", "^JKSE"), ("Rupiah/USD", "IDR=X"), ("Emas", "GC=F"), ("S&P 500", "^GSPC"), ("Nasdaq", "^IXIC"), ("Bitcoin", "BTC-USD"),
+           ("Minyak Brent", "BZ=F"), ("Imbal hasil obligasi AS 10th", "^TNX"), ("Indeks dolar (DXY)", "DX-Y.NYB")]
 PER_FEED = 12
 MAX_AGE_H = 30
 
@@ -130,46 +134,83 @@ async def gather() -> dict:
     return {"news": news, "markets": quotes, "weather": await weather.today_text(), "about": about}
 
 
-def prompt(g: dict, owner_facts: list[str], topics: list[str]) -> list[dict]:
+KINDS = ("emas", "saham_as", "kripto", "reksa_dana", "tabungan", "bisnis", "karier", "belanja", "lainnya")
+
+
+def news_lines(g: dict) -> list[str]:
     lines = []
     for k, items in g["news"].items():
         lines.append(f"[{k.upper()}]")
-        lines += [f"{i}. {x['title']} — {x['summary'][:160]} ({x['source']})" for i, x in enumerate(items[:16], 1)]
-    mk = "; ".join(f"{q['label']} {q['change']:+.2f}%" for q in g["markets"] if q.get("change") is not None)
-    sys = ("Kamu menulis BRIEF PAGI untuk pemilik JARVIS: pengusaha di Indonesia (Bogor–Jakarta) yang juga berinvestasi. Pakai HANYA berita yang "
-           "diberikan — jangan menambah fakta. Bahasa Indonesia, singkat, tenang, langsung ke inti. Kembalikan JSON:\n"
-           '{"perlu": [{"judul": "…", "isi": "1–2 kalimat: apa artinya BAGI PEMILIK dan apa yang sebaiknya ia lakukan", "nomor": "INDONESIA 3"}] (maks 3, '
-           'hanya yang benar-benar menyentuh bisnis/investasi/perjalanan/hari pemilik; boleh kosong),\n'
-           ' "indonesia": [{"isi": "1 kalimat", "nomor": "INDONESIA 1"}] (3–4 terpenting), "ekonomi": [{"isi": "…", "nomor": "EKONOMI 2"}] (2–3),'
-           ' "dunia": [{"isi": "…", "nomor": "DUNIA 1"}] (2–3), "ucapan": "2–3 kalimat pembuka untuk DIBACAKAN (sebut 1 hal paling penting)"}\n'
-           '"nomor" = bagian dan nomor berita sumbernya persis seperti di daftar.')
-    user = (f"Tentang pemilik:\n" + "\n".join(owner_facts[:15] + g["about"]) + (f"\nTopik yang ia ikuti: {', '.join(topics)}" if topics else "")
-            + f"\n\nCuaca: {g['weather'] or '-'}\nPasar kemarin: {mk or '-'}\n\nBERITA (24 jam terakhir):\n" + "\n".join(lines))
+        lines += [f"{i}. {x['title']} — {x['summary'][:220]} ({x['source']})" for i, x in enumerate(items[:18], 1)]
+    return lines
+
+
+def market_lines(g: dict) -> list[str]:
+    return [f"{q['label']}: {q['last']} ({q['change']:+.2f}% 5 hari)" if q.get("change") is not None else f"{q['label']}: {q['last']}"
+            for q in g["markets"] if q.get("last") is not None]
+
+
+def prompt(g: dict, owner_facts: list[str], topics: list[str]) -> list[dict]:
+    sys = ("Kamu analis JARVIS untuk pemilik: karyawan & pengusaha di Indonesia (Bogor–Jakarta) yang berinvestasi (emas, saham AS, kripto, reksa "
+           "dana lewat Pluang) dan punya bisnis online. Tugasmu BUKAN merangkum berita satu per satu, tetapi MENYIMPULKAN SITUASI SAAT INI dari semua "
+           "berita dan angka pasar, menjelaskan alasannya dengan indikator, dan menunjukkan PELUANG yang menguntungkan ekonomi pemilik.\n"
+           "ATURAN: pakai HANYA berita dan angka yang diberikan — jangan menambah fakta atau angka. Tiap alasan menunjuk nomor berita sumbernya. "
+           "Indikator memakai angka dari DATA PASAR atau yang tertulis di berita. Peluang = hal yang bisa ia pertimbangkan, dengan risikonya; "
+           "bukan perintah beli/jual, dan sesuaikan dengan konteks keuangannya (pos gaji, porsi investasi, bisnisnya). Bahasa Indonesia, jelas, "
+           "tenang. Kembalikan JSON:\n"
+           '{"judul": "satu kalimat inti situasi hari ini",\n'
+           ' "situasi": "3–5 kalimat: keadaan ekonomi & dunia sekarang dan arahnya",\n'
+           ' "suasana": "positif|campuran|waspada",\n'
+           ' "tema": [{"judul": "…", "kesimpulan": "1–2 kalimat", "indikator": [{"nama": "…", "nilai": "angka/arah persis dari data", "arti": "singkat"}], '
+           '"alasan": [{"isi": "1 kalimat", "nomor": "EKONOMI 3"}], "dampak": "apa artinya bagi pemilik"}] (2–4 tema),\n'
+           ' "peluang": [{"aksi": "yang bisa ia lakukan", "kenapa": "berdasar tema/indikator mana", "kaitan": "' + "|".join(KINDS) + '", '
+           '"horizon": "hari ini|minggu ini|bulan ini", "risiko": "…", "yakin": "rendah|sedang|tinggi"}] (2–5),\n'
+           ' "waspada": [{"isi": "…", "nomor": "DUNIA 2"}] (0–3),\n'
+           ' "ucapan": "3–4 kalimat untuk DIBACAKAN: situasinya, alasan utamanya, satu peluang terpenting"}\n'
+           '"nomor" = bagian dan nomor berita persis seperti di daftar.')
+    user = ("TENTANG PEMILIK & KEUANGANNYA:\n" + "\n".join(owner_facts[:15] + g["about"]) + (f"\nTopik yang ia ikuti: {', '.join(topics)}" if topics else "")
+            + f"\n\nCUACA: {g['weather'] or '-'}\n\nDATA PASAR (terakhir):\n" + ("\n".join(market_lines(g)) or "-")
+            + "\n\nBERITA (24 jam terakhir):\n" + "\n".join(news_lines(g)))
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
 
 
-def link_sources(data: dict, news: dict) -> dict:
-    """Each written item gets the link of the news it came from ('nomor' → that item). Pure."""
-    def find(ref: str):
-        m = re.match(r"\s*([A-Za-z]+)\s+(\d+)", ref or "")
-        if not m:
-            return None
-        items = news.get(m.group(1).lower()) or []
-        i = int(m.group(2)) - 1
-        return items[i] if 0 <= i < len(items) else None
-    out = {}
-    for sec in ("perlu", "indonesia", "ekonomi", "dunia"):
-        rows = []
-        for x in data.get(sec) or []:
-            if isinstance(x, str):
-                x = {"isi": x}
-            if not isinstance(x, dict) or not (x.get("isi") or x.get("judul")):
-                continue
-            src = find(str(x.get("nomor") or ""))
-            rows.append({"judul": str(x.get("judul") or "")[:160], "isi": str(x.get("isi") or "")[:400],
-                         "sumber": src["source"] if src else "", "link": src["link"] if src else ""})
-        out[sec] = rows[:4]
-    out["ucapan"] = str(data.get("ucapan") or "")[:600]
+def _find(news: dict, ref: str):
+    m = re.match(r"\s*([A-Za-z]+)\s+(\d+)", ref or "")
+    if not m:
+        return None
+    items = news.get(m.group(1).lower()) or []
+    i = int(m.group(2)) - 1
+    return items[i] if 0 <= i < len(items) else None
+
+
+def _reason(x, news: dict) -> dict | None:
+    if isinstance(x, str):
+        x = {"isi": x}
+    if not isinstance(x, dict) or not str(x.get("isi") or "").strip():
+        return None
+    src = _find(news, str(x.get("nomor") or ""))
+    return {"isi": str(x["isi"])[:400], "sumber": src["source"] if src else "", "link": src["link"] if src else ""}
+
+
+def clean_analysis(data: dict, news: dict) -> dict:
+    """The brain's analysis kept to its shape, every reason linked to the news it came from ('nomor'). Pure."""
+    t = lambda v, n: " ".join(str(v or "").split())[:n]   # noqa: E731
+    out = {"judul": t(data.get("judul"), 200), "situasi": t(data.get("situasi"), 1200), "ucapan": t(data.get("ucapan"), 800),
+           "suasana": data.get("suasana") if data.get("suasana") in ("positif", "campuran", "waspada") else "campuran"}
+    out["tema"] = []
+    for x in (data.get("tema") or [])[:4]:
+        if not isinstance(x, dict) or not x.get("judul"):
+            continue
+        out["tema"].append({"judul": t(x["judul"], 120), "kesimpulan": t(x.get("kesimpulan"), 400), "dampak": t(x.get("dampak"), 400),
+                            "indikator": [{"nama": t(i.get("nama"), 60), "nilai": t(i.get("nilai"), 60), "arti": t(i.get("arti"), 160)}
+                                          for i in (x.get("indikator") or [])[:5] if isinstance(i, dict) and i.get("nama")],
+                            "alasan": [r for r in (_reason(r, news) for r in (x.get("alasan") or [])[:5]) if r]})
+    out["peluang"] = [{"aksi": t(p.get("aksi"), 200), "kenapa": t(p.get("kenapa"), 300), "risiko": t(p.get("risiko"), 200),
+                       "kaitan": p.get("kaitan") if p.get("kaitan") in KINDS else "lainnya",
+                       "horizon": p.get("horizon") if p.get("horizon") in ("hari ini", "minggu ini", "bulan ini") else "minggu ini",
+                       "yakin": p.get("yakin") if p.get("yakin") in ("rendah", "sedang", "tinggi") else "sedang"}
+                      for p in (data.get("peluang") or [])[:5] if isinstance(p, dict) and p.get("aksi")]
+    out["waspada"] = [r for r in (_reason(r, news) for r in (data.get("waspada") or [])[:3]) if r]
     return out
 
 
@@ -178,19 +219,20 @@ async def compose(trigger: str = "schedule") -> dict:
     s = await appsettings.get("brief")
     g = await gather()
     facts = [m["text"] for m in await memory.list_("personal", limit=30) if not m.get("stale")]
-    r = await master.run(master.Job("brief", "compose", "susun brief pagi dari berita, pasar, dan konteks pemilik", trigger=trigger,
-                                    messages=prompt(g, facts, s.get("topics") or []), json_out=True, max_tokens=1600))
+    r = await master.run(master.Job("brief", "compose", "cek berita: simpulkan situasi, indikator, dan peluang untuk pemilik", trigger=trigger,
+                                    messages=prompt(g, facts, s.get("topics") or []), json_out=True, heavy=True, no_free=True, max_tokens=3000))
     if r["status"] != "done":
-        raise RuntimeError(r.get("error") or "brief gagal")
-    data = link_sources(r["result"] if isinstance(r["result"], dict) else {}, g["news"])
+        raise RuntimeError(r.get("error") or "cek berita gagal")
+    data = clean_analysis(r["result"] if isinstance(r["result"], dict) else {}, g["news"])
+    if not data["situasi"] and not data["tema"]:
+        raise RuntimeError("analisisnya kosong — coba lagi")
     data |= {"markets": g["markets"], "weather": g["weather"], "lane": r.get("lane"), "count": sum(len(v) for v in g["news"].values())}
     day = datetime.now(WIB).date()
     srcs = sorted({x["source"] for v in g["news"].values() for x in v})
     await db.pool().execute("""INSERT INTO briefs (day, data, sources, run_id) VALUES ($1, $2, $3, $4)
                                ON CONFLICT (day) DO UPDATE SET data = EXCLUDED.data, sources = EXCLUDED.sources, run_id = EXCLUDED.run_id, created_at = now()""",
                             day, data, srcs, r["run_id"])
-    first = (data["perlu"] or data["indonesia"] or [{"isi": "Brief pagi siap."}])[0]
-    await hub.broadcast({"type": "notify", "title": "Brief pagi siap", "text": (first.get("judul") or first.get("isi"))[:200], "kind": "info", "route": "#/brief"})
+    await hub.broadcast({"type": "notify", "title": "Cek berita siap", "text": (data["judul"] or data["situasi"])[:200], "kind": "info", "route": "#/brief"})
     return data
 
 
@@ -217,9 +259,9 @@ async def _home(m: home.Moment) -> list[dict]:
     if not b or b["day"] != m.now.date():
         return []
     d = b["data"]
-    n = len(d.get("perlu") or [])
-    return [{"id": "brief", "title": "Brief pagi", "sub": f"{n} hal yang menyangkut kamu" if n else "Indonesia, dunia, pasar", "route": "#/brief",
-             "icon": "news", "tone": "amber", "score": 55 if m.slot in ("subuh", "pagi") else 25, "cta": "Baca brief" if m.slot == "pagi" else None}]
+    n = len(d.get("peluang") or [])
+    return [{"id": "brief", "title": "Cek berita", "sub": (d.get("judul") or "situasi hari ini & peluangmu")[:90] + (f" · {n} peluang" if n else ""),
+             "route": "#/brief", "icon": "news", "tone": "amber", "score": 55 if m.slot in ("subuh", "pagi") else 25, "cta": "Baca" if m.slot == "pagi" else None}]
 
 
 @setup_status.check("brief")

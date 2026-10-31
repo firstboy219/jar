@@ -170,6 +170,17 @@ private class JarvisBridge(private val view: WebView, private val actions: AppHo
     @JavascriptInterface fun rememberPassword(pw: String?) { (view.context.applicationContext as JarvisApp).engine.settingsStore.setAdminSecret(pw) }
     @JavascriptInterface fun hasBiometric(): Boolean = (view.context.applicationContext as JarvisApp).engine.settingsStore.adminSecret() != null
     /** … and gets it back only after a strong biometric (or the phone's own lock); "" when cancelled or the phone has no lock. */
+    // ---- approvals with the phone's own lock (approval/DeviceApproval): a Keystore key, the PIN / fingerprint, a signed one-time code ----
+    @JavascriptInterface fun approvalKey(): String = online.cosger.jarvis.approval.DeviceApproval.publicKey(view.context).orEmpty()
+    @JavascriptInterface fun approvalSign(nonce: String?, reason: String?) {
+        val n = nonce.orEmpty().take(80)
+        view.post {
+            online.cosger.jarvis.approval.DeviceApproval.sign(view.context, n, reason.orEmpty()) { sig ->
+                view.evaluateJavascript("window.__jarvisApprove && window.__jarvisApprove(${org.json.JSONObject.quote(sig)})", null)
+            }
+        }
+    }
+    @JavascriptInterface fun approvalReset() = online.cosger.jarvis.approval.DeviceApproval.reset()
     @JavascriptInterface fun biometric(reason: String?) {
         val secret = (view.context.applicationContext as JarvisApp).engine.settingsStore.adminSecret()
         view.post {

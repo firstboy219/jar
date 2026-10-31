@@ -34,8 +34,12 @@ APPS = {
              "hint": "Qpon (aplikasi kupon diskon): cari merchant/menu di kolom pencarian, lihat kupon dengan harga diskon, beli kupon lalu bayar "
                      "(GoPay: PIN diketik pemilik); kupon dipakai di outlet."},
     "jobstreet": {"label": "JobStreet", "packages": ["com.jobstreet.jobstreet"], "words": r"job ?street",
-                  "hint": "JobStreet: cari lowongan dengan kolom pencarian (judul + perusahaan) atau buka tautannya; di halaman lowongan tekan Lamar / Lamar Cepat, "
-                          "pilih CV yang tersimpan, isi surat lamaran, jawab pertanyaan penyaringan, lalu Kirim lamaran. Jangan ubah profil."},
+                  "hint": "JobStreet: cari lowongan ITEM INI dengan kolom pencarian (judul + nama perusahaan). Buka hasil yang perusahaan DAN posisinya cocok; "
+                          "bila tidak ada yang cocok → selesai dengan hasil 'tidak ditemukan di JobStreet: <judul> — <perusahaan>'; bila tertulis sudah dilamar "
+                          "→ selesai 'sudah pernah dilamar'. Di halaman lowongan tekan Lamar / Lamar Cepat, pilih CV yang tersimpan, isi surat lamaran singkat "
+                          "dari profil, jawab pertanyaan penyaringan memakai JAWABAN PEMILIK YANG SUDAH ADA atau profil/CV; yang jawabannya TIDAK kamu tahu "
+                          "pasti (gaji yang diharapkan, kesediaan pindah, tanggal mulai, dsb.) → tanya_pemilik, jangan menebak. Lalu Kirim lamaran dan "
+                          "selesai dengan hasil 'dilamar: <judul> — <perusahaan>'. Jangan ubah profil."},
     "pluang": {"label": "Pluang", "packages": ["com.EmasDigi"], "words": r"pluang",
                "hint": "Pluang: Beranda menunjukkan total portofolio; tab Portofolio/Aset berisi tiap aset (emas, saham AS, kripto, reksa dana) dengan "
                        "nilai dan untung/rugi. Membeli: pilih aset → Beli → isi nominal Rupiah → periksa harga & ringkasan → konfirmasi; menjual sama "
@@ -345,6 +349,24 @@ async def _wait_for_owner_secret(app: str, emit) -> dict:
     raise PhoneError("PIN/OTP tidak diisi dalam 4 menit — dihentikan")
 
 
+ANSWERS_KEPT = 40
+
+
+async def remember_answer(app: str, question: str, answer: str) -> None:
+    """What the owner answered for a form in this app ("berapa ekspektasi gaji?" → "25 juta"), kept so the next run need not ask again."""
+    if not question.strip() or not answer.strip() or answer.startswith("(pemilik belum menjawab"):
+        return
+    key = f"phone:answers:{app}"
+    have = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", key) or []
+    have = [x for x in have if x.get("q", "").lower() != question.strip().lower()][-(ANSWERS_KEPT - 1):] + [{"q": question.strip()[:200], "a": answer.strip()[:300]}]
+    await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", key, have)
+
+
+async def remembered_answers(app: str) -> str:
+    have = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", f"phone:answers:{app}") or []
+    return "\n".join(f"- {x['q']} → {x['a']}" for x in have)
+
+
 async def _ask_owner(task_id: int, question: str, emit) -> str:
     from . import questions
     q = await questions.ask(question, task_id)
@@ -583,6 +605,7 @@ async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started,
                           "layar": screen_words(obs)[:300]})
         if name == "tanya_pemilik":
             answer = await _ask_owner(task_id, str(args.get("pertanyaan") or ""), emit)
+            await remember_answer(app, str(args.get("pertanyaan") or ""), answer)
             history.append(f"{step}. tanya pemilik: {args.get('pertanyaan')} → jawab: {answer[:300]}")
             if trace is not None:
                 trace[-1]["jawaban"] = answer[:200]
