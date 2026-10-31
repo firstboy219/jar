@@ -105,23 +105,30 @@ function agenda(list) {
 }
 
 /** The workers: collectors in parallel → the analyst → the one that is him. Live while running, kept with the brief after. */
-function pipeline(steps, { live = false, error = '' } = {}) {
-  const mark = (st) => (st.status === 'selesai' ? html`<span style="color:var(--green)">${icon('check', 12)}</span>` : st.status === 'gagal' ? html`<span style="color:var(--red)">${icon('close', 12)}</span>` : html`<span class="small">…</span>`);
+function pipeline(steps, { live = false, error = '', log = [], queue = null, hermes = null } = {}) {
+  const MARK = { selesai: ['green', 'check'], gagal: ['red', 'close'], dilewati: ['amber', 'right'], antre: ['tx2', 'clock'] };
+  const mark = (st) => (MARK[st.status] ? html`<span style="color:var(--${MARK[st.status][0]})">${icon(MARK[st.status][1], 12)}</span>` : html`<span class="spin"></span>`);
+  const over = (st) => ['selesai', 'gagal', 'dilewati'].includes(st.status);
   const body = STAGES.map(([key, title, sub], i) => {
     const mine = steps.filter((st) => st.stage === key);
-    const done = mine.filter((st) => st.status !== 'jalan').length;
+    const done = mine.filter(over).length;
     const state = !mine.length ? 'menunggu' : done < mine.length ? 'berjalan' : mine.some((st) => st.status === 'gagal') && key !== 'kumpul' ? 'gagal' : 'selesai';
     return html`<div style="display:flex;flex-direction:column;gap:6px">
       <div class="row sb"><b style="font-size:14px">${i + 1} · ${title}${key === 'kumpul' && mine.length ? html` <span class="small">(${done}/${mine.length})</span>` : ''}</b>
         <span class="tag ${state === 'selesai' ? 'green' : state === 'gagal' ? 'red' : state === 'berjalan' ? 'cyan' : 'muted'}">${state}</span></div>
       <span class="small">${sub}</span>
-      ${mine.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px">${mine.map((st) => html`<a class="chip" ${st.run_id ? html`href="#/alur/${st.run_id}"` : ''} style="gap:4px">${mark(st)} ${st.label.replace(/^Jadi kamu: /, '').replace(/^Analis: /, '')}${st.status === 'selesai' && st.n ? html` <span class="small">${st.n}</span>` : ''}${st.secs && st.status !== 'jalan' ? html` <span class="small">${st.secs}d</span>` : ''}</a>`)}</div>` : ''}</div>`;
+      ${mine.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px">${mine.map((st) => html`<a class="chip" ${st.run_id ? html`href="#/alur/${st.run_id}"` : ''} title="${st.error || ''}" style="gap:4px;${st.status === 'antre' ? 'opacity:.6' : ''}">${mark(st)} ${st.label.replace(/^Jadi kamu: /, '').replace(/^Analis: /, '')}${st.status === 'selesai' && st.n ? html` <span class="small">${st.n}</span>` : ''}${st.secs && over(st) ? html` <span class="small">${st.secs}d</span>` : ''}</a>`)}</div>` : ''}</div>`;
   });
+  const q = queue ? html`<span class="small">${icon('flow', 12)} ${queue.source === 'hermes' ? `Antrean dari Hermes: maks ${queue.maks} bersamaan${queue.why ? ` · ${queue.why}` : ''}` : `Urutan bawaan${queue.why ? ` — ${queue.why}` : ''}`}</span>` : '';
+  const watch = hermes?.bypass ? html`<span class="small" style="color:var(--amber-t)">${icon('shield', 12)} Pengawas Hermes: Hermes sedang dilewati — ${hermes.bypass}</span>` : '';
+  const lines = log.length ? html`<div class="wlog" style="max-height:${live ? 180 : 260}px;overflow:auto;display:flex;flex-direction:column;gap:2px;background:var(--bg2);border-radius:10px;padding:8px 10px">
+    ${log.map((l) => html`<span class="mono" style="font-size:11px;line-height:1.45;color:var(--${{ ok: 'green-t', bad: 'red-t', warn: 'amber-t' }[l.kind] || 'tx2'})">${new Date(l.at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} ${l.text}</span>`)}</div>` : '';
   return live
-    ? html`<div class="card cyan" style="gap:12px"><div class="row sb"><span class="k cyan">JARVIS sedang bekerja</span><span class="small">±1–2 menit</span></div>${body}
+    ? html`<div class="card cyan" style="gap:12px"><div class="row sb"><span class="row" style="gap:8px"><span class="spin"></span><span class="k cyan">JARVIS sedang bekerja</span></span><span class="small">±1–2 menit</span></div>
+        ${q}${watch}${body}${lines ? html`<span class="small">Log aktivitas worker</span>${lines}` : ''}
         ${error ? html`<span class="small" style="color:var(--red-t)">${error}</span>` : ''}</div>`
-    : html`<details class="card"><summary class="small">Cara kerja: ${steps.filter((st) => st.stage === 'kumpul').length} pengumpul → analis → jadi kamu</summary>
-        <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px">${body}</div></details>`;
+    : html`<details class="card"><summary class="small">Cara kerja: ${steps.filter((st) => st.stage === 'kumpul').length} pengumpul → analis → jadi kamu${queue?.source === 'hermes' ? ' · antrean Hermes' : ''}</summary>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px">${q}${watch}${body}${lines ? html`<span class="small">Log aktivitas worker</span>${lines}` : ''}</div></details>`;
 }
 
 function position(po) {
@@ -147,16 +154,20 @@ export default {
   tab: 'beranda',
   async render(root) {
     root.innerHTML = String(html`${header('Cek berita')}<div class="scr">${loading()}</div>`);
-    const { brief, running: run, progress: prog } = await get('/api/v1/app/brief');
+    const { brief, running: run, progress: prog, hermes } = await get('/api/v1/app/brief');
     current = brief;
     let timer = null;
     const follow = () => on('brief', (ev) => {   // the workers, live: redraw just the progress card; the whole page once they are done
       if (!ev.running) { clearTimeout(timer); timer = setTimeout(render, 400); return; }
       const box = root.querySelector('#pipe');
-      if (box) box.innerHTML = String(pipeline(ev.steps || [], { live: true }));
+      if (box) {
+        box.innerHTML = String(pipeline(ev.steps || [], { live: true, log: ev.log || [], hermes }));
+        const lg = box.querySelector('.wlog');
+        if (lg) lg.scrollTop = lg.scrollHeight;   // the newest line in view
+      }
       else { clearTimeout(timer); timer = setTimeout(render, 300); }   // started elsewhere (the morning schedule, another device)
     });
-    const live = prog?.running ? html`<div id="pipe">${pipeline(prog.steps || [], { live: true })}</div>`
+    const live = prog?.running ? html`<div id="pipe">${pipeline(prog.steps || [], { live: true, log: prog.log || [], hermes })}</div>`
       : prog?.error ? html`<div class="card amber" style="gap:6px"><span class="small">${/model|HTTP|gateway|token/i.test(prog.error) ? 'Analisis terakhir gagal: otak AI tidak bisa dihubungi.' : `Analisis terakhir gagal: ${prog.error.slice(0, 120)}`}
           ${brief ? ' Yang tampil di bawah adalah analisis sebelumnya.' : ''} Ketuk ⟳ untuk mencoba lagi.</span>
           <details><summary class="small">Detail teknis</summary><code class="small" style="word-break:break-all">${prog.error}</code></details></div>` : '';
@@ -197,7 +208,7 @@ export default {
         ${d.peluang?.length ? html`<details class="card"><summary class="small">Peluang cepat (${d.peluang.length})</summary><div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${d.peluang.map(chance)}</div></details>` : ''}
         ${d.waspada?.length ? html`<div class="card red" style="gap:6px"><span class="k red">Waspadai</span>${d.waspada.map((r) => html`<span class="small">• ${r.isi}${src(r)}</span>`)}</div>` : ''}
         ${d.weather ? html`<p class="small" style="padding:0 4px">${icon('rain', 14)} ${d.weather}</p>` : ''}
-        ${d.pipeline?.length ? pipeline(d.pipeline) : ''}
+        ${d.pipeline?.length ? pipeline(d.pipeline, { log: d.log || [], queue: d.queue, hermes }) : ''}
         <span class="small" style="padding:0 4px">Dianalisis oleh ${laneChip(d.lane)} lewat alur master · sumber: ${brief.sources.join(', ')}</span>
         <div class="btns"><button class="btn primary lg" data-act="read">${icon('speaker', 18)} Bacakan</button><button class="btn lg" data-act="hush">Diam</button><a class="btn lg" href="#/obrolan">Tanya lanjut</a></div>
       </div>`);

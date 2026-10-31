@@ -88,6 +88,7 @@ async def test_the_brain_reads_every_source_and_says_the_sentiment(pool, monkeyp
             "tema": [{"judul": "Emas", "alasan": [{"isi": "dibahas di Reddit", "nomor": "SOSIAL 1"}]}]})}}]}
     monkeypatch.setattr(gateway, "complete", fake)
     hub.tap(lambda ev: _none())
+    monkeypatch.setattr(brief, "refresh_soon", lambda: None)   # Hermes plans the next queue in the background: not here
     d = await brief.compose("owner")
     prompt = "\n".join(seen)
     for block in ("GOOGLE TRENDS INDONESIA", "SENTIMEN:", "Fear & Greed kripto: 22", "AGENDA EKONOMI", "[TOPIK]", "[SOSIAL]", "[PASAR]",

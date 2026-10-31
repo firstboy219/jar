@@ -1638,6 +1638,20 @@ menentukan berat/ringan/non-AI)".
   answers at once; the page follows them live ("brief" events) and keeps the pipeline (with links to each run). Found on the way: the
   embedding model's lazy load was not locked, so parallel jobs each loaded their own copy and starved the event loop (~20 s, HTTP
   timeouts → empty sources); it now loads once under a lock, warmed at startup.
+- **Every Cek berita worker passes Hermes; a watchdog watches Hermes** (owner 2026-10-31: "Pastikan setiap worker melewati Hermes dulu tanpa
+  mengubah cara kerja cek berita … Hermes tau context dan bisa bikin alur antrian … kecuali Hermesnya sedang anomali … skip flow ke Hermesnya,
+  jadi harus ada entity yg tugasnya mengawasi hermes … munculkan loadernya … log aktifitas workernya"): the real Hermes agent (its own
+  session, so it remembers its earlier plans) plans the collectors' queue AHEAD of time — after every run, when the page is opened and the
+  plan is over 6 hours old, and hourly when over 12 — from each worker's 14-day record (runs, failures, time), the last brief's results
+  and the server's load: the start order, how many at once (2–8), and which optional sources to skip with a reason. A run uses the
+  latest plan without waiting for Hermes (asking it live took 10–40 s); each worker's master-flow Hermes step names its place in the
+  queue, and the analyst / "jadi kamu" steps keep their fixed order. hermeswatch.py checks every plan by rules, never by another model:
+  the one-time token comes back, the worker count is right, no invented worker (a real answer once said "passar"), each exactly once,
+  berita and pasar never skipped, a skip only where the record shows failure or emptiness ("data palsu"), bounds; after the run, a
+  queue that clearly slowed collecting is an anomaly too. A rejected plan is not used (built-in order: all at once); two anomalies in a
+  row, or Hermes unreachable twice, pass Hermes over for an hour. The page shows a spinner card while running with the queue, the
+  watchdog's verdict and the workers' activity log (start, done with count and time, skipped, failed), kept with the brief; the home
+  screen shows "sedang dianalisis… n/11 worker".
 - **Pengelola penyimpanan** (owner 2026-10-31: "manager storage sehingga saya tahu mana saja yg bisa dihapus atau dizip"): the host measures
   (infra/scripts/storage.py, root, via jarvis-storage.path; every 6 hours on core's request and on "Ukur ulang") and the app shows every
   space user by group: what is safe to remove and what that costs (Docker build cache, orphaned volumes, dangling images, APKs older than

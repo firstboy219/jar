@@ -216,7 +216,12 @@ async def _c_weather(now: datetime) -> str:
 COLLECTORS = [("berita", "Berita dari media", _c_news), ("pasar", "Harga & teknikal pasar", _c_markets), ("topik", "Google News topikmu", _c_topics),
               ("sosial", "Obrolan Reddit", _c_social), ("tren", "Google Trends", _c_trends), ("sentimen", "Fear & Greed & CoinGecko", _c_mood),
               ("agenda", "Kalender ekonomi", _c_agenda), ("cuaca", "Cuaca", _c_weather)]
-_state: dict = {"running": False, "steps": [], "started": None, "error": None}
+_state: dict = {"running": False, "steps": [], "started": None, "error": None, "log": []}
+REQUIRED = {"berita", "pasar"}   # the analysis stands on these: Hermes may never skip them
+PLAN_KEY_Q = "brief:antrean"
+PLAN_FRESH_S = 24 * 3600
+HERMES_SESSION = "jarvis-cekberita-antrean"
+_planning: dict = {"task": None}
 
 
 def _size(v) -> int:
@@ -229,29 +234,184 @@ async def _step(stage: str, key: str, label: str, r: dict | None, t0: float, n: 
           "run_id": (r or {}).get("run_id"), "lane": (r or {}).get("lane"), "secs": round(time.monotonic() - t0, 1), "n": n,
           "error": str((r or {}).get("error") or "")[:160]}
     _state["steps"] = [x for x in _state["steps"] if x["key"] != key] + [st]
-    await hub.broadcast({"type": "brief", "running": _state["running"], "steps": _state["steps"]})
+    if r is None:
+        await log_line(f"▶ {label} mulai")
+    elif st["status"] == "selesai":
+        await log_line(f"✓ {label} selesai{f' · {n} data' if n else ''} ({st['secs']} d, {LANE_NAMES.get(st['lane'], st['lane'] or '')})", "ok")
+    else:
+        await log_line(f"✗ {label} gagal: {st['error'] or 'tanpa keterangan'}", "bad")
     return st
 
 
-async def gather(trigger: str = "schedule") -> dict:
-    """Every source by its own worker through the master flow (a skill: no AI), in parallel; one that fails is left out."""
-    now = datetime.now(timezone.utc)
+LANE_NAMES = {"skill": "tanpa AI", "ringan": "otak ringan", "berat": "otak berat", "hermes": "Hermes"}
 
-    async def one(key: str, label: str, fn) -> tuple[str, object]:
-        t0 = time.monotonic()
-        await _step("kumpul", key, label, None, t0)
-        r = await master.run(master.Job("brief", f"kumpul-{key}", f"cek berita: kumpulkan {label.lower()}", trigger=trigger, skill=lambda: fn(now)))
+
+async def log_line(text: str, kind: str = "info") -> None:
+    """One line of the workers' activity log the page shows under the loader (kept with the brief)."""
+    _state["log"] = (_state["log"] + [{"at": datetime.now(timezone.utc).isoformat(), "text": text[:240], "kind": kind}])[-80:]
+    await hub.broadcast({"type": "brief", "running": _state["running"], "steps": _state["steps"], "log": _state["log"][-40:]})
+
+
+async def gather(trigger: str = "schedule") -> dict:
+    """Every source by its own worker through the master flow (a skill: no AI), in the order and at the pace Hermes planned (a queue: a
+    worker starts when a place frees up); one that fails is left out. Without a trusted plan: all at once, as before."""
+    now = datetime.now(timezone.utc)
+    plan = await queue_plan()
+    by_key = {k: (k, label, fn) for k, label, fn in COLLECTORS}
+    slots = asyncio.Semaphore(plan["maks"])
+    t_all = time.monotonic()
+
+    async def one(key: str, label: str, fn, pos: int) -> tuple[str, object]:
+        note = (f"antrean Hermes: ke-{pos} dari {len(plan['urutan'])}, maks {plan['maks']} bersamaan" if plan["source"] == "hermes"
+                else "urutan bawaan (tanpa rencana Hermes)")
+        async with slots:
+            t0 = time.monotonic()
+            await _step("kumpul", key, label, None, t0)
+            r = await master.run(master.Job("brief", f"kumpul-{key}", f"cek berita: kumpulkan {label.lower()}", trigger=trigger,
+                                            skill=lambda: fn(now), data={"antrean": note}))
         val = r.get("result") if r["status"] == "done" else None
         await _step("kumpul", key, label, r, t0, _size(val))
         return key, val
-    got = dict(await asyncio.gather(*(one(*c) for c in COLLECTORS)))
+    for k in plan["urutan"]:   # the queue, visible from the start
+        _state["steps"].append({"stage": "kumpul", "key": k, "label": by_key[k][1], "status": "antre", "run_id": None, "lane": None, "secs": 0, "n": 0, "error": ""})
+    for sk in plan["lewati"]:
+        _state["steps"].append({"stage": "kumpul", "key": sk["worker"], "label": by_key[sk["worker"]][1], "status": "dilewati", "run_id": None,
+                                "lane": None, "secs": 0, "n": 0, "error": sk["alasan"]})
+        await log_line(f"⤼ {by_key[sk['worker']][1]} dilewati Hermes: {sk['alasan']}", "warn")
+    got = dict(await asyncio.gather(*(one(*by_key[k], i) for i, k in enumerate(plan["urutan"], 1))))
+    secs = round(time.monotonic() - t_all, 1)
+    if plan["source"] == "hermes":   # the watchdog looks at the result too: a queue that clearly slowed the work down is an anomaly
+        from . import hermeswatch
+        slow = hermeswatch.too_slow(secs, await _usual_collect())
+        await hermeswatch.record("antrean-hasil", [slow] if slow else [], f"pengumpulan {secs} d")
+        if slow:
+            await log_line(f"⚠ Pengawas Hermes: {slow}", "warn")
     news = dict(got.get("berita") or {})
     if got.get("topik"):
         news["topik"] = got["topik"]
     if got.get("sosial"):
         news["sosial"] = got["sosial"]
     return {"news": news, "markets": got.get("pasar") or [], "trends": got.get("tren") or [], "mood": got.get("sentimen") or {},
-            "agenda": got.get("agenda") or [], "weather": got.get("cuaca") or ""}
+            "agenda": got.get("agenda") or [], "weather": got.get("cuaca") or "", "collect_secs": secs, "queue": plan}
+
+
+# ---------- Hermes plans the queue ahead; the watchdog checks it (owner 2026-10-31: "setiap worker melewati Hermes dulu … Hermes tau
+# context dan bisa bikin alur antrian … kecuali Hermesnya sedang anomali … skip flow ke Hermesnya") ----------
+
+def default_plan(why: str = "") -> dict:
+    return {"urutan": [k for k, _, _ in COLLECTORS], "lewati": [], "maks": len(COLLECTORS), "source": "bawaan", "why": why, "made_at": None}
+
+
+async def queue_plan() -> dict:
+    """The queue for this run: Hermes' latest plan when the watchdog trusts it and it is fresh (asked ahead of time, so no waiting now)."""
+    from . import hermeswatch
+    if why := await hermeswatch.bypassed():
+        await log_line(f"⚠ Pengawas Hermes: Hermes dilewati — {why}; memakai urutan bawaan", "warn")
+        return default_plan(f"Hermes dilewati: {why}")
+    rec = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", PLAN_KEY_Q)
+    keys = [k for k, _, _ in COLLECTORS]
+    if not rec or time.time() - rec.get("made_at", 0) > PLAN_FRESH_S or sorted(rec["plan"]["urutan"] + [x["worker"] for x in rec["plan"]["lewati"]]) != sorted(keys):
+        refresh_soon()
+        await log_line("Hermes belum punya rencana antrean yang segar — memakai urutan bawaan; Hermes menyusunnya untuk berikutnya")
+        return default_plan("belum ada rencana Hermes yang segar")
+    plan = {**rec["plan"], "source": "hermes", "made_at": rec["made_at"],
+            "why": rec["plan"].get("catatan") or f"{len(rec['plan']['urutan'])} worker, maks {rec['plan']['maks']} bersamaan"}
+    made = datetime.fromtimestamp(rec["made_at"], WIB).strftime("%H.%M")
+    await log_line(f"Hermes: antrean {' → '.join(plan['urutan'])} · maks {plan['maks']} bersamaan (disusun {made}, lolos pengawas)"
+                   + (f" · {plan['catatan']}" if plan.get("catatan") else ""))
+    return plan
+
+
+async def _usual_collect() -> float | None:
+    rows = await db.pool().fetch("SELECT (data->>'collect_secs')::float AS s FROM briefs WHERE data ? 'collect_secs' ORDER BY day DESC LIMIT 5")
+    vals = sorted(r["s"] for r in rows if r["s"])
+    return vals[len(vals) // 2] if vals else None
+
+
+async def queue_facts() -> dict:
+    """What Hermes is told to plan with: each worker's record (14 days of runs, the last brief), the server's load now."""
+    from . import hostinfo, workers
+    rows = await db.pool().fetch("""SELECT action, count(*) AS n, count(*) FILTER (WHERE status = 'failed') AS bad,
+                                           avg(EXTRACT(EPOCH FROM (finished_at - started_at)))::float AS secs
+                                    FROM flow_runs WHERE feature = 'brief' AND action LIKE 'kumpul-%' AND started_at > now() - interval '14 days'
+                                    GROUP BY action""")
+    stats = {r["action"].removeprefix("kumpul-"): dict(r) for r in rows}
+    last = await db.pool().fetchval("SELECT data->'pipeline' FROM briefs ORDER BY day DESC LIMIT 1") or []
+    last_by = {x.get("key"): x for x in (last if isinstance(last, list) else [])}
+    out, troubled = [], set()
+    for k, label, _ in COLLECTORS:
+        st, lb = stats.get(k) or {}, last_by.get(k) or {}
+        empty = lb.get("status") == "gagal" or (lb.get("status") == "selesai" and not lb.get("n"))
+        bad_rate = (st.get("bad") or 0) / st["n"] if st.get("n") else 0
+        if k not in REQUIRED and (empty or (st.get("n", 0) >= 2 and bad_rate >= 0.5)):
+            troubled.add(k)
+        got = f", {lb['n']} data" if lb.get("n") else ""
+        out.append(f"- {k} ({label}){' WAJIB' if k in REQUIRED else ''}: {st.get('n', 0)} kali dalam 14 hari, gagal {st.get('bad', 0)}, "
+                   f"rata-rata {st.get('secs') or 0:.1f} d; terakhir: {lb.get('status', '-')}{got}")
+    try:
+        snap = await hostinfo.snapshot()
+        load = f"CPU {snap['cpu_pct']:.0f}%, RAM terpakai {snap['memory_gb']['used']:.1f}/{snap['memory_gb']['total']:.1f} GB"
+    except Exception:
+        load = "tidak terbaca"
+    running = len([t for t in await workers.active() if t["status"] == "running"])
+    return {"lines": out, "troubled": troubled, "load": f"{load}; {running} tugas lain sedang berjalan", "usual": await _usual_collect()}
+
+
+def queue_prompt(facts: dict, token: str) -> str:
+    keys = [k for k, _, _ in COLLECTORS]
+    return ("Kamu Hermes, pengatur antrean worker JARVIS untuk fitur Cek berita. Susun urutan mulai dan berapa worker boleh jalan bersamaan, "
+            "supaya pengumpulan cepat tapi server tidak dibebani sekaligus. Worker yang lambat sebaiknya mulai lebih dulu. Kamu BOLEH melewati "
+            "sumber yang tidak wajib HANYA bila catatannya menunjukkan gagal/kosong, dengan alasan. Jangan mengarang nama worker.\n"
+            f"WORKER ({len(keys)}):\n" + "\n".join(facts["lines"])
+            + f"\nBEBAN SERVER SEKARANG: {facts['load']}"
+            + (f"\nPengumpulan biasanya selesai ±{facts['usual']:.0f} detik." if facts.get("usual") else "")
+            + f'\nBalas HANYA JSON: {{"token": "{token}", "jumlah": {len(keys)} jika kamu setuju jumlahnya, "maks_bersamaan": 2-8, '
+            '"urutan": ["nama worker sesuai urutan mulai"], "lewati": [{"worker": "…", "alasan": "…"}], "catatan": "1 kalimat"}. '
+            '"token" harus persis sama. Setiap worker muncul tepat sekali, di "urutan" atau "lewati".')
+
+
+def refresh_soon() -> None:
+    """Ask Hermes for a new queue in the background (once at a time)."""
+    if _planning["task"] is None or _planning["task"].done():
+        _planning["task"] = asyncio.create_task(refresh_plan())
+
+
+async def refresh_plan() -> dict | None:
+    """Hermes plans the next run's queue from the workers' record and the load; the watchdog checks it before it is kept."""
+    import secrets
+    from . import hermes, hermeswatch
+    if await hermeswatch.bypassed():
+        return None
+    try:
+        facts = await queue_facts()
+        token = secrets.token_hex(3).upper()
+        t0, text = time.monotonic(), ""
+
+        async def ask() -> str:
+            async for ev in hermes.stream(queue_prompt(facts, token), HERMES_SESSION, model="jarvis-ringan"):
+                if ev["type"] == "done":
+                    return ev["reply"].text
+            return ""
+        text = await asyncio.wait_for(ask(), 90)
+    except Exception as e:   # Hermes down or too slow: that is also a reason not to wait for it
+        await hermeswatch.record("antrean", [f"Hermes tidak bisa dihubungi: {type(e).__name__}: {str(e)[:120]}"])
+        return None
+    plan, problems = hermeswatch.check_queue(text, token, [k for k, _, _ in COLLECTORS], REQUIRED, facts["troubled"])
+    await hermeswatch.record("antrean", problems, text[:200])
+    if plan is None:
+        log.warning("Hermes' queue for Cek berita rejected by the watchdog: %s", "; ".join(problems))
+        return None
+    rec = {"plan": plan, "made_at": time.time(), "secs": round(time.monotonic() - t0, 1)}
+    await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", PLAN_KEY_Q, rec)
+    return rec
+
+
+@appclock.every(3600, "brief.antrean")
+async def _plan_tick() -> None:
+    """Keep a fresh queue ready (half a day old at most), so the morning run never waits for Hermes."""
+    rec = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", PLAN_KEY_Q)
+    if not rec or time.time() - rec.get("made_at", 0) > PLAN_FRESH_S / 2:
+        await refresh_plan()
 
 
 async def about_me() -> dict:
@@ -526,15 +686,18 @@ async def compose(trigger: str = "schedule", reserved: bool = False) -> dict:
     reserved: the caller already took the run (the app's button, which answers before the workers finish)."""
     if _state["running"] and not reserved:
         raise RuntimeError("cek berita sedang dibuat — tunggu sebentar")
-    _state.update(running=True, steps=[], started=datetime.now(timezone.utc).isoformat(), error=None)
+    _state.update(running=True, steps=[], started=datetime.now(timezone.utc).isoformat(), error=None, log=[])
+    await log_line("Cek berita dimulai")
     try:
         return await _compose(trigger)
     except Exception as e:
         _state["error"] = str(e)[:300]
+        await log_line(f"✗ Gagal: {_state['error']}", "bad")
         raise
     finally:
         _state["running"] = False
-        await hub.broadcast({"type": "brief", "running": False, "steps": _state["steps"], "error": _state["error"]})
+        await hub.broadcast({"type": "brief", "running": False, "steps": _state["steps"], "error": _state["error"], "log": _state["log"][-40:]})
+        refresh_soon()   # Hermes plans the next run's queue now, while nobody is waiting
 
 
 async def _compose(trigger: str) -> dict:
@@ -544,8 +707,9 @@ async def _compose(trigger: str) -> dict:
 
     t0 = time.monotonic()
     await _step("analisa", "analis", "Analis: simpulkan situasi", None, t0)
+    after = {"antrean": "antrean Hermes: setelah semua pengumpul (urutan tetap)"}
     ra = await master.run(master.Job("brief", "analisa", "cek berita: simpulkan situasi, sebab-akibat, sentimen, dan skenario dari data publik",
-                                     trigger=trigger, messages=analysis_prompt(g), json_out=True, heavy=True, no_free=True, max_tokens=4000))
+                                     trigger=trigger, messages=analysis_prompt(g), json_out=True, heavy=True, no_free=True, max_tokens=4000, data=after))
     await _step("analisa", "analis", "Analis: simpulkan situasi", ra, t0)
     if ra["status"] != "done":
         raise RuntimeError(ra.get("error") or "analisis gagal")
@@ -553,14 +717,15 @@ async def _compose(trigger: str) -> dict:
 
     t0 = time.monotonic()
     await _step("jadi-kamu", "tentang-aku", "Jadi kamu: kumpulkan data tentangmu", None, t0)
-    rm = await master.run(master.Job("brief", "kumpul-tentang-aku", "cek berita: kumpulkan data tentang pemilik", trigger=trigger, skill=about_me))
+    rm = await master.run(master.Job("brief", "kumpul-tentang-aku", "cek berita: kumpulkan data tentang pemilik", trigger=trigger, skill=about_me,
+                                     data={"antrean": "antrean Hermes: setelah analis (urutan tetap)"}))
     me = rm.get("result") if rm["status"] == "done" else {}
     await _step("jadi-kamu", "tentang-aku", "Jadi kamu: kumpulkan data tentangmu", rm, t0, _size((me or {}).get("about")) + _size((me or {}).get("facts")))
     t0 = time.monotonic()
     await _step("jadi-kamu", "bandingkan", "Jadi kamu: bandingkan & susun rencana", None, t0)
     rp = await master.run(master.Job("brief", "jadi-pemilik", "cek berita: sebagai pemilik, bandingkan analisis dengan keadaannya dan susun rencana",
                                      trigger=trigger, messages=persona_prompt(analysis, me or {}, g), json_out=True, heavy=True, no_free=True,
-                                     max_tokens=4500))
+                                     max_tokens=4500, data={"antrean": "antrean Hermes: terakhir, membandingkan (urutan tetap)"}))
     await _step("jadi-kamu", "bandingkan", "Jadi kamu: bandingkan & susun rencana", rp, t0)
     persona = rp["result"] if rp["status"] == "done" and isinstance(rp["result"], dict) else {}   # without it the analysis still stands
 
@@ -569,7 +734,8 @@ async def _compose(trigger: str) -> dict:
         raise RuntimeError("analisisnya kosong — coba lagi")
     data |= {"markets": g["markets"], "holdings": (me or {}).get("holdings") or [], "trends": g["trends"][:10], "mood": g["mood"], "agenda": g["agenda"],
              "weather": g["weather"], "lane": ra.get("lane"), "count": sum(len(v) for v in g["news"].values()),
-             "social": len(g["news"].get("sosial") or []), "pipeline": _state["steps"],
+             "social": len(g["news"].get("sosial") or []), "pipeline": _state["steps"], "collect_secs": g.get("collect_secs"),
+             "queue": {k: (g.get("queue") or {}).get(k) for k in ("source", "why", "maks", "urutan", "lewati", "made_at")},
              "persona_error": "" if persona else str(rp.get("error") or "worker 'jadi kamu' tidak memberi hasil")[:200]}
     day = datetime.now(WIB).date()
     srcs = sorted({x["source"].split(" · ")[0] for v in g["news"].values() for x in v}) + [n for n, ok in (
@@ -578,6 +744,8 @@ async def _compose(trigger: str) -> dict:
     await db.pool().execute("""INSERT INTO briefs (day, data, sources, run_id) VALUES ($1, $2, $3, $4)
                                ON CONFLICT (day) DO UPDATE SET data = EXCLUDED.data, sources = EXCLUDED.sources, run_id = EXCLUDED.run_id, created_at = now()""",
                             day, data, srcs, ra["run_id"])
+    await log_line("✓ Cek berita selesai dan tersimpan", "ok")
+    await db.pool().execute("UPDATE briefs SET data = data || jsonb_build_object('log', $2::jsonb) WHERE day = $1", day, _state["log"])
     await hub.broadcast({"type": "notify", "title": "Cek berita siap", "text": (data["judul"] or data["situasi"])[:200], "kind": "info", "route": "#/brief"})
     return data
 
@@ -652,6 +820,10 @@ async def today() -> dict | None:
 
 @home.provider("brief")
 async def _home(m: home.Moment) -> list[dict]:
+    if _state["running"]:   # the workers are at it: a card that says so, whatever the hour
+        done = len([x for x in _state["steps"] if x["status"] in ("selesai", "gagal", "dilewati")])
+        return [{"id": "brief", "title": "Cek berita sedang dianalisis…", "sub": f"{done}/{len(COLLECTORS) + 3} worker selesai · ketuk untuk melihat log",
+                 "route": "#/brief", "icon": "news", "tone": "cyan", "score": 70}]
     if m.slot not in ("subuh", "pagi", "kerja"):
         return []
     b = await today()
@@ -670,8 +842,14 @@ async def _ready() -> dict:
 
 @router.get(API)
 async def api_brief(device: dict = Depends(owner)):
+    from . import hermeswatch
+    rec = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = $1", PLAN_KEY_Q)
+    if not _state["running"] and (not rec or time.time() - rec.get("made_at", 0) > 6 * 3600):
+        refresh_soon()   # he is looking: have a fresh queue ready before he taps
+    w = await hermeswatch.state()
     return {"brief": await today(), "settings": await appsettings.get("brief"), "running": await progress(),
-            "progress": {k: _state[k] for k in ("running", "steps", "started", "error")}}
+            "progress": {**{k: _state[k] for k in ("running", "steps", "started", "error")}, "log": _state["log"][-40:]},
+            "hermes": {"bypass": await hermeswatch.bypassed(), "checks": w["checks"][:5], "plan_at": (rec or {}).get("made_at")}}
 
 
 class PlanIn(BaseModel):
@@ -696,7 +874,7 @@ async def api_brief_now(device: dict = Depends(owner)):
     if not _state["running"]:
         _state["running"] = True   # taken now, so a second tap does not start a second run
         asyncio.create_task(_now())
-    return {"started": True, "progress": {k: _state[k] for k in ("running", "steps", "started", "error")}}
+    return {"started": True, "progress": {**{k: _state[k] for k in ("running", "steps", "started", "error")}, "log": _state["log"][-40:]}}
 
 
 async def _now() -> None:

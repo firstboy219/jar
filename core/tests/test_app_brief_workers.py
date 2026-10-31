@@ -68,6 +68,7 @@ async def test_collectors_then_the_analyst_then_the_worker_that_is_him(pool, mon
         if ev.get("type") == "brief":
             events.append(ev)
     hub.tap(tap)
+    monkeypatch.setattr(brief, "refresh_soon", lambda: None)   # Hermes plans the next queue in the background: not here
     d = await brief.compose("owner")
     analyst, persona = prompts[0], prompts[1]
     assert "ANALIS JARVIS" in analyst[0]["content"] and "BI siaga rupiah" in analyst[1]["content"]

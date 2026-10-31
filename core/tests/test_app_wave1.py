@@ -214,6 +214,7 @@ async def test_the_brief_is_written_through_the_master_flow(pool, monkeypatch):
         if ev.get("type") == "notify":
             sent.append(ev)
     hub.tap(tap)
+    monkeypatch.setattr(brief, "refresh_soon", lambda: None)   # Hermes plans the next queue in the background: not here
     d = await brief.compose()
     assert asked == ["berat", "berat"] and d["tema"][0]["alasan"][0]["link"] == "https://n/1" and d["markets"][0]["change"] == 1.0 and d["weather"]
     assert d["peluang"][0]["kaitan"] == "bisnis" and d["suasana"] == "waspada"

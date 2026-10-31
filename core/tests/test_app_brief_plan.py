@@ -53,6 +53,7 @@ async def test_the_picked_plan_becomes_tasks_and_the_next_analysis_sees_it(pool,
     from app import brief, devices, gateway, main, notes
     await pool.execute("TRUNCATE briefs, flow_runs, note_pages RESTART IDENTITY CASCADE")
     await pool.execute("DELETE FROM settings_kv WHERE key = 'brief:plan'")
+    monkeypatch.setattr(brief, "refresh_soon", lambda: None)   # Hermes plans the next queue in the background: not here
     data = {"judul": "J", "situasi": "S", "tema": [], "rencana": [brief.clean_plan(PLAN), brief.clean_plan({**PLAN, "nama": "Seimbang", "gaya": "seimbang"})]}
     await pool.execute("INSERT INTO briefs (day, data, sources) VALUES (current_date, $1, '{}')", data)
     _, token = await devices.create("HP", "test", scope="owner")

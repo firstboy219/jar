@@ -297,7 +297,8 @@ async def run(job: Job) -> dict:
         await _step(run_id, "router", " · ".join(f"{k}: {v}" for k, v in r.items() if k != "job") or "dikenali sebagai " + r["job"], router=r)
         version = await _brain(job, run_id)
         lane, why = await decide(job, (version or {}).get("lane", "auto"))
-        await _step(run_id, "hermes", f"{LANE_LABEL[lane]} — {why}", lane=lane, why=why, status="running")
+        queue = f" · {job.data['antrean']}" if job.data.get("antrean") else ""   # a queue Hermes planned for this job (Cek berita's workers)
+        await _step(run_id, "hermes", f"{LANE_LABEL[lane]} — {why}{queue}", lane=lane, why=why, status="running")
         if lane == "skill" and not job.phone:
             try:
                 result = await job.skill()
