@@ -1,12 +1,12 @@
-"""Gaji & pengeluaran (ADR-087, mockup 38): what the owner spends, per pay period (payday to payday), against the pots he allocated his
-salary to — and, before payday, next period's allocation proposed by the heavy brain from what he really spent.
+"""Gaji & pengeluaran (ADR-087, mockup 38): what the owner spends per pay period (payday to payday), what is realised and what is not yet
+(bills to pay, purchases planned — counted nowhere until he ticks them), his zakat, and his emergency fund wherever it sits.
 
   recording   a fixed procedure through the master flow: GoPay / bank / e-wallet notifications the phone forwards ("Pembayaran Rp25.000 ke
               Kopi Kenangan berhasil") become transactions — never a sensitive one (OTP, PIN); what JARVIS bought itself (coffee, an
               investment) is recorded by those features; he can add one by hand
   categories  rules first (kopi, makan, transport, …); what the rules do not know is labelled by the light brain once a night
-  pots        his allocation (settings money.pots: name, amount, categories); a pot at 80% (alert_pct) is told once per period
-  allocation  two days before payday: a heavy-brain job proposes next period's pots; he edits and applies it"""
+  realised    each transaction is realised or not yet; the salary allocation (pots, proposals) was removed for it (owner 2026-10-31)
+  emergency   his emergency fund as assets inside or outside his salary, by liquidity: likuid, semi-likuid, tidak likuid"""
 
 import calendar
 import logging
@@ -63,10 +63,10 @@ ZAKAT_SOURCES = [
 ]
 
 
-def zakat_of(salary: float, pots: list[dict], method: str = "neto", nisab: float = ZAKAT_NISAB_MONTH) -> dict:
-    """This month's zakat on his salary. "neto": salary minus the pots for bills and debt instalments; "bruto": the whole salary. Below the
-    nisab it is not due this month (Fatwa MUI 3/2003: the year's income is then reckoned together). Pure."""
-    deducted = sum(float(p.get("amount") or 0) for p in pots or [] if any(c in ZAKAT_DEDUCT for c in p.get("categories") or [])) if method == "neto" else 0.0
+def zakat_of(salary: float, bills_and_debt: float, method: str = "neto", nisab: float = ZAKAT_NISAB_MONTH) -> dict:
+    """This month's zakat on his salary. "neto": salary minus this period's bills and debt instalments (paid or still to pay); "bruto": the
+    whole salary. Below the nisab it is not due this month (Fatwa MUI 3/2003: the year's income is then reckoned together). Pure."""
+    deducted = float(bills_and_debt or 0) if method == "neto" else 0.0
     base = max(0.0, float(salary or 0) - deducted)
     due = base >= nisab
     return {"method": "bruto" if method == "bruto" else "neto", "salary": float(salary or 0), "deducted": deducted, "base": base, "nisab": float(nisab),
@@ -124,36 +124,12 @@ def period_of(today: date, payday: int) -> tuple[date, date]:
     return start, nxt - timedelta(days=1)
 
 
-def pot_status(pots: list[dict], spent_by_cat: dict[str, float], alert_pct: int) -> list[dict]:
-    """Each pot: what was spent in its categories this period, the share, and whether it is over the alert line. Pure."""
-    out, claimed = [], set()
-    for p in pots:
-        cats = [c for c in p.get("categories") or [] if c]
-        claimed |= set(cats)
-        spent = sum(spent_by_cat.get(c, 0) for c in cats)
-        amount = float(p.get("amount") or 0)
-        pct = round(spent / amount * 100) if amount else 0
-        out.append({"name": p.get("name") or "Pos", "amount": amount, "categories": cats, "spent": spent, "pct": pct, "left": amount - spent,
-                    "level": "over" if amount and spent > amount else ("warn" if amount and pct >= alert_pct else "ok")})
-    other = sum(v for c, v in spent_by_cat.items() if c not in claimed)
-    if other:
-        out.append({"name": "Di luar pos", "amount": 0, "categories": [], "spent": other, "pct": 0, "left": 0, "level": "ok", "unplanned": True})
-    return out
-
-
 def emergency_status(saved: float, months: int, monthly: float) -> dict:
     """The emergency fund against its target (`months` of his usual monthly spending). Pure."""
     target = round(max(0, months) * max(0.0, monthly))
     return {"saved": round(saved), "target": target, "months": months, "pct": min(100, round(saved / target * 100)) if target else 0,
             "covers_months": round(saved / monthly, 1) if monthly else 0, "monthly": round(monthly)}
 
-
-def with_last(pots: list[dict], last_by_cat: dict[str, float]) -> list[dict]:
-    """Each pot with what its categories cost in the previous period (to judge a proposed amount). Pure."""
-    return [{**p, "last": sum(last_by_cat.get(c, 0) for c in p.get("categories") or [])} for p in pots]
-
-
-# ---------- recording ----------
 
 async def _insert(at, amount, direction, merchant, source, app="", ref=None, note="", category=None, labeled_by="aturan", realized=True) -> int | None:
     return await db.pool().fetchval(
@@ -164,10 +140,7 @@ async def _insert(at, amount, direction, merchant, source, app="", ref=None, not
 
 async def record(amount: float, merchant: str, ref: str, category: str | None = None, note: str = "", app: str = "JARVIS") -> int | None:
     """What JARVIS itself bought (coffee, an investment): spending too — once."""
-    tid = await _insert(datetime.now(WIB), amount, "out", merchant, "jarvis", app, ref, note, category)
-    if tid:
-        await check_pots()
-    return tid
+    return await _insert(datetime.now(WIB), amount, "out", merchant, "jarvis", app, ref, note, category)
 
 
 RECEIPT = re.compile(r"\b(struk|e-?receipt|receipt|invoice|tagihan anda|pembayaran (berhasil|diterima|sukses)|terima kasih (atas|telah) (pesanan|pembelian|berbelanja)|"
@@ -221,8 +194,7 @@ async def ingest() -> dict:
     if top != last:
         await db.pool().execute("INSERT INTO settings_kv (key, value) VALUES ('money:last_notif', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", {"id": top})
     new += await ingest_mail()
-    alerts = await check_pots() if new else []
-    return {"new": new, "seen": len(rows), "alerts": len(alerts)}
+    return {"new": new, "seen": len(rows)}
 
 
 @appclock.every(120, "money.ingest")
@@ -256,8 +228,6 @@ async def label_unknown() -> dict:
         if i in ids and it.get("kategori") in cats:
             await db.pool().execute("UPDATE money_tx SET category = $2, labeled_by = 'ai' WHERE id = $1", i, it["kategori"])
             n += 1
-    if n:
-        await check_pots()
     return {"labeled": n}
 
 
@@ -273,12 +243,44 @@ async def _spent_by_cat(start: date, end: date) -> dict[str, float]:
     return {r["category"]: r["t"] for r in rows}
 
 
+LIQUIDITY = {"likuid": "Likuid", "semi_likuid": "Semi-likuid", "tidak_likuid": "Tidak likuid"}
+# what each kind of asset usually is (he can say otherwise per asset): likuid = usable today; semi-likuid = sold in a few working days
+# (a money-market fund 1–3 days, gold, shares); tidak likuid = locked until it matures or costs a penalty (a time deposit)
+ASSET_KINDS = {"tunai": ("Tunai", "likuid"), "tabungan": ("Tabungan", "likuid"), "e-wallet": ("E-wallet", "likuid"),
+               "rdpu": ("Reksa dana pasar uang", "semi_likuid"), "emas": ("Emas", "semi_likuid"), "saham": ("Saham", "semi_likuid"),
+               "reksa_dana": ("Reksa dana lain", "semi_likuid"), "obligasi": ("Obligasi / SBN", "semi_likuid"),
+               "deposito": ("Deposito berjangka", "tidak_likuid"), "lainnya": ("Lainnya", "semi_likuid")}
+PLUANG_KIND = {"emas": "emas", "saham_as": "saham", "reksa_dana": "reksa_dana"}   # crypto is too volatile to count as emergency money
+
+
+def emergency_of(assets: list[dict], months: int, monthly: float) -> dict:
+    """His emergency fund today: the total, how much of it by liquidity, and how many months of spending it covers — all of it, and what is
+    usable right away. Pure."""
+    by = {k: 0.0 for k in LIQUIDITY}
+    for a in assets:
+        by[a["liquidity"] if a.get("liquidity") in by else "semi_likuid"] += float(a.get("amount") or 0)
+    total = sum(by.values())
+    st = emergency_status(total, months, monthly)
+    return {**st, "by": {k: round(v) for k, v in by.items()}, "ready_months": round(by["likuid"] / monthly, 1) if monthly else 0,
+            "soon_months": round((by["likuid"] + by["semi_likuid"]) / monthly, 1) if monthly else 0}
+
+
+async def emergency_assets(include_pluang: bool) -> list[dict]:
+    rows = [dict(r) | {"amount": float(r["amount"])} for r in await db.pool().fetch(
+        "SELECT id, name, kind, liquidity, amount, note, updated_at FROM emergency_assets ORDER BY liquidity, amount DESC")]
+    if include_pluang:   # his Pluang holdings as the last reading saw them (gold, shares, funds)
+        snap = await db.pool().fetchrow("SELECT at, data FROM invest_snapshots ORDER BY id DESC LIMIT 1")
+        for a in (snap["data"].get("aset") or []) if snap else []:
+            kind = PLUANG_KIND.get(a.get("jenis"))
+            if kind and a.get("nilai"):
+                rows.append({"id": None, "name": f"{a['nama']} (Pluang)", "kind": kind, "liquidity": "semi_likuid", "amount": float(a["nilai"]),
+                             "note": f"bacaan Pluang {snap['at']:%d %b}", "updated_at": snap["at"], "pluang": True})
+    return rows
+
+
 async def _emergency(s: dict, start: date) -> dict:
-    """Saved = what he said he had (on emergency_at) plus what went to savings since; the monthly need = the last three periods' spending
-    (not counting savings and investing)."""
-    since = s["emergency_at"][:10] if s["emergency_at"] else "1970-01-01"
-    added = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND direction = 'out' AND category = 'tabungan' AND at >= ($1::date::timestamp AT TIME ZONE 'Asia/Jakarta')",
-                                     date.fromisoformat(since))
+    """Where his emergency money is today (assets he keeps up to date, optionally his Pluang holdings) against the target of `months` of his
+    usual spending (the last three periods' realised spending, not counting savings and investing)."""
     totals = []
     ps = start
     for _ in range(3):
@@ -287,7 +289,11 @@ async def _emergency(s: dict, start: date) -> dict:
         if by:
             totals.append(sum(v for k, v in by.items() if k not in ("tabungan", "investasi")))
     monthly = sum(totals) / len(totals) if totals else float(s["salary"] or 0) * 0.7
-    return emergency_status(float(s["emergency_saved"] or 0) + added, int(s["emergency_months"]), monthly)
+    assets = await emergency_assets(bool(s.get("emergency_pluang")))
+    t0, t1 = _span(*period_of(datetime.now(WIB).date(), int(s["payday"])))
+    saved_now = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND direction = 'out' AND category = 'tabungan' AND at >= $1 AND at < $2", t0, t1)
+    return {**emergency_of(assets, int(s["emergency_months"]), monthly), "assets": assets, "pluang": bool(s.get("emergency_pluang")),
+            "saved_this_period": saved_now, "kinds": {k: {"label": v[0], "liquidity": v[1]} for k, v in ASSET_KINDS.items()}, "liquidity": LIQUIDITY}
 
 
 async def summary(today: date | None = None) -> dict:
@@ -302,17 +308,16 @@ async def summary(today: date | None = None) -> dict:
     days, gone = (end - start).days + 1, (today - start).days + 1
     salary = float(s["salary"] or 0)
     recent = [dict(r) for r in await db.pool().fetch("SELECT id, at, amount::float AS amount, direction, merchant, category, source, app, labeled_by, note, realized FROM money_tx WHERE (at >= $1 AND at < $2) OR NOT realized ORDER BY at DESC LIMIT 40", t0, t1)]
-    plan = await db.pool().fetchrow("SELECT id, period_start, data, status, created_at FROM money_plans WHERE status = 'proposed' ORDER BY id DESC LIMIT 1")
     ls, le = period_of(start - timedelta(days=1), int(s["payday"]))
     last = await _spent_by_cat(ls, le)
-    plan_data = {**plan["data"], "pos": with_last(plan["data"].get("pos") or [], last)} if plan else None
+    bills = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE direction = 'out' AND category = ANY($3) AND at >= $1 AND at < $2",
+                                     t0, t1, list(ZAKAT_DEDUCT))   # paid or still to pay: both are this period's bills and debt
     return {"period": {"start": start, "end": end, "days": days, "day": gone, "left_days": days - gone, "next_payday": end + timedelta(days=1)},
             "salary": salary, "spent": total, "income": income, "left": salary - total if salary else None,
             "pace": round(total / gone * days) if gone else 0, "by_category": dict(sorted(spent.items(), key=lambda x: -x[1])),
-            "pots": with_last(pot_status(s["pots"], spent, int(s["alert_pct"])), last), "recent": recent, "settings": s,
-            "zakat": zakat_of(s["salary"], s["pots"], s.get("zakat_method") or "neto", float(s.get("zakat_nisab_month") or ZAKAT_NISAB_MONTH)),
+            "recent": recent, "settings": s,
+            "zakat": zakat_of(s["salary"], bills, s.get("zakat_method") or "neto", float(s.get("zakat_nisab_month") or ZAKAT_NISAB_MONTH)),
             "last_period": {"start": ls, "end": le, "spent": sum(last.values())}, "emergency": await _emergency(s, start),
-            "plan": {"id": plan["id"], "period_start": plan["period_start"], "created_at": plan["created_at"], **plan_data} if plan else None,
             "categories": list(CATEGORIES) + ["lainnya"], "pending": await _pending()}
 
 
@@ -323,139 +328,17 @@ async def _pending() -> dict:
     return {"n": r["n"], "out": r["out_"], "in": r["in_"]}
 
 
-async def check_pots(today: date | None = None) -> list[dict]:
-    """Tell once per period when a pot reaches the alert line (and again when it goes over)."""
-    s = await summary(today)
-    told = []
-    for p in s["pots"]:
-        if p.get("unplanned") or p["level"] == "ok":
-            continue
-        key = f"money:alert:{s['period']['start']}:{p['name']}:{p['level']}"
-        if await db.pool().fetchval("INSERT INTO settings_kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING RETURNING key", key, {"pct": p["pct"]}):
-            title = f"Pos {p['name']} " + ("terlewati" if p["level"] == "over" else f"sudah {p['pct']}%")
-            await hub.broadcast({"type": "notify", "title": title, "text": f"Terpakai {rp_short(p['spent'])} dari {rp_short(p['amount'])}; {s['period']['left_days']} hari lagi ke gajian.",
-                                 "kind": "info", "route": "#/gaji"})
-            told.append({"pot": p["name"], "level": p["level"]})
-    return told
-
-
-async def propose(trigger: str = "owner") -> dict:
-    """Next period's allocation from the last three periods' real spending (the heavy brain plans; his numbers never go to a free endpoint)."""
-    s = await appsettings.get("money")
-    if not s["salary"]:
-        raise MoneyError("isi dulu gaji bulananmu")
-    today = datetime.now(WIB).date()
-    start, _ = period_of(today, int(s["payday"]))
-    hist = []
-    for i in range(1, 4):
-        ps, pe = period_of(start - timedelta(days=1 + 31 * (i - 1)), int(s["payday"]))
-        rows = await db.pool().fetch("SELECT category, sum(amount)::float AS t FROM money_tx WHERE realized AND direction = 'out' AND at >= $1 AND at < $2 GROUP BY category",
-                                     datetime(ps.year, ps.month, ps.day, tzinfo=WIB), datetime(pe.year, pe.month, pe.day, tzinfo=WIB) + timedelta(days=1))
-        if rows:
-            hist.append(f"{ps}–{pe}: " + ", ".join(f"{r['category']} {rp_short(r['t'])}" for r in rows))
-    cur = await summary(today)
-    msgs = [{"role": "system", "content": (
-        "Kamu perencana keuangan keluarga Muslim di Indonesia. Susun ALOKASI GAJI periode berikutnya dari pengeluaran nyata pemilik. Prinsip: "
-        "kewajiban & tagihan dulu, zakat/sedekah, dana darurat & tabungan (target " + str(s["savings_pct"]) + "% bila mungkin), investasi, lalu kebutuhan "
-        "harian; realistis terhadap kebiasaan (jangan memangkas drastis), hemat di kategori yang membengkak. Jumlah semua pos = gaji. JSON: "
-        "{\"ringkasan\": \"2 kalimat\", \"pos\": [{\"name\": \"…\", \"amount\": 0, \"categories\": [\"kategori yang masuk pos ini\"], \"alasan\": \"…\"}], "
-        "\"hemat\": [\"saran konkret\"], \"catatan\": \"…\"}. Kategori yang ada: " + ", ".join(list(CATEGORIES) + ["lainnya"]))},
-        {"role": "user", "content": (f"Gaji: Rp{int(s['salary']):,}".replace(",", ".") + f"; gajian tanggal {s['payday']}. Tujuan pemilik: {s['goals'] or '-'}.\n"
-                                     f"Periode berjalan: terpakai {rp_short(cur['spent'])} dalam {cur['period']['day']} hari (proyeksi {rp_short(cur['pace'])}); per kategori: "
-                                     + ", ".join(f"{k} {rp_short(v)}" for k, v in cur["by_category"].items()) + "\n3 periode sebelumnya:\n" + ("\n".join(hist) or "belum ada data")
-                                     + f"\nPos sekarang: {[{'name': p['name'], 'amount': p['amount'], 'bulan_lalu': round(p['last'])} for p in cur['pots'] if not p.get('unplanned')]}"
-                                     + f"\nDana darurat: {rp_short(cur['emergency']['saved'])} dari target {rp_short(cur['emergency']['target'])} "
-                                     f"({cur['emergency']['months']}× pengeluaran bulanan ≈ {rp_short(cur['emergency']['monthly'])}); bila belum penuh, sisihkan pos 'Dana darurat' (kategori tabungan)."
-                                     + "\nZAKAT (aturan pemilik, wajib diikuti): 2,5% × (gaji − pos tagihan − pos cicilan & utang) bila hasilnya ≥ nisab "
-                                     f"Rp{int(s.get('zakat_nisab_month') or ZAKAT_NISAB_MONTH):,}".replace(",", ".") + "/bulan (SK BAZNAS 15/2026). Hitung dari pos tagihan & "
-                                     "cicilan dalam alokasimu sendiri; pos 'Zakat & sedekah' (kategori zakat & sedekah) minimal sebesar zakat itu. Pisahkan cicilan/utang ke "
-                                     "pos berkategori 'cicilan & utang'.")}]
-    r = await master.run(master.Job("uang", "alokasi", "susun alokasi gaji periode berikutnya", trigger=trigger, messages=msgs, heavy=True, json_out=True, no_free=True, max_tokens=1600))
-    if r["status"] != "done" or not isinstance(r["result"], dict):
-        raise MoneyError(r.get("error") or "alokasi gagal disusun")
-    pots = clean_pots(r["result"].get("pos"))
-    if not pots:
-        raise MoneyError("alokasi tidak berisi pos")
-    pots = with_zakat(pots, s)
-    data = {"ringkasan": str(r["result"].get("ringkasan") or "")[:400], "pos": pots, "hemat": [str(x)[:200] for x in r["result"].get("hemat") or []][:5],
-            "catatan": str(r["result"].get("catatan") or "")[:300], "total": sum(p["amount"] for p in pots), "salary": s["salary"], "lane": r.get("lane")}
-    await db.pool().execute("UPDATE money_plans SET status = 'dismissed' WHERE status = 'proposed'")
-    pid = await db.pool().fetchval("INSERT INTO money_plans (period_start, data, run_id) VALUES ($1, $2, $3) RETURNING id", cur["period"]["next_payday"], data, r["run_id"])
-    if trigger != "owner":
-        await hub.broadcast({"type": "notify", "title": "Alokasi gaji bulan depan siap", "text": data["ringkasan"][:160], "kind": "info", "route": "#/gaji"})
-    return {"id": pid, **data}
-
-
-def with_zakat(pots: list[dict], s: dict) -> list[dict]:
-    """The zakat pot at least the zakat his rule gives for these pots (added when the plan has none). Pure."""
-    z = zakat_of(s["salary"], pots, s.get("zakat_method") or "neto", float(s.get("zakat_nisab_month") or ZAKAT_NISAB_MONTH))
-    if not z["due"]:
-        return pots
-    out = [dict(p) for p in pots]
-    pot = next((p for p in out if "zakat & sedekah" in (p.get("categories") or [])), None)
-    if pot:
-        pot["amount"] = max(int(pot["amount"]), z["amount"])
-    else:
-        out.insert(0, {"name": "Zakat & sedekah", "amount": z["amount"], "categories": ["zakat & sedekah"], "alasan": "zakat penghasilan 2,5% (neto)"})
-    return out
-
-
-def clean_pots(pots) -> list[dict]:
-    out = []
-    for p in pots or []:
-        if not isinstance(p, dict) or not p.get("name"):
-            continue
-        amt = to_number(p.get("amount"))
-        if amt is None or amt < 0:
-            continue
-        out.append({"name": str(p["name"])[:40], "amount": round(amt), "categories": [str(c)[:40] for c in p.get("categories") or [] if c][:8],
-                    "alasan": str(p.get("alasan") or "")[:200]})
-    return out[:15]
-
-
-async def apply_plan(plan_id: int, pots: list[dict] | None, who: str) -> dict:
-    row = await db.pool().fetchrow("SELECT data FROM money_plans WHERE id = $1 AND status = 'proposed'", plan_id)
-    if not row:
-        raise MoneyError("usulan tidak ada atau sudah dipakai")
-    final = clean_pots(pots) if pots else row["data"]["pos"]
-    await appsettings.put("money", {"pots": [{"name": p["name"], "amount": p["amount"], "categories": p["categories"]} for p in final]}, who)
-    await db.pool().execute("UPDATE money_plans SET status = 'applied' WHERE id = $1", plan_id)
-    await audit.record(who, "money.plan_applied", f"money_plan:{plan_id}", pots=len(final))
-    return await summary()
-
-
-async def _plan_due() -> str:
-    s = await appsettings.get("money")
-    if not s["salary"]:
-        return ""
-    today = datetime.now(WIB).date()
-    _, end = period_of(today, int(s["payday"]))
-    return "08:00" if (end - today).days == 1 else ""   # two days before payday
-
-
-@appclock.daily(_plan_due, "money.plan")
-async def _auto_plan() -> None:
-    try:
-        await propose("schedule")
-    except MoneyError as e:
-        log.info("allocation not proposed: %s", e)
-
-
 # ---------- other screens ----------
 
 @home.provider("money")
 async def _home(m: home.Moment) -> list[dict]:
     s = await summary(m.now.astimezone(WIB).date())
     cards = []
-    if s["plan"]:
-        cards.append({"id": "money:plan", "title": "Alokasi gaji bulan depan", "sub": s["plan"]["ringkasan"][:100], "route": "#/gaji", "icon": "wallet", "tone": "violet", "score": 58, "cta": "Tinjau"})
-    warn = [p for p in s["pots"] if p["level"] != "ok" and not p.get("unplanned")]
-    if warn:
-        p = warn[0]
-        cards.append({"id": "money:pot", "title": f"Pos {p['name']} {p['pct']}%", "sub": f"sisa {rp_short(max(0, p['left']))} · {s['period']['left_days']} hari ke gajian",
-                      "route": "#/gaji", "icon": "wallet", "tone": "amber", "score": 52})
-    elif "gajian" in m.tags and s["salary"]:
-        cards.append({"id": "money", "title": "Gajian", "sub": "Waktunya alokasi gaji", "route": "#/gaji", "icon": "wallet", "tone": "green", "score": 55})
+    if s["pending"]["n"]:
+        cards.append({"id": "money:pending", "title": f"{s['pending']['n']} transaksi belum direalisasi", "sub": f"−{rp_short(s['pending']['out'])} menunggu dibayar",
+                      "route": "#/gaji", "icon": "wallet", "tone": "amber", "score": 50})
+    if "gajian" in m.tags and s["salary"]:
+        cards.append({"id": "money", "title": "Gajian", "sub": "Catat tagihan bulan ini & perbarui dana darurat", "route": "#/gaji", "icon": "wallet", "tone": "green", "score": 55})
     return cards
 
 
@@ -469,10 +352,12 @@ async def _recap(day: date) -> str:
 @brief.context("keuangan")
 async def _brief() -> str:
     s = await summary()
-    warn = [p for p in s["pots"] if p["level"] != "ok" and not p.get("unplanned")]
     parts = [f"{s['period']['left_days']} hari ke gajian"] if s["salary"] else []
-    if warn:
-        parts.append("pos hampir habis: " + ", ".join(f"{p['name']} {p['pct']}%" for p in warn))
+    if s["pending"]["n"]:
+        parts.append(f"{s['pending']['n']} tagihan/rencana belum dibayar {rp_short(s['pending']['out'])}")
+    e = s["emergency"]
+    if e["target"]:
+        parts.append(f"dana darurat {rp_short(e['saved'])} (cukup {e['covers_months']} bln; siap pakai {e['ready_months']} bln)")
     return "; ".join(parts)
 
 
@@ -506,10 +391,6 @@ class CatIn(BaseModel):   # any of these: what he changes on a transaction (owne
     realized: bool | None = None
 
 
-class ApplyIn(BaseModel):
-    pots: list[dict] | None = None
-
-
 @router.get(API)
 async def api_summary(device: dict = Depends(owner)):
     return await summary()
@@ -528,7 +409,6 @@ async def api_add(body: TxIn, device: dict = Depends(owner)):
             raise HTTPException(422, "tanggal di masa depan hanya untuk yang belum direalisasi")
     tid = await _insert(when, body.amount, body.direction, body.merchant, "manual", "", None, body.note, body.category or None,
                         "pemilik" if body.category else "aturan", body.realized)
-    await check_pots()
     return {"id": tid}
 
 
@@ -571,8 +451,6 @@ async def from_receipt(attachment_id: str) -> dict:
     if twin:
         return {**rc, "duplicate": dict(twin), "lane": r.get("lane")}
     tid = await _insert(at, rc["total"], "out", rc["merchant"], "struk", "Foto struk", f"struk:{attachment_id}", "; ".join(rc["items"])[:300])
-    if tid:
-        await check_pots()
     return {**rc, "id": tid, "lane": r.get("lane")}
 
 
@@ -615,7 +493,6 @@ async def api_cat(tx_id: int, body: CatIn, device: dict = Depends(owner)):
     if not done.endswith("1"):
         raise HTTPException(404, "transaksi tidak ada")
     await audit.record(actor(device), "money.tx_edited", f"money_tx:{tx_id}", fields=cols)
-    await check_pots()   # a changed amount or category may cross a pot's 80%
     return {"ok": True}
 
 
@@ -625,40 +502,37 @@ async def api_del(tx_id: int, device: dict = Depends(owner)):
     return {"ok": True}
 
 
-@router.post(API + "/plan")
-async def api_plan(device: dict = Depends(owner)):
-    try:
-        return await propose("owner")
-    except MoneyError as e:
-        raise HTTPException(409, str(e))
+class AssetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    kind: str = Field(default="tabungan", max_length=20)
+    liquidity: str | None = Field(default=None, pattern="^(likuid|semi_likuid|tidak_likuid)$")
+    amount: float = Field(ge=0, le=1e13)
+    note: str = Field(default="", max_length=200)
 
 
-class PotsIn(BaseModel):
-    pots: list[dict] = Field(max_length=15)
+def _asset_values(body: AssetIn) -> tuple:
+    kind = body.kind if body.kind in ASSET_KINDS else "lainnya"
+    return body.name.strip(), kind, body.liquidity or ASSET_KINDS[kind][1], round(body.amount), body.note.strip()
 
 
-async def save_pots(pots: list[dict], who: str) -> dict:
-    """His own allocation, edited by hand (owner 2026-10-31: "fitur alokasi saat ini tidak bisa diedit"): names, amounts, categories."""
-    final = clean_pots(pots)
-    names = [p["name"].strip().lower() for p in final]
-    if len(set(names)) != len(names):
-        raise MoneyError("nama pos tidak boleh kembar")
-    await appsettings.put("money", {"pots": [{"name": p["name"].strip(), "amount": p["amount"], "categories": p["categories"]} for p in final]}, who)
-    await audit.record(who, "money.pots_edited", "money:pots", pots=len(final), total=sum(p["amount"] for p in final))
-    return await summary()
+@router.post(API + "/emergency")
+async def api_asset_add(body: AssetIn, device: dict = Depends(owner)):
+    """Emergency money outside (or inside) his salary: a savings account, cash, an e-wallet, a money-market fund, gold, shares, a deposit."""
+    aid = await db.pool().fetchval("INSERT INTO emergency_assets (name, kind, liquidity, amount, note) VALUES ($1, $2, $3, $4, $5) RETURNING id", *_asset_values(body))
+    await audit.record(actor(device), "money.emergency_asset", f"emergency_asset:{aid}")
+    return {"id": aid}
 
 
-@router.put(API + "/pots")
-async def api_pots(body: PotsIn, device: dict = Depends(owner)):
-    try:
-        return await save_pots(body.pots, actor(device))
-    except MoneyError as e:
-        raise HTTPException(409, str(e))
+@router.put(API + "/emergency/{asset_id}")
+async def api_asset_edit(asset_id: int, body: AssetIn, device: dict = Depends(owner)):
+    done = await db.pool().execute("UPDATE emergency_assets SET name = $2, kind = $3, liquidity = $4, amount = $5, note = $6, updated_at = now() WHERE id = $1",
+                                   asset_id, *_asset_values(body))
+    if not done.endswith("1"):
+        raise HTTPException(404, "aset tidak ada")
+    return {"ok": True}
 
 
-@router.post(API + "/plan/{plan_id}/apply")
-async def api_apply(plan_id: int, body: ApplyIn, device: dict = Depends(owner)):
-    try:
-        return await apply_plan(plan_id, body.pots, actor(device))
-    except MoneyError as e:
-        raise HTTPException(409, str(e))
+@router.delete(API + "/emergency/{asset_id}")
+async def api_asset_del(asset_id: int, device: dict = Depends(owner)):
+    await db.pool().execute("DELETE FROM emergency_assets WHERE id = $1", asset_id)
+    return {"ok": True}

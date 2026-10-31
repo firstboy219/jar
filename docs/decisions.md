@@ -1582,6 +1582,16 @@ menentukan berat/ringan/non-AI)".
   choice, the default: salary minus his "tagihan" and "cicilan & utang" pots (a new spending category split off from tagihan). Below the
   nisab it is not due that month. The Gaji page shows the sum, the nisab and the sources, offers to set the zakat pot to it, and lets him
   switch to the gross method; a proposed allocation always carries a zakat pot at least that large.
+- **Realised / not yet replaces the salary allocation; the emergency fund as assets** (owner 2026-10-31: "Bikin pengaturan realisasi transaksi
+  tidak perlu klik detail … hapus fitur alokasi anggaran karena sudah terwakili dengan penanda realisasi/blm … add dana darurat diluar dari
+  gaji … cair atau tidak cair tapi bisa dicairkan (emas/saham) atau beku (deposit)"): each transaction is ticked realised or not yet right
+  in the list (both ways); the pots, their 80% warnings, the monthly proposal and its editor are gone (the stored pots stay unused; the
+  investing pot budget is now none). Zakat "neto" subtracts this period's "tagihan" and "cicilan & utang" transactions, paid or still to
+  pay. The emergency fund is a list of assets he keeps up to date — inside or outside his salary — each likuid (cash, savings, e-wallet:
+  usable today), semi-likuid (money-market funds, gold, shares: sold in a few working days) or tidak likuid (time deposits: locked until
+  they mature or cost a penalty), the default by kind and changeable per asset; optionally his Pluang holdings (gold, shares, funds — not
+  crypto) from the last reading; shown as today's total, by liquidity, and how many months it covers in all and usable right away. What
+  he had typed as "Dana darurat sekarang" became his first asset (migration 059).
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

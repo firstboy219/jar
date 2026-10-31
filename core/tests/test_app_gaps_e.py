@@ -30,8 +30,10 @@ def test_usual_emergency_pots_star_guard_cutoff_weak_points_and_pins():
     e = money.emergency_status(15_000_000, 6, 5_000_000)
     assert e == {"saved": 15_000_000, "target": 30_000_000, "months": 6, "pct": 50, "covers_months": 3.0, "monthly": 5_000_000}
     assert money.emergency_status(0, 6, 0)["pct"] == 0
-    pots = money.with_last([{"name": "Makan", "categories": ["makan", "kopi"]}, {"name": "Lain", "categories": []}], {"makan": 900_000, "kopi": 100_000})
-    assert [p["last"] for p in pots] == [1_000_000, 0]
+    em = money.emergency_of([{"liquidity": "likuid", "amount": 5_000_000}, {"liquidity": "semi_likuid", "amount": 7_000_000},
+                             {"liquidity": "tidak_likuid", "amount": 3_000_000}], 6, 5_000_000)
+    assert em["saved"] == 15_000_000 and em["by"] == {"likuid": 5_000_000, "semi_likuid": 7_000_000, "tidak_likuid": 3_000_000}
+    assert (em["covers_months"], em["ready_months"], em["soon_months"]) == (3.0, 1.0, 2.4)
 
     p = {"aset": [{"nama": "Emas", "kode": "", "jenis": "emas", "nilai": 7_000_000, "harga": 1_650_000}]}
     opts = invest.clean_options({"opsi": [{"judul": "Tambah emas", "aksi": [{"jenis": "beli", "aset": "Emas", "nominal": 500000}], "disarankan": True},
@@ -76,19 +78,26 @@ async def test_learned_coffee_emergency_fund_and_investing_pot(pool, monkeypatch
     assert (await coffee._settings())["usual"] == "Latte" and not (await coffee._settings())["usual_learned"]   # typed wins
 
     today = datetime.now(WIB).date()
-    await appsettings.put("money", {"salary": 10_000_000, "payday": 25, "emergency_saved": 6_000_000, "emergency_at": today.isoformat(),
-                                    "pots": [{"name": "Makan", "amount": 3_000_000, "categories": ["makan"]},
-                                             {"name": "Investasi", "amount": 1_000_000, "categories": ["investasi"]}]}, "owner")
+    await appsettings.put("money", {"salary": 10_000_000, "payday": 25}, "owner")
+    await pool.execute("TRUNCATE emergency_assets RESTART IDENTITY")
+    await pool.execute("""INSERT INTO emergency_assets (name, kind, liquidity, amount) VALUES ('Tabungan darurat', 'tabungan', 'likuid', 6000000),
+                          ('Deposito', 'deposito', 'tidak_likuid', 4000000)""")
     start, _ = money.period_of(today, 25)
     last_day = datetime(start.year, start.month, start.day, 12, tzinfo=WIB) - timedelta(days=2)
     await pool.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source) VALUES ($1, 2500000, 'out', 'GoFood', 'makan', 'notif')", last_day)
     await pool.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source) VALUES (now(), 500000, 'out', 'Tabungan', 'tabungan', 'manual')")
     await pool.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source) VALUES (now(), 300000, 'out', 'Pluang', 'investasi', 'jarvis')")
     sm = await money.summary(today)
-    assert sm["emergency"]["saved"] == 6_500_000 and sm["emergency"]["monthly"] == 2_500_000 and sm["emergency"]["target"] == 15_000_000
-    assert [p["last"] for p in sm["pots"] if p["name"] == "Makan"] == [2_500_000] and sm["last_period"]["spent"] == 2_500_000
-    b = await invest.pot_budget()
-    assert b == {"pot": "Investasi", "amount": 1_000_000, "spent": 300_000, "left": 700_000}
+    e = sm["emergency"]
+    assert e["saved"] == 10_000_000 and e["by"]["likuid"] == 6_000_000 and e["by"]["tidak_likuid"] == 4_000_000
+    assert e["monthly"] == 2_500_000 and e["target"] == 15_000_000 and e["saved_this_period"] == 500_000 and sm["last_period"]["spent"] == 2_500_000
+    assert await invest.pot_budget() is None                                     # the salary allocation is gone
+    await pool.execute("INSERT INTO invest_snapshots (data) VALUES ($1)", {"total": 9_000_000, "kas": 0, "aset": [
+        {"nama": "Emas", "kode": "", "jenis": "emas", "nilai": 7_000_000}, {"nama": "Bitcoin", "kode": "BTC", "jenis": "kripto", "nilai": 2_000_000}]})
+    await appsettings.put("money", {"emergency_pluang": True}, "owner")
+    e = (await money.summary(today))["emergency"]
+    assert e["saved"] == 17_000_000 and e["by"]["semi_likuid"] == 7_000_000         # his Pluang gold counts; crypto does not
+    await pool.execute("DELETE FROM invest_snapshots")
 
     asked = []
 
@@ -102,12 +111,10 @@ async def test_learned_coffee_emergency_fund_and_investing_pot(pool, monkeypatch
     async def no_market(p):
         return []
     monkeypatch.setattr(invest, "_market", no_market)
-    plan = await money.propose()
-    assert "Dana darurat: Rp6,5 jt dari target Rp15 jt" in asked[-1] and plan["catatan"] == "Dana darurat dulu."
     sid = await pool.fetchval("INSERT INTO invest_snapshots (data) VALUES ($1) RETURNING id", {"total": 7_000_000, "kas": 0, "aset": [
         {"nama": "Emas", "kode": "", "jenis": "emas", "nilai": 7_000_000, "harga": 1_650_000, "untung_pct": 2}]})
     a = await invest.analyse(sid)
-    assert "sisa Rp700 rb" in asked[-1] and a["budget"]["left"] == 700_000 and a["opsi"][0]["disarankan"]
+    assert a["budget"] is None and a["opsi"][0]["disarankan"]
     await pool.execute("UPDATE invest_proposals SET status = 'running', chosen = 'A' WHERE id = $1", a["id"])
     await invest._exec_done(0, {"ok": True, "data": {"proposal": a["id"]}, "text": '{"berhasil": [{"jenis": "beli", "aset": "Emas", "nominal": 500000, "harga": 1720000}]}'})
     res = await pool.fetchval("SELECT result FROM invest_proposals WHERE id = $1", a["id"])
@@ -124,7 +131,7 @@ async def test_learned_coffee_emergency_fund_and_investing_pot(pool, monkeypatch
         assert (await c.put("/api/v1/app/settings/invest", json={"limit": 5_000_000, "admin_password": "pw-admin"}, headers=h)).json()["limit"] == 5_000_000
         assert (await c.put("/api/v1/app/settings/invest", json={"limit": 1_000_000, "targets": {"emas": 60}}, headers=h)).status_code == 200   # tighter: no password
         st = (await c.get("/api/v1/app/invest", headers=h)).json()
-        assert st["budget"]["left"] == 200_000 and st["settings"]["targets"] == {"emas": 60}   # the 500 rb bought is spending of the pot
+        assert st["budget"] is None and st["settings"]["targets"] == {"emas": 60}   # no salary allocation any more
 
 
 # ---------- business ----------

@@ -32,9 +32,6 @@ def test_money_notifications_categories_and_the_pay_period():
     assert money.period_of(date(2026, 10, 29), 25) == (date(2026, 10, 25), date(2026, 11, 24))
     assert money.period_of(date(2026, 10, 3), 25) == (date(2026, 9, 25), date(2026, 10, 24))
     assert money.period_of(date(2027, 2, 28), 31) == (date(2027, 2, 28), date(2027, 3, 30))                   # payday 31 = the month's last day
-    pots = money.pot_status([{"name": "Makan", "amount": 1_000_000, "categories": ["makan", "kopi"]}, {"name": "Transport", "amount": 500_000, "categories": ["transport"]}],
-                            {"makan": 700_000, "kopi": 150_000, "transport": 100_000, "hiburan": 90_000}, 80)
-    assert [(x["name"], x["pct"], x["level"]) for x in pots] == [("Makan", 85, "warn"), ("Transport", 20, "ok"), ("Di luar pos", 0, "ok")]
 
 
 def test_invest_options_stay_within_the_rules():
@@ -96,50 +93,17 @@ async def test_spending_is_recorded_from_notifications_and_pots_warn_once(pool, 
         seen.append(ev)
     hub.register(listen)
     r = await money.tick()
-    assert r == {"new": 2, "seen": 2, "alerts": 1}                                                          # the sensitive & WhatsApp ones never
+    assert r == {"new": 2, "seen": 2}                                                                       # the sensitive & WhatsApp ones never
     assert await pool.fetchval("SELECT feature || ':' || action || ':' || lane FROM flow_runs") == "uang:catat:skill"
     assert await money.tick() is None                                                                     # nothing new: no run at all
     assert await pool.fetchval("SELECT count(*) FROM flow_runs") == 1
     s = await money.summary()
-    assert s["spent"] == 85_000 and s["pots"][0]["pct"] == 85 and s["pots"][0]["level"] == "warn"
-    assert [e["title"] for e in seen if e.get("type") == "notify"] == ["Pos Makan & kopi sudah 85%"]
-    assert await money.check_pots() == []                                                                 # told once per period
+    assert s["spent"] == 85_000 and "pots" not in s                                                       # the allocation is gone (owner 2026-10-31)
     await money.record(30_000, "Kopi Kenangan", "coffee:9", "kopi")
     await money.record(30_000, "Kopi Kenangan", "coffee:9", "kopi")                                       # the same purchase never twice
     s = await money.summary()
-    assert s["spent"] == 115_000 and s["pots"][0]["level"] == "over"
-    assert [e["title"] for e in seen if e.get("type") == "notify"][-1] == "Pos Makan & kopi terlewati"
+    assert s["spent"] == 115_000
     hub.reset()
-
-
-@needs_db
-async def test_the_allocation_is_proposed_by_the_heavy_brain_and_applied(pool, monkeypatch):
-    from app import appsettings, gateway, modelrouter, money
-    await pool.execute("TRUNCATE money_tx, money_plans, flow_runs, settings_kv RESTART IDENTITY CASCADE")
-    with pytest.raises(money.MoneyError):
-        await money.propose()                                                                             # no salary yet: says so
-    await appsettings.put("money", {"salary": 10_000_000, "payday": 25}, "test")
-    await pool.execute("INSERT INTO money_tx (at, amount, direction, merchant, category, source) VALUES (now() - interval '2 days', 600000, 'out', 'PLN', 'tagihan', 'manual')")
-    calls = []
-
-    async def fake(lane, body, **kw):
-        calls.append((lane, modelrouter.NO_FREE.get(), body["messages"][1]["content"]))
-        if "kategori pengeluaran" in body["messages"][0]["content"]:
-            return reply({"items": [{"id": 2, "kategori": "makan"}, {"id": 99, "kategori": "makan"}]})
-        return reply({"ringkasan": "Tagihan dulu, tabung 20%.", "pos": [{"name": "Tagihan", "amount": "1.500.000", "categories": ["tagihan"], "alasan": "PLN, internet"},
-                                                                        {"name": "Tabungan", "amount": 2000000, "categories": []}, {"amount": 5}], "hemat": ["Kurangi GoFood"]})
-    monkeypatch.setattr(gateway, "complete", fake)
-    p = await money.propose()
-    assert [x["name"] for x in p["pos"]] == ["Zakat & sedekah", "Tagihan", "Tabungan"] and p["pos"][1]["amount"] == 1_500_000 and p["lane"] == "berat"
-    assert p["pos"][0]["amount"] == 212_500                         # his rule: 2,5% × (10 jt − tagihan 1,5 jt), above the nisab — added when the plan forgot it
-    assert calls[-1][0] == "berat" and calls[-1][1] is True and "Gaji: Rp10.000.000" in calls[-1][2] and "tagihan" in calls[-1][2]
-    s = await money.apply_plan(p["id"], [{"name": "Tagihan", "amount": 1_700_000, "categories": ["tagihan"]}], "test")
-    assert s["pots"][0]["amount"] == 1_700_000 and s["pots"][0]["spent"] == 600_000
-    with pytest.raises(money.MoneyError):
-        await money.apply_plan(p["id"], None, "test")                                                     # used once
-    await pool.execute("INSERT INTO money_tx (amount, direction, merchant, source) VALUES (35000, 'out', 'Toko Pak Slamet', 'manual')")
-    assert (await money.label_unknown()) == {"labeled": 1}                                                # the light brain labels what rules could not
-    assert await pool.fetchval("SELECT category || ':' || labeled_by FROM money_tx WHERE id = 2") == "makan:ai"
 
 
 # ---------- Pluang ----------
@@ -261,7 +225,7 @@ async def test_wave5_screens_get_real_answers(pool, monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
         m = (await c.get("/api/v1/app/money", headers=h)).json()
         assert m["salary"] == 0 and m["spent"] == 0 and "kopi" in m["categories"]
-        assert (await c.post("/api/v1/app/money/plan", headers=h)).status_code == 409
+        assert (await c.post("/api/v1/app/money/plan", headers=h)).status_code in (404, 405)   # the allocation was removed
         assert (await c.post("/api/v1/app/money/tx", json={"amount": 50000, "merchant": "Indomaret"}, headers=h)).json()["id"]
         m = (await c.get("/api/v1/app/money", headers=h)).json()
         assert m["recent"][0]["category"] == "belanja" and m["spent"] == 50000

@@ -120,7 +120,7 @@ def _offline_unless_asgi(real):
 
 EXPECTED_EVERY = {"habits.time", "commute.watch", "ibadah.reminders", "quran.routines", "inbox.sync", "outlook.login", "bisnis.poll", "money.ingest",
                   "jobs.replies", "jobs.mail"}
-EXPECTED_DAILY = {"habits.learn", "bisnis.strategy", "bisnis.opportunities", "money.label", "money.plan", "invest.weekly", "flow.thin", "jobs.round1", "jobs.round2"}
+EXPECTED_DAILY = {"habits.learn", "bisnis.strategy", "bisnis.opportunities", "money.label", "invest.weekly", "flow.thin", "jobs.round1", "jobs.round2"}
 
 
 @needs_db

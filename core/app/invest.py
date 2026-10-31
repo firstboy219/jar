@@ -232,16 +232,8 @@ async def analyse(snapshot_id: int, trigger: str = "owner") -> dict:
 
 
 async def pot_budget() -> dict | None:
-    """The investing pot of his salary allocation (Gaji): its amount, what went to investing this pay period, what is left."""
-    ms = await appsettings.get("money")
-    pot = next((p for p in ms["pots"] if "investasi" in (p.get("categories") or [])), None)
-    if not pot:
-        return None
-    start, end = money.period_of(datetime.now(WIB).date(), int(ms["payday"]))
-    t0 = datetime(start.year, start.month, start.day, tzinfo=WIB)
-    spent = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND direction = 'out' AND category = 'investasi' AND at >= $1", t0)
-    amount = float(pot.get("amount") or 0)
-    return {"pot": pot.get("name") or "Investasi", "amount": amount, "spent": spent, "left": max(0.0, amount - spent)}
+    """The salary allocation's investing pot — gone with the allocation (owner 2026-10-31: realised / not yet replaces it); kept as a seam."""
+    return None
 
 
 # ---------- executing his pick ----------
@@ -317,7 +309,7 @@ async def exec_view() -> dict | None:
         {"label": "Password admin", "ok": bool(p["decided_by"]), "detail": f"disetujui {p['decided_by'] or '-'}"},
         {"label": f"Batas Rp{int(s['limit']):,}".replace(",", "."), "ok": buy <= float(s["limit"]), "detail": f"pembelian Rp{int(buy):,}".replace(",", ".")},
         {"label": "Anggaran investasi bulan ini", "ok": (buy <= budget["left"]) if budget else None,
-         "detail": (f"sisa Rp{int(budget['left']):,}".replace(",", ".") if budget else "tidak ada pos investasi di Gaji")},
+         "detail": (f"sisa Rp{int(budget['left']):,}".replace(",", ".") if budget else "batas pembelian diatur di menu Investasi")},
         {"label": f"Pengaman harga ±{s['price_guard_pct']}%", "ok": None if (unpriced := [a["aset"] for a in opt["aksi"] if not priced.get(a["aset"].lower())]) else True,
          "detail": (f"tanpa harga acuan: {', '.join(unpriced)} — dicek dari ringkasan sebelum konfirmasi" if unpriced
                     else "harga saat dibaca dikirim ke HP; dibatalkan bila bergeser")},

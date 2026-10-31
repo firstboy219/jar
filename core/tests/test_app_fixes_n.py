@@ -108,23 +108,6 @@ async def test_the_apply_stage_opens_jobstreet_once_per_job_with_what_he_answere
 
 
 @needs_db
-async def test_the_allocation_can_be_edited_by_hand(pool, monkeypatch):
-    from app import appsettings, devices, main
-    await pool.execute("TRUNCATE settings_kv, money_tx RESTART IDENTITY CASCADE")
-    await appsettings.put("money", {"salary": 10_000_000, "payday": 25, "pots": [{"name": "Makan", "amount": 3_000_000, "categories": ["makan"]}]}, "owner")
-    _, token = await devices.create("HP", "test", scope="owner")
-    h = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
-        pots = [{"name": "Makan & kopi", "amount": "2.500.000", "categories": ["makan", "kopi"]}, {"name": "Investasi", "amount": 1_500_000, "categories": ["investasi"]},
-                {"name": "", "amount": 5}, {"name": "Rusak", "amount": -1}]
-        r = (await c.put("/api/v1/app/money/pots", json={"pots": pots}, headers=h)).json()
-        assert [(p["name"], p["amount"], p["categories"]) for p in r["settings"]["pots"]] == [("Makan & kopi", 2_500_000, ["makan", "kopi"]), ("Investasi", 1_500_000, ["investasi"])]
-        dup = await c.put("/api/v1/app/money/pots", json={"pots": [{"name": "A", "amount": 1}, {"name": "a", "amount": 2}]}, headers=h)
-        assert dup.status_code == 409 and "kembar" in dup.json()["detail"]
-    assert [p["name"] for p in (await appsettings.get("money"))["pots"]] == ["Makan & kopi", "Investasi"]
-
-
-@needs_db
 async def test_a_transaction_can_be_edited(pool, monkeypatch):
     from app import devices, main
     await pool.execute("TRUNCATE money_tx RESTART IDENTITY CASCADE")
@@ -145,27 +128,11 @@ async def test_a_transaction_can_be_edited(pool, monkeypatch):
         assert (await c.put("/api/v1/app/money/tx/999999", json={"note": "x"}, headers=h)).status_code == 404
 
 
-def test_zakat_is_counted_after_bills_and_debt_against_the_nisab():
-    from app import money
-    pots = [{"name": "Tagihan", "amount": 1_800_000, "categories": ["tagihan"]}, {"name": "Cicilan", "amount": 1_200_000, "categories": ["cicilan & utang"]},
-            {"name": "Makan", "amount": 3_000_000, "categories": ["makan"]}]
-    z = money.zakat_of(15_000_000, pots)
-    assert (z["deducted"], z["base"], z["due"], z["amount"]) == (3_000_000, 12_000_000, True, 300_000)
-    assert money.zakat_of(15_000_000, pots, "bruto")["amount"] == 375_000
-    low = money.zakat_of(9_000_000, pots)                                                   # 6 jt after bills & debt: under Rp7.640.144
-    assert not low["due"] and low["amount"] == 0 and low["nisab"] == 7_640_144
-    assert money.categorize("Kredivo") == "cicilan & utang" and money.categorize("PLN token listrik") == "tagihan"
-    planned = money.with_zakat([{"name": "Makan", "amount": 3_000_000, "categories": ["makan"]}], {"salary": 15_000_000})
-    assert planned[0] == {"name": "Zakat & sedekah", "amount": 375_000, "categories": ["zakat & sedekah"], "alasan": "zakat penghasilan 2,5% (neto)"}
-    kept = money.with_zakat([{"name": "Zakat", "amount": 500_000, "categories": ["zakat & sedekah"]}], {"salary": 15_000_000})
-    assert kept[0]["amount"] == 500_000                                                      # more than the zakat: his sedekah stays
-
-
 @needs_db
 async def test_a_transaction_not_yet_realised_counts_nowhere_until_marked(pool, monkeypatch):
     from app import appsettings, devices, main
     await pool.execute("TRUNCATE money_tx, settings_kv RESTART IDENTITY CASCADE")
-    await appsettings.put("money", {"salary": 10_000_000, "payday": 25, "pots": [{"name": "Tagihan", "amount": 2_000_000, "categories": ["tagihan"]}]}, "owner")
+    await appsettings.put("money", {"salary": 10_000_000, "payday": 25}, "owner")
     _, token = await devices.create("HP", "test", scope="owner")
     h = {"Authorization": f"Bearer {token}"}
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
@@ -177,9 +144,44 @@ async def test_a_transaction_not_yet_realised_counts_nowhere_until_marked(pool, 
         pid = r.json()["id"]
         assert (await c.post("/api/v1/app/money/tx", json={"amount": 5, "merchant": "x", "at": "2099-01-01T00:00"}, headers=h)).status_code == 422   # realised in the future: no
         s = (await c.get("/api/v1/app/money", headers=h)).json()
-        assert s["spent"] == 300_000 and s["pots"][0]["spent"] == 300_000                                # the plan is not spending yet
+        assert s["spent"] == 300_000 and s["by_category"] == {"tagihan": 300_000}                       # the plan is not spending yet
         assert s["pending"]["n"] >= 1 and s["pending"]["out"] >= 900_000
         assert any(t["id"] == pid and t["realized"] is False for t in s["recent"])
         assert (await c.put(f"/api/v1/app/money/tx/{pid}", json={"realized": True}, headers=h)).status_code == 200
         s = (await c.get("/api/v1/app/money", headers=h)).json()
-        assert s["spent"] == 1_200_000 and s["pots"][0]["spent"] == 1_200_000
+        assert s["spent"] == 1_200_000 and s["by_category"]["tagihan"] == 1_200_000
+        assert (await c.put(f"/api/v1/app/money/tx/{pid}", json={"realized": False}, headers=h)).status_code == 200   # and back, from the list
+        assert (await c.get("/api/v1/app/money", headers=h)).json()["spent"] == 300_000
+
+
+
+def test_zakat_is_counted_after_bills_and_debt_against_the_nisab():
+    from app import money
+    z = money.zakat_of(15_000_000, 3_000_000)
+    assert (z["deducted"], z["base"], z["due"], z["amount"]) == (3_000_000, 12_000_000, True, 300_000)
+    assert money.zakat_of(15_000_000, 3_000_000, "bruto")["amount"] == 375_000
+    low = money.zakat_of(9_000_000, 3_000_000)                                               # 6 jt after bills & debt: under Rp7.640.144
+    assert not low["due"] and low["amount"] == 0 and low["nisab"] == 7_640_144
+    assert money.categorize("Kredivo") == "cicilan & utang" and money.categorize("PLN token listrik") == "tagihan"
+
+
+@needs_db
+async def test_the_emergency_fund_is_kept_as_assets_by_liquidity(pool, monkeypatch):
+    from app import appsettings, devices, main
+    await pool.execute("TRUNCATE emergency_assets, money_tx, settings_kv, invest_snapshots RESTART IDENTITY CASCADE")
+    await appsettings.put("money", {"salary": 10_000_000, "payday": 25, "emergency_months": 6}, "owner")
+    _, token = await devices.create("HP", "test", scope="owner")
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        a = (await c.post("/api/v1/app/money/emergency", json={"name": "Tabungan BCA", "kind": "tabungan", "amount": 8_000_000}, headers=h)).json()["id"]
+        await c.post("/api/v1/app/money/emergency", json={"name": "RDPU Bibit", "kind": "rdpu", "amount": 5_000_000}, headers=h)
+        await c.post("/api/v1/app/money/emergency", json={"name": "Deposito 3 bln", "kind": "deposito", "amount": 10_000_000, "note": "jatuh tempo Jan"}, headers=h)
+        await c.post("/api/v1/app/money/emergency", json={"name": "Emas fisik", "kind": "emas", "liquidity": "tidak_likuid", "amount": 2_000_000}, headers=h)
+        e = (await c.get("/api/v1/app/money", headers=h)).json()["emergency"]
+        assert e["saved"] == 25_000_000 and e["by"] == {"likuid": 8_000_000, "semi_likuid": 5_000_000, "tidak_likuid": 12_000_000}
+        assert e["kinds"]["rdpu"]["liquidity"] == "semi_likuid" and e["liquidity"]["tidak_likuid"] == "Tidak likuid"
+        assert (await c.put(f"/api/v1/app/money/emergency/{a}", json={"name": "Tabungan BCA", "kind": "tabungan", "amount": 9_000_000}, headers=h)).status_code == 200
+        assert (await c.get("/api/v1/app/money", headers=h)).json()["emergency"]["by"]["likuid"] == 9_000_000
+        assert (await c.delete(f"/api/v1/app/money/emergency/{a}", headers=h)).status_code == 200
+        assert (await c.get("/api/v1/app/money", headers=h)).json()["emergency"]["saved"] == 17_000_000
+        assert (await c.put("/api/v1/app/money/pots", json={"pots": []}, headers=h)).status_code in (404, 405)   # the allocation is gone

@@ -141,6 +141,8 @@ async def seed_media(p):
 
 async def seed_money(p):
     """A pay period half spent (pots, one near its limit), a proposed allocation, a Pluang reading with three options, a coffee offer."""
+    await p.execute("""INSERT INTO emergency_assets (name, kind, liquidity, amount, note) VALUES ('Tabungan darurat BCA', 'tabungan', 'likuid', 9000000, ''),
+                       ('RDPU Bibit', 'rdpu', 'semi_likuid', 6000000, ''), ('Deposito 3 bulan', 'deposito', 'tidak_likuid', 10000000, 'jatuh tempo Jan 2027')""")
     await p.execute("""INSERT INTO settings_kv (key, value) VALUES ('app:money', $1), ('app:coffee', $2)""",
                     {"salary": 15_000_000, "payday": 25, "pots": [{"name": "Makan & kopi", "amount": 2_500_000, "categories": ["makan", "kopi"]},
                                                                   {"name": "Transport", "amount": 1_200_000, "categories": ["transport"]},
