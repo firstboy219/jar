@@ -53,7 +53,7 @@ FEATURES: list[dict] = [
     {"id": "tren", "label": "Tren & strategi", "icon": "invest", "group": "Bisnis", "route": "#/tren", "slots": []},
     {"id": "peluang", "label": "Peluang baru", "icon": "bulb", "group": "Bisnis", "route": "#/peluang", "slots": []},
     {"id": "sumber", "label": "Sumber API", "icon": "code", "group": "Bisnis", "route": "#/sumber", "slots": []},
-    {"id": "gaji", "label": "Alokasi gaji", "icon": "wallet", "group": "Keuangan", "route": "#/gaji", "slots": ["gajian"]},
+    {"id": "gaji", "label": "Gaji & pengeluaran", "icon": "wallet", "group": "Keuangan", "route": "#/gaji", "slots": ["gajian"]},
     {"id": "invest", "label": "Investasi", "icon": "invest", "group": "Keuangan", "route": "#/invest", "slots": ["gajian"]},
     {"id": "kopi", "label": "Kopi", "icon": "coffee", "group": "Keuangan", "route": "#/kopi", "slots": ["siang"]},
     {"id": "butuh", "label": "Izin & persetujuan", "icon": "shield", "group": "Keuangan", "route": "#/butuh", "slots": []},

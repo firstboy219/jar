@@ -1607,6 +1607,16 @@ menentukan berat/ringan/non-AI)".
   cookies.txt pasted once, kept encrypted in the vault; a spare account is advised), else the same song on SoundCloud (its cleaned title,
   kept only when most of the title's words match — the artist's name alone is not the song); one found nowhere waits as "gagal" and is
   retried when cookies arrive.
+- **Cek berita, sharper — and the brain in his place** (owner 2026-10-31: "lebih dipertajam lagi dan lebih advance analisanya tp tetap mudah
+  dibaca dan AI memposisikan diri menjadi diri saya dan membuatkan plan … 1-3 bulan kedepan yg bisa saya pilih, plan yg saya pilih akan
+  masuk ke list task di menu catatan"): the analysis opens with three points; each theme carries a chain of cause and effect (3–5 short
+  links ending in what it means for him); 2–3 scenarios for the coming months each with its likelihood and the sign to watch; then three
+  plans written as him ("aku" = the owner) — safe, balanced, bold; 1–3 months; 4–8 weekly steps; a measurable target, the risk and when to
+  stop — sized to his salary, spending, emergency fund, holdings, businesses and job search (the money and career contexts now say
+  so), emergency fund and bills first, no borrowing to invest, investing still through approvals and limits. The plan he picks (the steps
+  he keeps) becomes Catatan tasks due at the end of their week, linked back to Cek berita, through the master flow (a skill); it is the
+  running plan, and each next analysis is told how far it is and says whether to carry on, speed up or adjust. Quick opportunities stay,
+  folded away. The heavy brain gets 6000 tokens for it.
 - **Pengelola penyimpanan** (owner 2026-10-31: "manager storage sehingga saya tahu mana saja yg bisa dihapus atau dizip"): the host measures
   (infra/scripts/storage.py, root, via jarvis-storage.path; every 6 hours on core's request and on "Ukur ulang") and the app shows every
   space user by group: what is safe to remove and what that costs (Docker build cache, orphaned volumes, dangling images, APKs older than

@@ -352,7 +352,13 @@ async def _recap(day: date) -> str:
 @brief.context("keuangan")
 async def _brief() -> str:
     s = await summary()
-    parts = [f"{s['period']['left_days']} hari ke gajian"] if s["salary"] else []
+    parts = [f"gaji {rp_short(s['salary'])}/bulan, {s['period']['left_days']} hari ke gajian"] if s["salary"] else []
+    if s["spent"]:   # for Cek berita's plans: what a month really leaves him (owner 2026-10-31: "AI memposisikan diri menjadi diri saya")
+        top = ", ".join(f"{k} {rp_short(v)}" for k, v in list(s["by_category"].items())[:4])
+        parts.append(f"pengeluaran periode ini {rp_short(s['spent'])} (laju ±{rp_short(s['pace'])}/periode; terbesar: {top}); "
+                     f"periode lalu {rp_short(s['last_period']['spent'])}")
+    if s["zakat"]["due"]:
+        parts.append(f"zakat penghasilan bulan ini {rp_short(s['zakat']['amount'])}")
     if s["pending"]["n"]:
         parts.append(f"{s['pending']['n']} tagihan/rencana belum dibayar {rp_short(s['pending']['out'])}")
     e = s["emergency"]

@@ -22,7 +22,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from . import appclock, appsettings, attachments, audit, db, home, hub, master, recap
+from . import appclock, appsettings, attachments, audit, brief, db, home, hub, master, recap
 from .appauth import actor, owner
 from .location import WIB
 
@@ -356,6 +356,18 @@ def _round_at(i: int):
         times = s["times"] or []
         return times[i] if i < len(times) and s["roles"] else ""
     return at
+
+
+
+@brief.context("karier")
+async def _brief() -> str:
+    """For Cek berita's plans: where his job search stands (counts only)."""
+    rows = await db.pool().fetch("SELECT status, count(*) AS n FROM job_applications WHERE updated_at > now() - interval '60 days' GROUP BY status")
+    n = {r["status"]: r["n"] for r in rows}
+    if not n:
+        return ""
+    return ("sedang mencari kerja baru lewat JobStreet; 60 hari terakhir: " + ", ".join(
+        f"{k} {n[k]}" for k in ("applied", "viewed", "interview", "offer", "rejected") if n.get(k)))
 
 
 @appclock.daily(_round_at(0), "jobs.round1")

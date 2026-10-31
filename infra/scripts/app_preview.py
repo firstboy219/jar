@@ -56,6 +56,8 @@ async def seed() -> str:
         await seed_jobs(p)
     if {"penyimpanan"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         seed_storage()
+    if {"brief"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
+        await seed_brief(p)
     await db.close()
     return token
 
@@ -112,6 +114,46 @@ async def seed_flow(p):
          '[{"at": "2026-10-30T06:00:00+00:00", "stage": "router", "text": "dikenali sebagai bisnis:peluang"}, {"at": "2026-10-30T06:00:01+00:00", "stage": "lane", "text": "membuka Google Trends…"}]', now() - interval '2 minutes'),
         ('brief', 'compose', 'tulis brief pagi', 'schedule', 'ringan', 'cukup otak ringan', 'running', '[{"at": "2026-10-30T06:00:00+00:00", "stage": "hermes", "text": "otak ringan — cukup otak ringan"}]', now() - interval '6 seconds')""")
     await p.execute("INSERT INTO flow_samples (run_id, feature, action, messages) SELECT id, feature, action, '[{\"role\": \"user\", \"content\": \"x\"}]' FROM flow_runs WHERE feature = 'inbox' AND action = 'draf' LIMIT 6")
+
+
+async def seed_brief(p):
+    """A sharpened Cek berita: three points, a chain per theme, scenarios, three plans as if JARVIS were him — one already running."""
+    from datetime import date, timedelta
+    from app import notes
+    plan = lambda nama, gaya, bulan, kenapa, target, langkah: {"nama": nama, "gaya": gaya, "bulan": bulan, "kenapa": kenapa, "target": target,   # noqa: E731
+        "risiko": "harga emas bisa turun 5–10% dalam sebulan", "berhenti_jika": "rupiah kembali di bawah Rp15.800/USD",
+        "langkah": [{"minggu": m, "apa": a, "kaitan": k} for m, a, k in langkah]}
+    data = {"judul": "Rupiah tertekan dolar kuat; emas naik, saham teknologi AS goyah", "suasana": "campuran", "lane": "berat", "count": 74,
+            "intinya": ["Dolar menguat setelah data inflasi AS; rupiah ke Rp16.420.", "Emas naik 2,1% seminggu — dicari sebagai tempat aman.",
+                        "Biaya admin marketplace naik bulan depan: margin tokomu tergerus."],
+            "situasi": "Dolar AS menguat karena pasar menunda harapan penurunan bunga The Fed. Rupiah melemah, emas naik, saham teknologi AS turun tipis.",
+            "markets": [{"label": "IHSG", "last": 7212.4, "change": -0.8}, {"label": "Rupiah/USD", "last": 16420, "change": 1.2}, {"label": "Emas", "last": 2681.5, "change": 2.1}],
+            "tema": [{"judul": "Dolar menguat", "kesimpulan": "Bunga AS bertahan tinggi lebih lama.", "rantai": ["Inflasi AS di atas perkiraan", "The Fed menahan bunga", "Dolar menguat", "Rupiah & saham RI tertekan"],
+                      "indikator": [{"nama": "Indeks dolar (DXY)", "nilai": "106,2 ↑", "arti": "dolar kuat"}], "alasan": [{"isi": "Inflasi AS 3,1%", "sumber": "CNBC Indonesia", "link": "https://x"}],
+                      "dampak": "Saham AS-mu naik dalam rupiah, tapi belanja impor & langganan dolar lebih mahal."}],
+            "skenario": [{"nama": "Dolar tetap kuat", "kemungkinan": "besar", "isi": "Rupiah bertahan di Rp16.300–16.600 sampai akhir tahun.", "tanda": "DXY tetap di atas 105"},
+                         {"nama": "The Fed melunak", "kemungkinan": "kecil", "isi": "Rupiah menguat, saham teknologi pulih.", "tanda": "inflasi AS turun di bawah 2,8%"}],
+            "rencana": [plan("Tebalkan dana darurat dulu", "aman", 1, "Dengan kondisiku sekarang, aku akan mengamankan 6 bulan pengeluaran sebelum menambah investasi.", "dana darurat 6 bulan",
+                             [(1, "Pindahkan sisa gaji ke rekening dana darurat", "tabungan"), (2, "Pangkas 2 langganan berbayar dolar", "belanja"), (4, "Cek ulang porsi kas vs emas", "emas")]),
+                        plan("Cicil emas, rapikan toko", "seimbang", 2, "Dengan kondisiku sekarang, aku akan memanfaatkan emas yang sedang dicari sambil menjaga margin toko dari kenaikan biaya marketplace.",
+                             "emas 10% portofolio, margin toko kembali ≥18%",
+                             [(1, "Hitung ulang harga jual 10 produk terlaris", "bisnis"), (2, "Cicil emas 5% gaji lewat Pluang", "emas"), (4, "Buka kanal jual di website sendiri", "bisnis"),
+                              (6, "Cicil emas 5% gaji lagi bila rupiah masih > 16.300", "emas"), (8, "Evaluasi margin & porsi emas", "lainnya")]),
+                        plan("Kejar saham AS saat koreksi", "berani", 3, "Dengan kondisiku sekarang, aku akan menambah saham teknologi AS bertahap saat turun.", "beli bertahap 3×",
+                             [(1, "Tentukan 3 saham AS & batas harga", "saham_as"), (4, "Beli tahap 1 bila turun 5%", "saham_as"), (12, "Tinjau hasil", "saham_as")])],
+            "evaluasi_rencana": "Lanjutkan — emas yang naik justru membuat cicilan minggu depan lebih penting dicek harganya dulu.",
+            "peluang": [{"aksi": "Naikkan harga 3 produk dengan margin tipis", "kenapa": "biaya admin naik", "kaitan": "bisnis", "horizon": "minggu ini", "risiko": "penjualan turun sedikit", "yakin": "sedang"}],
+            "waspada": [{"isi": "Penipuan investasi emas digital marak", "sumber": "Antara", "link": "https://x"}], "weather": "Bogor hujan sore, 24°C."}
+    await p.execute("INSERT INTO briefs (day, data, sources) VALUES (current_date, $1, $2)", data, ["Antara", "CNBC Indonesia", "BBC"])
+    today = date.today()
+    ids = []
+    for i, (txt, done) in enumerate([("Hitung ulang harga jual 10 produk terlaris", True), ("Cicil emas 5% gaji lewat Pluang", False), ("Buka kanal jual di website sendiri", False)]):
+        t = await notes.add_task(f"{txt} — rencana “Cicil emas, rapikan toko”", (today + timedelta(days=7 * (i + 1) - 1)).isoformat(), None, "preview", "#/brief")
+        ids.append({"id": t["task"]["id"], "text": txt, "due": None})
+        if done:
+            await notes.set_block(t["page_id"], t["task"]["id"], checked=True)
+    await p.execute("INSERT INTO settings_kv (key, value) VALUES ('brief:plan', $1)", {"nama": "Cicil emas, rapikan toko", "gaya": "seimbang", "bulan": 2, "target": "",
+                    "berhenti_jika": "", "day": (today - timedelta(days=8)).isoformat(), "ends": (today + timedelta(days=48)).isoformat(), "brief_day": "", "tasks": ids})
 
 
 def seed_storage():
