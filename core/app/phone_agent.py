@@ -412,6 +412,17 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
     return text
 
 
+def not_installed_error(text: str) -> bool:
+    """The phone's answer when it has nothing to open for a package: the app is not installed, or the owner disabled it. Pure."""
+    return bool(re.search(r"belum terpasang|tidak terpasang|not installed", text or "", re.IGNORECASE))
+
+
+def play_link(a: dict) -> str:
+    """Where the owner installs/re-enables the app himself — JARVIS never installs anything on the phone. Pure."""
+    pkg = (a.get("packages") or [""])[0]
+    return f"https://play.google.com/store/apps/details?id={pkg}" if pkg else ""
+
+
 def start_url(goal: str, a: dict) -> str:
     """Where a browser run starts: the first allowed https address in the goal, else the app's home. Pure."""
     from .webvisit import allowed
@@ -431,7 +442,23 @@ async def _start_app(run_id: int, app: str, a: dict, progress, goal: str = "") -
             raise PhoneError("HP tidak tersambung selama 5 menit — buka aplikasi JARVIS (dan nyalakan JARVIS siaga di Setelan HP)")
     await progress(8, f"Membuka {a['label']} di HP…")
     await op("begin", run=run_id, app=app, label=a["label"], packages=a["packages"], domains=a.get("sites") or [])
-    obs = await op("open_url", url=start_url(goal, a)) if a.get("sites") else await op("open", package=a["packages"][0])
+    try:
+        # Only the app's FIRST package is the door in: the others in the list are the payment screens (GoPay/Gojek) a
+        # checkout may move to — opening one of those would look like the app is open when it is not.
+        obs = await op("open_url", url=start_url(goal, a)) if a.get("sites") else await op("open", package=a["packages"][0])
+    except PhoneOpError as e:
+        if not not_installed_error(str(e)):
+            raise
+        # The phone has no app to open (not installed, or the owner disabled it): retrying the same door only burns the
+        # run, so end it telling the owner exactly what fixes it — installing is his decision, never JARVIS'.
+        link = play_link(a)
+        await progress(8, f"{a['label']} belum terpasang di HP — pemasangan keputusan pemilik")
+        await hub.broadcast({"type": "notify", "kind": "phone", "title": f"{a['label']} belum terpasang di HP",
+                             "text": f"Aku belum bisa membuka {a['label']} karena aplikasinya belum ada di HP-mu. Pasang dulu dari Play Store"
+                                     f"{f' ({link})' if link else ''}, lalu minta lagi — atau bilang saja kalau mau aku ambilkan promonya dari sumber publik."})
+        raise PhoneError(f"{a['label']} belum terpasang di HP ini, jadi tidak ada aplikasi yang bisa kubuka. Pasang {a['label']} dulu"
+                         f"{f' dari Play Store: {link}' if link else ''} (atau aktifkan kalau kamu menonaktifkannya), lalu minta lagi — "
+                         f"kalau tidak mau memasang, bilang saja dan aku carikan promo/kuponnya dari sumber publik.") from None
     for _ in range(3):   # the app is slow to come to the front, or a system overlay (screenshot, permission) is in the way
         if in_app(obs, app):
             break

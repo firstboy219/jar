@@ -234,3 +234,59 @@ async def test_a_run_waits_for_the_phone_and_asks_for_the_app_to_be_opened(pool,
         await phone_agent._start_app(1, "gojek", phone_agent.APPS["gojek"], progress)
     assert any(e.get("type") == "notify" and "Buka aplikasi JARVIS" in e["title"] for e in sent)
     assert any(e.get("type") == "announce" for e in sent)
+
+
+def test_a_missing_app_is_recognised_and_the_owner_is_told_where_to_get_it():
+    from app import phone_agent
+    assert phone_agent.not_installed_error("Qpon belum terpasang di HP ini")
+    assert phone_agent.not_installed_error("app not installed") and not phone_agent.not_installed_error("layar tidak dikenal")
+    assert phone_agent.play_link(phone_agent.APPS["qpon"]) == "https://play.google.com/store/apps/details?id=com.qpon.platform"
+    assert phone_agent.play_link({"packages": []}) == ""
+
+
+async def test_a_run_for_an_app_that_is_not_on_the_phone_ends_with_what_the_owner_should_do(monkeypatch):
+    """The phone has no such app: the run stops with the way out (install it, or use public sources) instead of failing on the raw error."""
+    from app import hub, phone_agent
+    sent = []
+
+    async def broadcast(ev):
+        sent.append(ev)
+        return 1
+    monkeypatch.setattr(hub, "broadcast", broadcast)
+    monkeypatch.setattr(phone_agent, "phone_online", lambda: True)
+
+    async def op(name, **a):
+        if name == "begin":
+            return {"ok": True}
+        raise phone_agent.PhoneOpError("Qpon belum terpasang di HP ini")
+    monkeypatch.setattr(phone_agent, "op", op)
+
+    async def progress(*a, **k):
+        return None
+    with pytest.raises(phone_agent.PhoneError) as err:
+        await phone_agent._start_app(1, "qpon", phone_agent.APPS["qpon"], progress)
+    assert "Play Store" in str(err.value) and "com.qpon.platform" in str(err.value)
+    assert any(e.get("type") == "notify" and "Qpon" in e["title"] and "belum terpasang" in e["title"] for e in sent)
+
+
+async def test_a_real_phone_fault_is_not_dressed_up_as_a_missing_app(monkeypatch):
+    from app import hub, phone_agent
+    sent = []
+
+    async def broadcast(ev):
+        sent.append(ev)
+        return 1
+    monkeypatch.setattr(hub, "broadcast", broadcast)
+    monkeypatch.setattr(phone_agent, "phone_online", lambda: True)
+
+    async def op(name, **a):
+        if name == "begin":
+            return {"ok": True}
+        raise phone_agent.PhoneOpError("layar tidak dikenal")
+    monkeypatch.setattr(phone_agent, "op", op)
+
+    async def progress(*a, **k):
+        return None
+    with pytest.raises(phone_agent.PhoneOpError, match="layar tidak dikenal"):
+        await phone_agent._start_app(1, "qpon", phone_agent.APPS["qpon"], progress)
+    assert not sent
