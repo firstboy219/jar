@@ -21,12 +21,19 @@ export class ApiError extends Error { constructor(msg, status) { super(msg); thi
 let onAuthNeeded = () => {};
 export function whenAuthNeeded(fn) { onAuthNeeded = fn; }
 
+export const RESTARTING = 'Server JARVIS sedang dimulai ulang — coba lagi beberapa detik lagi.';
+
 export async function api(method, path, body, opts = {}) {
   const headers = { Authorization: `Bearer ${store.get()}` };
   let payload;
   if (body instanceof FormData) payload = body;
   else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
-  const r = await fetch(path, { method, headers, body: payload });
+  let r;
+  try { r = await fetch(path, { method, headers, body: payload }); } catch { throw new ApiError('Tidak tersambung ke server JARVIS — cek internet, lalu coba lagi.', 0); }
+  if ([502, 503, 504].includes(r.status) && !r.headers.get('content-type')?.includes('json')) {   // the proxy: the server is restarting (a deploy)
+    if (method === 'GET' && !opts.retried) { await new Promise((ok) => setTimeout(ok, 4000)); return api(method, path, body, { ...opts, retried: true }); }
+    throw new ApiError(RESTARTING, r.status);
+  }
   if (r.status === 401 || r.status === 403) { onAuthNeeded(r.status === 403); throw new ApiError('perlu masuk sebagai pemilik', r.status); }
   const isJson = r.headers.get('content-type')?.includes('json');
   const data = isJson ? await r.json() : (opts.blob ? await r.blob() : await r.text());
