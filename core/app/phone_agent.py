@@ -399,6 +399,8 @@ async def produce(task_id: int, row: dict, progress, emit) -> str:
             await _set(run_id, status="stopped")
             raise
         except Exception as e:
+            if not isinstance(e, (PhoneError, PhoneOpError)):   # a fault in JARVIS itself, not the phone or the app: keep the whole story
+                log.exception("phone run %s (%s) broke", run_id, app)
             await _set(run_id, status="failed", result=str(e)[:1000])
             raise
         finally:
@@ -509,7 +511,7 @@ def sparse(obs: dict) -> bool:
 
 
 async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started, trace, history, system) -> tuple[str, dict]:
-    slips, still, pictures, heavy, blind, seen, loops = 0, 0, {}, False, 0, [], 0
+    slips, still, pictures, heavy, blind, visited, loops = 0, 0, {}, False, 0, [], 0
     for step in range(1, max_steps + 1):
         if time.monotonic() - started > MAX_MINUTES * 60:
             raise PhoneError(f"lebih dari {MAX_MINUTES} menit — dihentikan supaya HP tidak dikendalikan terlalu lama")
@@ -518,8 +520,8 @@ async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started,
             history.append("(pemilik mengetik PIN/OTP sendiri)")
             continue
         now = screen_text(obs)
-        loops = loops + 1 if now in seen[-4:-1] else 0   # back on a screen it just left (Aset ↔ Beranda ↔ Aset …)
-        seen.append(now)
+        loops = loops + 1 if now in visited[-4:-1] else 0   # back on a screen it just left (Aset ↔ Beranda ↔ Aset …)
+        visited.append(now)
         picture = ""
         if in_app(obs, app) and sparse(obs):   # the app draws its own screen: read the picture of it (once per screen)
             if now not in pictures:

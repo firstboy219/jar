@@ -110,3 +110,40 @@ async def test_going_back_and_forth_hands_over_to_the_heavy_brain(monkeypatch):
         return None
     out, _ = await phone_agent._loop(1, "pluang", phone_agent.APPS["pluang"], "BACA saja portofolio", quiet, quiet, home)
     assert out == "{\"total\": 1}" and cats[0] == "hp" and "berat" in cats                     # light first, heavy once it loops
+
+
+@needs_db
+async def test_reading_pluang_end_to_end_through_the_worker_branch(pool, monkeypatch):
+    from app import hub, llm, phone_agent, workers
+    monkeypatch.setattr(workers, "_start", lambda task_id, context="": None)
+
+    async def quiet(ev):
+        return 1
+    monkeypatch.setattr(hub, "broadcast", quiet)
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(phone_agent.asyncio, "sleep", lambda s: real_sleep(0))
+    await pool.execute("TRUNCATE phone_runs, routines RESTART IDENTITY CASCADE")
+    run = await phone_agent.request("Buka Pluang dan BACA saja portofolio", "pluang", "owner")
+    run = await phone_agent.approve(run["id"], "owner")
+    row = await pool.fetchrow("SELECT id, instruction FROM tasks WHERE id = $1", run["task_id"])
+    home = {"package": "com.EmasDigi", "nodes": [{"i": 0, "c": "TextView", "t": "Total portofolio Rp 12.500.000"}, {"i": 1, "c": "Button", "t": "Aset", "k": 1}]
+            + [{"i": i, "c": "View"} for i in range(2, 9)]}
+
+    async def op(name, **args):
+        return {"ok": True} if name in ("begin", "end") else home
+    monkeypatch.setattr(phone_agent, "op", op)
+    monkeypatch.setattr(phone_agent, "phone_online", lambda: True)
+
+    calls = []
+
+    async def model(messages, tools=None, **k):
+        calls.append(1)
+        call = (("selesai", {"hasil": "{\"total\": 12500000}"}) if len(calls) > 4 else ("lihat_gambar", {}) if len(calls) == 2
+                else ("ketuk", {"nomor": 1}))   # looking at the picture, then carrying on (it once broke the next step)
+        yield {"type": "done", "completion": llm.Completion(tool_calls=[llm.ToolCall("c", *call)])}
+    monkeypatch.setattr(phone_agent.llm, "stream_chat", model)
+
+    async def progress(*a, **k):
+        return None
+    out = await phone_agent.produce(row["id"], dict(row), progress, progress)
+    assert out == "{\"total\": 12500000}"
