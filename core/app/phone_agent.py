@@ -640,8 +640,8 @@ async def _steps(task_id, app, a, goal, progress, emit, obs, max_steps, started,
         elif name == "lihat_gambar":
             from . import screen_reader
             shot = await op("screenshot")
-            seen = await screen_reader.read(shot.get("jpeg"))
-            history.append(f"{step}. lihat gambar layar → {seen[:1200] or '(tidak terbaca)'}")
+            seen_text = await screen_reader.read(shot.get("jpeg"))
+            history.append(f"{step}. lihat gambar layar → {seen_text[:1200] or '(tidak terbaca)'}")
             obs = await op("observe")
         elif name == "tunggu":
             await asyncio.sleep(max(1, min(10, int(args.get("detik") or 2))))
