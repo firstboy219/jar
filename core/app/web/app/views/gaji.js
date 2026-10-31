@@ -5,7 +5,7 @@ import { pick, upload } from '../upload.js';
 import { rupiah } from '../lib.js';
 import { laneChip } from '../ui.js';
 
-let cur = null;
+let cur = null, txf = 'semua';   // the transaction list: semua | belum | sudah
 const d = (s) => new Date(`${String(s).slice(0, 10)}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
 const SRC = { notif: 'notifikasi', manual: 'manual', jarvis: 'JARVIS', email: 'struk email', struk: 'foto struk' };
 
@@ -82,10 +82,15 @@ export default {
         ${cats.length ? html`<div class="card"><span class="k">Per kategori</span>${cats.map(([k, v]) => html`<div class="row" style="font-size:13px"><span style="width:110px;color:var(--tx2)">${k}</span>
           <div class="bar grow" style="height:8px"><i style="width:${Math.round(100 * v / cats[0][1])}%"></i></div><span class="mono" style="min-width:70px;text-align:right">${rupiah(v, true)}</span></div>`)}</div>` : ''}
         <div class="row sb"><span class="sec">Transaksi</span><button class="btn sm" data-act="receipt">${icon('camera', 14)} Struk dari foto/galeri</button></div>
-        ${s.recent.length ? html`<div class="list">${s.recent.map((t) => html`<div class="li click" data-act="edittx" data-id="${t.id}" role="button" aria-label="Ubah transaksi ${t.merchant}"><div class="grow"><div class="row sb"><span style="font-size:14px">${t.merchant}${t.note ? html` <span class="small">· ${t.note}</span>` : ''}</span>
+        ${s.pending?.n ? html`<div class="card amber" style="gap:4px"><div class="row sb"><span class="k amber">Belum direalisasi · ${s.pending.n}</span>
+          <span class="mono" style="font-size:13px">${s.pending.out ? `−${rupiah(s.pending.out, true)}` : ''}${s.pending.in ? ` +${rupiah(s.pending.in, true)}` : ''}</span></div>
+          <span class="small">Rencana yang belum terjadi — tidak dihitung ke terpakai & pos sampai ditandai sudah. Sisa setelah semuanya: ${rupiah((s.left || 0) - s.pending.out + s.pending.in, true)}.</span></div>` : ''}
+        <div class="chips">${[['semua', 'Semua'], ['belum', `Belum${s.pending?.n ? ` (${s.pending.n})` : ''}`], ['sudah', 'Sudah direalisasi']].map(([k, v]) => html`<button class="chip ${txf === k ? 'on' : ''}" data-act="txfilter" data-f="${k}">${v}</button>`)}</div>
+        ${s.recent.filter((t) => txf === 'semua' || (txf === 'belum' ? !t.realized : t.realized)).length ? html`<div class="list">${s.recent.filter((t) => txf === 'semua' || (txf === 'belum' ? !t.realized : t.realized)).map((t) => html`<div class="li click" data-act="edittx" data-id="${t.id}" role="button" aria-label="Ubah transaksi ${t.merchant}" style="${t.realized ? '' : 'opacity:.85'}"><div class="grow"><div class="row sb"><span style="font-size:14px">${t.realized ? '' : html`<span class="tag amber" style="margin-right:6px">belum</span>`}${t.merchant}${t.note ? html` <span class="small">· ${t.note}</span>` : ''}</span>
           <span class="mono" style="color:var(--${t.direction === 'in' ? 'green' : 'tx'})">${t.direction === 'in' ? '+' : '−'}${rupiah(t.amount)}</span></div>
           <div class="row sb small"><span>${new Date(t.at).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${t.app || SRC[t.source]}</span>
-          <button class="chip" style="height:26px;font-size:12px" data-act="cat" data-id="${t.id}" data-c="${t.category}">${t.category}${t.labeled_by === 'ai' ? ' · AI' : ''}</button></div></div></div>`)}</div>`
+          <span class="row" style="gap:6px">${t.realized ? '' : html`<button class="chip green" style="height:26px;font-size:12px" data-act="realize" data-id="${t.id}">✓ Sudah</button>`}
+          <button class="chip" style="height:26px;font-size:12px" data-act="cat" data-id="${t.id}" data-c="${t.category}">${t.category}${t.labeled_by === 'ai' ? ' · AI' : ''}</button></span></div></div></div>`)}</div>`
           : html`<div class="card"><span class="small">Belum ada transaksi periode ini.</span></div>`}
         <details class="card"><summary class="small">Pengaturan gaji</summary>${setup(s.settings)}</details>
       </div>`);
@@ -165,14 +170,21 @@ export default {
           <label class="field">Kategori<select name="category">${cur.categories.map((c) => html`<option ${c === t.category ? 'selected' : ''}>${c}</option>`)}</select></label></div>
         <label class="field">Tanggal & jam (WIB)<input name="at" type="datetime-local" value="${local}" required></label>
         <label class="field">Catatan<input name="note" value="${t.note || ''}" maxlength="300" placeholder="opsional"></label>
+        <label class="row" style="gap:8px;font-size:14px"><input type="checkbox" name="realized" ${t.realized ? 'checked' : ''} style="width:20px;height:20px"> Sudah direalisasi</label>
         <span class="small">Sumber: ${t.app || SRC[t.source] || t.source}</span>
         <div class="btns"><button type="button" class="btn danger" data-close="__del" style="flex:0 0 90px">Hapus</button><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Simpan</button></div></form>`));
       if (!v) return;
       if (v === '__del') { await del(`/api/v1/app/money/tx/${t.id}`); toast('Transaksi dihapus'); render(); return; }
       try {
-        await put(`/api/v1/app/money/tx/${t.id}`, { amount: Number(v.amount), merchant: v.merchant, direction: v.direction, category: v.category, at: v.at, note: v.note || '' });
+        await put(`/api/v1/app/money/tx/${t.id}`, { amount: Number(v.amount), merchant: v.merchant, direction: v.direction, category: v.category, at: v.at, note: v.note || '', realized: !!v.realized });
         toast('Transaksi diperbarui'); render();
       } catch (err) { toast(err.message || 'Gagal menyimpan', true); }
+    },
+    txfilter(b) { txf = b.dataset.f; render(); },
+    async realize(b, e) {   // done: counted from now on (spending, pots, budget)
+      e?.stopPropagation?.();
+      await put(`/api/v1/app/money/tx/${b.dataset.id}`, { realized: true });
+      toast('Ditandai sudah direalisasi'); render();
     },
     async cat(b, e) {
       e?.stopPropagation?.();
@@ -187,9 +199,13 @@ export default {
         <label class="field">Nominal<input name="amount" type="number" min="1" required></label><label class="field">Untuk / dari<input name="merchant" required maxlength="60"></label>
         <label class="field">Jenis<select name="direction"><option value="out">Pengeluaran</option><option value="in">Pemasukan</option></select></label>
         <label class="field">Kategori<select name="category"><option value="">otomatis</option>${cur.categories.map((c) => html`<option>${c}</option>`)}</select></label>
+        <label class="field">Tanggal & jam (WIB)<input name="at" type="datetime-local" value="${new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 16)}"></label>
+        <label class="row" style="gap:8px;font-size:14px"><input type="checkbox" name="realized" checked style="width:20px;height:20px;flex:0 0 20px"> Sudah direalisasi</label>
+        <span class="small" style="margin-top:-6px">Hapus centang untuk rencana atau tagihan yang belum dibayar — tidak dihitung sampai ditandai sudah.</span>
         <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Simpan</button></div></form>`));
       if (!v?.amount) return;
-      await post('/api/v1/app/money/tx', { amount: Number(v.amount), merchant: v.merchant, direction: v.direction, category: v.category });
+      try { await post('/api/v1/app/money/tx', { amount: Number(v.amount), merchant: v.merchant, direction: v.direction, category: v.category, at: v.at || null, realized: !!v.realized }); }
+      catch (err) { toast(err.message || 'Gagal menyimpan', true); return; }
       render();
     },
   },

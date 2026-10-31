@@ -141,7 +141,7 @@ async def compose(trigger: str = "owner", day: date | None = None) -> dict:
         page = await notes.create(title, "🌙", None, blocks, "jarvis-recap", kind="recap")
     t0 = datetime(day.year, day.month, day.day, tzinfo=WIB)
     mail_done = await db.pool().fetchval("SELECT count(*) FROM inbox_items WHERE status = 'done' AND received_at >= $1::timestamptz - interval '2 days' AND received_at < $2", t0, t0 + timedelta(days=1))
-    transport = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE category = 'transport' AND direction = 'out' AND at >= $1 AND at < $2",
+    transport = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND category = 'transport' AND direction = 'out' AND at >= $1 AND at < $2",
                                          t0, t0 + timedelta(days=1))
     stats = {"tasks_done": sum(1 for t in g["tasks"] if t["status"] == "completed"), "meetings": len(g["meetings"]),
              "plan": sum(1 for b in blocks if b["type"] == "todo"), "no_ai": g["flow"].get("no_ai", 0), "runs": g["flow"].get("n", 0),

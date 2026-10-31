@@ -155,11 +155,11 @@ def with_last(pots: list[dict], last_by_cat: dict[str, float]) -> list[dict]:
 
 # ---------- recording ----------
 
-async def _insert(at, amount, direction, merchant, source, app="", ref=None, note="", category=None, labeled_by="aturan") -> int | None:
+async def _insert(at, amount, direction, merchant, source, app="", ref=None, note="", category=None, labeled_by="aturan", realized=True) -> int | None:
     return await db.pool().fetchval(
-        """INSERT INTO money_tx (at, amount, direction, merchant, category, source, app, ref, note, labeled_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT (ref) DO NOTHING RETURNING id""",
-        at, amount, direction, merchant[:60], category or categorize(merchant, note), source, app, ref, note[:300], labeled_by)
+        """INSERT INTO money_tx (at, amount, direction, merchant, category, source, app, ref, note, labeled_by, realized)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (ref) DO NOTHING RETURNING id""",
+        at, amount, direction, merchant[:60], category or categorize(merchant, note), source, app, ref, note[:300], labeled_by, realized)
 
 
 async def record(amount: float, merchant: str, ref: str, category: str | None = None, note: str = "", app: str = "JARVIS") -> int | None:
@@ -269,7 +269,7 @@ def _span(start: date, end: date) -> tuple[datetime, datetime]:
 
 async def _spent_by_cat(start: date, end: date) -> dict[str, float]:
     t0, t1 = _span(start, end)
-    rows = await db.pool().fetch("SELECT category, sum(amount)::float AS t FROM money_tx WHERE direction = 'out' AND at >= $1 AND at < $2 GROUP BY category", t0, t1)
+    rows = await db.pool().fetch("SELECT category, sum(amount)::float AS t FROM money_tx WHERE realized AND direction = 'out' AND at >= $1 AND at < $2 GROUP BY category", t0, t1)
     return {r["category"]: r["t"] for r in rows}
 
 
@@ -277,7 +277,7 @@ async def _emergency(s: dict, start: date) -> dict:
     """Saved = what he said he had (on emergency_at) plus what went to savings since; the monthly need = the last three periods' spending
     (not counting savings and investing)."""
     since = s["emergency_at"][:10] if s["emergency_at"] else "1970-01-01"
-    added = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE direction = 'out' AND category = 'tabungan' AND at >= ($1::date::timestamp AT TIME ZONE 'Asia/Jakarta')",
+    added = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND direction = 'out' AND category = 'tabungan' AND at >= ($1::date::timestamp AT TIME ZONE 'Asia/Jakarta')",
                                      date.fromisoformat(since))
     totals = []
     ps = start
@@ -295,13 +295,13 @@ async def summary(today: date | None = None) -> dict:
     today = today or datetime.now(WIB).date()
     start, end = period_of(today, int(s["payday"]))
     t0, t1 = _span(start, end)
-    rows = await db.pool().fetch("SELECT category, direction, sum(amount)::float AS total, count(*) AS n FROM money_tx WHERE at >= $1 AND at < $2 GROUP BY category, direction", t0, t1)
+    rows = await db.pool().fetch("SELECT category, direction, sum(amount)::float AS total, count(*) AS n FROM money_tx WHERE realized AND at >= $1 AND at < $2 GROUP BY category, direction", t0, t1)
     spent = {r["category"]: r["total"] for r in rows if r["direction"] == "out"}
     income = sum(r["total"] for r in rows if r["direction"] == "in")
     total = sum(spent.values())
     days, gone = (end - start).days + 1, (today - start).days + 1
     salary = float(s["salary"] or 0)
-    recent = [dict(r) for r in await db.pool().fetch("SELECT id, at, amount::float AS amount, direction, merchant, category, source, app, labeled_by, note FROM money_tx WHERE at >= $1 AND at < $2 ORDER BY at DESC LIMIT 40", t0, t1)]
+    recent = [dict(r) for r in await db.pool().fetch("SELECT id, at, amount::float AS amount, direction, merchant, category, source, app, labeled_by, note, realized FROM money_tx WHERE (at >= $1 AND at < $2) OR NOT realized ORDER BY at DESC LIMIT 40", t0, t1)]
     plan = await db.pool().fetchrow("SELECT id, period_start, data, status, created_at FROM money_plans WHERE status = 'proposed' ORDER BY id DESC LIMIT 1")
     ls, le = period_of(start - timedelta(days=1), int(s["payday"]))
     last = await _spent_by_cat(ls, le)
@@ -313,7 +313,14 @@ async def summary(today: date | None = None) -> dict:
             "zakat": zakat_of(s["salary"], s["pots"], s.get("zakat_method") or "neto", float(s.get("zakat_nisab_month") or ZAKAT_NISAB_MONTH)),
             "last_period": {"start": ls, "end": le, "spent": sum(last.values())}, "emergency": await _emergency(s, start),
             "plan": {"id": plan["id"], "period_start": plan["period_start"], "created_at": plan["created_at"], **plan_data} if plan else None,
-            "categories": list(CATEGORIES) + ["lainnya"]}
+            "categories": list(CATEGORIES) + ["lainnya"], "pending": await _pending()}
+
+
+async def _pending() -> dict:
+    """What he marked as not yet realised (bills to pay, purchases planned): counted nowhere until done."""
+    r = await db.pool().fetchrow("""SELECT count(*) AS n, coalesce(sum(amount) FILTER (WHERE direction = 'out'), 0)::float AS out_,
+                                          coalesce(sum(amount) FILTER (WHERE direction = 'in'), 0)::float AS in_ FROM money_tx WHERE NOT realized""")
+    return {"n": r["n"], "out": r["out_"], "in": r["in_"]}
 
 
 async def check_pots(today: date | None = None) -> list[dict]:
@@ -342,7 +349,7 @@ async def propose(trigger: str = "owner") -> dict:
     hist = []
     for i in range(1, 4):
         ps, pe = period_of(start - timedelta(days=1 + 31 * (i - 1)), int(s["payday"]))
-        rows = await db.pool().fetch("SELECT category, sum(amount)::float AS t FROM money_tx WHERE direction = 'out' AND at >= $1 AND at < $2 GROUP BY category",
+        rows = await db.pool().fetch("SELECT category, sum(amount)::float AS t FROM money_tx WHERE realized AND direction = 'out' AND at >= $1 AND at < $2 GROUP BY category",
                                      datetime(ps.year, ps.month, ps.day, tzinfo=WIB), datetime(pe.year, pe.month, pe.day, tzinfo=WIB) + timedelta(days=1))
         if rows:
             hist.append(f"{ps}–{pe}: " + ", ".join(f"{r['category']} {rp_short(r['t'])}" for r in rows))
@@ -455,7 +462,7 @@ async def _home(m: home.Moment) -> list[dict]:
 @recap.context("pengeluaran")
 async def _recap(day: date) -> str:
     t0 = datetime(day.year, day.month, day.day, tzinfo=WIB)
-    r = await db.pool().fetchrow("SELECT count(*) AS n, coalesce(sum(amount), 0)::float AS t FROM money_tx WHERE direction = 'out' AND at >= $1 AND at < $2", t0, t0 + timedelta(days=1))
+    r = await db.pool().fetchrow("SELECT count(*) AS n, coalesce(sum(amount), 0)::float AS t FROM money_tx WHERE realized AND direction = 'out' AND at >= $1 AND at < $2", t0, t0 + timedelta(days=1))
     return f"{r['n']} transaksi keluar, total {rp_short(r['t'])}" if r and r["n"] else ""
 
 
@@ -485,6 +492,8 @@ class TxIn(BaseModel):
     direction: str = Field(default="out", pattern="^(in|out)$")
     category: str = Field(default="", max_length=40)
     note: str = Field(default="", max_length=300)
+    realized: bool = True     # False: a plan (a bill to pay, a purchase to make) — counted nowhere until marked done
+    at: str | None = Field(default=None, max_length=40)   # "YYYY-MM-DDTHH:MM" WIB; default now
 
 
 class CatIn(BaseModel):   # any of these: what he changes on a transaction (owner 2026-10-31: "Buat transaksi bisa diedit")
@@ -494,6 +503,7 @@ class CatIn(BaseModel):   # any of these: what he changes on a transaction (owne
     direction: str | None = Field(default=None, pattern="^(in|out)$")
     at: str | None = Field(default=None, max_length=40)   # "YYYY-MM-DDTHH:MM" in WIB
     note: str | None = Field(default=None, max_length=300)
+    realized: bool | None = None
 
 
 class ApplyIn(BaseModel):
@@ -507,8 +517,17 @@ async def api_summary(device: dict = Depends(owner)):
 
 @router.post(API + "/tx")
 async def api_add(body: TxIn, device: dict = Depends(owner)):
-    tid = await _insert(datetime.now(WIB), body.amount, body.direction, body.merchant, "manual", "", None, body.note, body.category or None,
-                        "pemilik" if body.category else "aturan")
+    when = datetime.now(WIB)
+    if body.at:
+        try:
+            when = datetime.fromisoformat(body.at)
+        except ValueError:
+            raise HTTPException(422, "tanggal/jam tidak valid")
+        when = when if when.tzinfo else when.replace(tzinfo=WIB)
+        if body.realized and when > datetime.now(WIB) + timedelta(days=1):
+            raise HTTPException(422, "tanggal di masa depan hanya untuk yang belum direalisasi")
+    tid = await _insert(when, body.amount, body.direction, body.merchant, "manual", "", None, body.note, body.category or None,
+                        "pemilik" if body.category else "aturan", body.realized)
     await check_pots()
     return {"id": tid}
 
@@ -585,8 +604,9 @@ async def api_cat(tx_id: int, body: CatIn, device: dict = Depends(owner)):
         except ValueError:
             raise HTTPException(422, "tanggal/jam tidak valid")
         changes["at"] = when if when.tzinfo else when.replace(tzinfo=WIB)
-        if changes["at"] > datetime.now(WIB) + timedelta(days=1):
-            raise HTTPException(422, "tanggal di masa depan")
+        if changes["at"] > datetime.now(WIB) + timedelta(days=1) and not (changes.get("realized") is False or (
+                "realized" not in changes and not await db.pool().fetchval("SELECT realized FROM money_tx WHERE id = $1", tx_id))):
+            raise HTTPException(422, "tanggal di masa depan (hanya untuk yang belum direalisasi)")
     if "merchant" in changes:
         changes["merchant"] = changes["merchant"].strip()
     cols = list(changes)

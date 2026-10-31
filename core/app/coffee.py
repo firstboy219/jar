@@ -220,7 +220,7 @@ async def state() -> dict:
     if cur:
         cur["best"] = best(cur["promos"] or [], s["usual"], float(s["max_price"]))
         cur["fresh"] = cur["created_at"] > datetime.now(WIB) - timedelta(hours=OFFER_HOURS)
-    month = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE category = 'kopi' AND direction = 'out' AND at > date_trunc('month', now())")
+    month = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND category = 'kopi' AND direction = 'out' AND at > date_trunc('month', now())")
     return {"offer": cur, "history": hist, "settings": s, "month_total": month}
 
 

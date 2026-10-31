@@ -239,7 +239,7 @@ async def pot_budget() -> dict | None:
         return None
     start, end = money.period_of(datetime.now(WIB).date(), int(ms["payday"]))
     t0 = datetime(start.year, start.month, start.day, tzinfo=WIB)
-    spent = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE direction = 'out' AND category = 'investasi' AND at >= $1", t0)
+    spent = await db.pool().fetchval("SELECT coalesce(sum(amount), 0)::float FROM money_tx WHERE realized AND direction = 'out' AND category = 'investasi' AND at >= $1", t0)
     amount = float(pot.get("amount") or 0)
     return {"pot": pot.get("name") or "Investasi", "amount": amount, "spent": spent, "left": max(0.0, amount - spent)}
 

@@ -159,3 +159,27 @@ def test_zakat_is_counted_after_bills_and_debt_against_the_nisab():
     assert planned[0] == {"name": "Zakat & sedekah", "amount": 375_000, "categories": ["zakat & sedekah"], "alasan": "zakat penghasilan 2,5% (neto)"}
     kept = money.with_zakat([{"name": "Zakat", "amount": 500_000, "categories": ["zakat & sedekah"]}], {"salary": 15_000_000})
     assert kept[0]["amount"] == 500_000                                                      # more than the zakat: his sedekah stays
+
+
+@needs_db
+async def test_a_transaction_not_yet_realised_counts_nowhere_until_marked(pool, monkeypatch):
+    from app import appsettings, devices, main
+    await pool.execute("TRUNCATE money_tx, settings_kv RESTART IDENTITY CASCADE")
+    await appsettings.put("money", {"salary": 10_000_000, "payday": 25, "pots": [{"name": "Tagihan", "amount": 2_000_000, "categories": ["tagihan"]}]}, "owner")
+    _, token = await devices.create("HP", "test", scope="owner")
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        await c.post("/api/v1/app/money/tx", json={"amount": 300_000, "merchant": "PLN listrik", "direction": "out"}, headers=h)
+        r = await c.post("/api/v1/app/money/tx", json={"amount": 900_000, "merchant": "Indihome", "direction": "out", "category": "tagihan",
+                                                        "realized": False, "at": "2099-01-05T09:00"}, headers=h)
+        assert r.status_code == 200                                                                   # a plan may be dated ahead
+        r = await c.post("/api/v1/app/money/tx", json={"amount": 900_000, "merchant": "Indihome", "direction": "out", "category": "tagihan", "realized": False}, headers=h)
+        pid = r.json()["id"]
+        assert (await c.post("/api/v1/app/money/tx", json={"amount": 5, "merchant": "x", "at": "2099-01-01T00:00"}, headers=h)).status_code == 422   # realised in the future: no
+        s = (await c.get("/api/v1/app/money", headers=h)).json()
+        assert s["spent"] == 300_000 and s["pots"][0]["spent"] == 300_000                                # the plan is not spending yet
+        assert s["pending"]["n"] >= 1 and s["pending"]["out"] >= 900_000
+        assert any(t["id"] == pid and t["realized"] is False for t in s["recent"])
+        assert (await c.put(f"/api/v1/app/money/tx/{pid}", json={"realized": True}, headers=h)).status_code == 200
+        s = (await c.get("/api/v1/app/money", headers=h)).json()
+        assert s["spent"] == 1_200_000 and s["pots"][0]["spent"] == 1_200_000
