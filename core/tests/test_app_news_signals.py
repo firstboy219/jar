@@ -65,7 +65,7 @@ async def test_the_brain_reads_every_source_and_says_the_sentiment(pool, monkeyp
     await pool.execute("TRUNCATE briefs, flow_runs, invest_snapshots RESTART IDENTITY CASCADE")
     monkeypatch.setattr(brief, "MAX_AGE_H", 10 ** 6)
     from app import signals
-    monkeypatch.setattr(signals.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(signals, "REDDIT_PAUSE", 0)
     rss = """<rss><channel><item><title>{t}</title><link>https://n/{i}</link><pubDate>Mon, 02 Nov 2026 00:00:00 GMT</pubDate></item></channel></rss>"""
     closes = [100 + i * 0.4 for i in range(250)]
     monkeypatch.setattr(brief, "_client", lambda: FakeClient({
@@ -89,7 +89,7 @@ async def test_the_brain_reads_every_source_and_says_the_sentiment(pool, monkeyp
     monkeypatch.setattr(gateway, "complete", fake)
     hub.tap(lambda ev: _none())
     d = await brief.compose("owner")
-    prompt = seen[0]
+    prompt = "\n".join(seen)
     for block in ("GOOGLE TRENDS INDONESIA", "SENTIMEN:", "Fear & Greed kripto: 22", "AGENDA EKONOMI", "[TOPIK]", "[SOSIAL]", "[PASAR]",
                   "rating teknikal beli", "Google News · harga emas", "Reddit Indonesia"):
         assert block in prompt, block
@@ -99,9 +99,6 @@ async def test_the_brain_reads_every_source_and_says_the_sentiment(pool, monkeyp
     srcs = (await brief.today())["sources"]
     assert {"Google Trends", "Fear & Greed", "CoinGecko", "Forex Factory", "Reddit Indonesia", "Google News"} <= set(srcs)
 
-
-async def _no_sleep(*a, **k):
-    return None
 
 
 async def _none():

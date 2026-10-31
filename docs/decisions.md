@@ -1627,6 +1627,17 @@ menentukan berat/ringan/non-AI)".
   opinion and attention (extremes often mark a turn), technicals are short-term signals; it adds a sentiment read with its evidence. Not
   read: StockTwits and Bisnis.com (bot check, not circumvented), X (no free API), TradingView itself (no public API). The three plans are
   alternatives each starting in week 1; news numbers stay out of the prose.
+- **Cek berita by several workers** (owner 2026-10-31: "membagi jadi beberapa worker … pengumpulan dibagi jadi multi worker, lalu … 1 worker
+  untuk menganalisa, lalu … 1 worker bertindak menjadi saya mengumpulkan data tentang saya lalu dicompare"), each its own master-flow
+  run: (1) eight collectors at once, one per source (news, markets & technicals, Google News, Reddit, Google Trends, Fear & Greed &
+  CoinGecko, the agenda, the weather; skills, no AI; one that fails is left out); (2) the analyst (heavy brain) on public data only —
+  situation, themes, sentiment, scenarios, general impact; it knows nothing about him; (3) the worker that is him: a skill gathers what
+  JARVIS knows (memory, money, holdings with technicals, businesses, job search, the running plan), then the heavy brain as "aku" compares
+  it with the analysis → his position (strong / vulnerable), what each theme means for him (gain / loss / mixed), three plans, quick
+  opportunities, the running plan's verdict. If (3) fails the analysis is still saved and says so. The button starts the workers and
+  answers at once; the page follows them live ("brief" events) and keeps the pipeline (with links to each run). Found on the way: the
+  embedding model's lazy load was not locked, so parallel jobs each loaded their own copy and starved the event loop (~20 s, HTTP
+  timeouts → empty sources); it now loads once under a lock, warmed at startup.
 - **Pengelola penyimpanan** (owner 2026-10-31: "manager storage sehingga saya tahu mana saja yg bisa dihapus atau dizip"): the host measures
   (infra/scripts/storage.py, root, via jarvis-storage.path; every 6 hours on core's request and on "Ukur ulang") and the app shows every
   space user by group: what is safe to remove and what that costs (Docker build cache, orphaned volumes, dangling images, APKs older than

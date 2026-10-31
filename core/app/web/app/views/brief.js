@@ -1,7 +1,7 @@
 // Cek berita (was Brief pagi; owner 2026-10-31): not a list of news but what the situation is — three points first, each theme as a chain
 // of cause and effect with its indicators and reasons (each linked to its news), 2–3 scenarios for the coming months — and then the brain in
 // his place: three plans for 1–3 months (safe, balanced, bold). The one he picks becomes week-by-week tasks in Catatan.
-import { get, header, html, icon, loading, post, render, sheet, speak, stopSpeaking, toast } from '../core.js';
+import { get, header, html, icon, loading, on, post, render, sheet, speak, stopSpeaking, toast } from '../core.js';
 import { laneChip } from '../ui.js';
 
 let current = null, planTab = null;
@@ -14,6 +14,9 @@ const STYLE = { aman: ['green', 'Aman'], seimbang: ['cyan', 'Seimbang'], berani:
 const FEEL = { 'sangat takut': 'red', takut: 'amber', netral: 'muted', optimis: 'green', euforia: 'violet' };
 const TECH = { 'beli kuat': 'green', beli: 'green', netral: 'muted', jual: 'red', 'jual kuat': 'red' };
 const ECON = /harga|emas|saham|ihsg|rupiah|dolar|bansos|pajak|bbm|pertalite|gaji|bunga|kredit|pinjol|bitcoin|kripto|crypto|investasi|bank|ekonomi|inflasi|phk|lowongan|cpns|tarif|listrik|um[rp]|thr|bpjs|ojk|\bbi\b|pluang|reksa|obligasi|properti|kpr|cicilan/i;
+const ARAH = { untung: ['green', 'menguntungkanmu'], rugi: ['red', 'merugikanmu'], campuran: ['amber', 'campuran'] };
+const STAGES = [['kumpul', 'Pengumpul data', 'Satu worker per sumber, berjalan bersamaan — tanpa AI'], ['analisa', 'Analis', 'Menyimpulkan situasi dari data publik'],
+  ['jadi-kamu', 'Jadi kamu', 'Mengumpulkan data tentangmu lalu membandingkannya dengan hasil analis']];
 const pct = (v) => (v == null ? '' : `${v > 0 ? '+' : ''}${String(v).replace('.', ',')}%`);
 
 const src = (r) => (r.link ? html` <a href="${r.link}" target="_blank" rel="noopener" class="small t-cyan">· ${r.sumber}</a>` : '');
@@ -32,7 +35,7 @@ function theme(t) {
       <span>${icon('chart', 12)} ${i.nama}${i.arti ? html` <span class="small">— ${i.arti}</span>` : ''}</span><span class="mono" style="white-space:nowrap">${i.nilai}</span></div>`)}</div>` : ''}
     ${t.alasan?.length ? html`<details><summary class="small">Alasan & sumber (${t.alasan.length})</summary><div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
       ${t.alasan.map((r) => html`<span class="small">• ${r.isi}${src(r)}</span>`)}</div></details>` : ''}
-    ${t.dampak ? html`<span class="small" style="color:var(--amber-t)">${icon('wallet', 12)} Bagimu: ${t.dampak}</span>` : ''}</div>`;
+    ${t.dampak ? html`<span class="small" style="color:var(--${(ARAH[t.arah] || ['amber'])[0]}-t)">${icon('wallet', 12)} Bagimu${t.arah ? ` (${ARAH[t.arah][1]})` : ''}: ${t.dampak}</span>` : ''}</div>`;
 }
 
 function scenario(s) {
@@ -101,6 +104,33 @@ function agenda(list) {
       <span class="grow"><b>${a.country}</b> ${a.title}${a.actual ? html` <span class="small">· hasil ${a.actual}</span>` : a.forecast ? html` <span class="small">· perkiraan ${a.forecast}</span>` : ''}</span></div>`)}</div></details>`;
 }
 
+/** The workers: collectors in parallel → the analyst → the one that is him. Live while running, kept with the brief after. */
+function pipeline(steps, { live = false, error = '' } = {}) {
+  const mark = (st) => (st.status === 'selesai' ? html`<span style="color:var(--green)">${icon('check', 12)}</span>` : st.status === 'gagal' ? html`<span style="color:var(--red)">${icon('close', 12)}</span>` : html`<span class="small">…</span>`);
+  const body = STAGES.map(([key, title, sub], i) => {
+    const mine = steps.filter((st) => st.stage === key);
+    const done = mine.filter((st) => st.status !== 'jalan').length;
+    const state = !mine.length ? 'menunggu' : done < mine.length ? 'berjalan' : mine.some((st) => st.status === 'gagal') && key !== 'kumpul' ? 'gagal' : 'selesai';
+    return html`<div style="display:flex;flex-direction:column;gap:6px">
+      <div class="row sb"><b style="font-size:14px">${i + 1} · ${title}${key === 'kumpul' && mine.length ? html` <span class="small">(${done}/${mine.length})</span>` : ''}</b>
+        <span class="tag ${state === 'selesai' ? 'green' : state === 'gagal' ? 'red' : state === 'berjalan' ? 'cyan' : 'muted'}">${state}</span></div>
+      <span class="small">${sub}</span>
+      ${mine.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px">${mine.map((st) => html`<a class="chip" ${st.run_id ? html`href="#/alur/${st.run_id}"` : ''} style="gap:4px">${mark(st)} ${st.label.replace(/^Jadi kamu: /, '').replace(/^Analis: /, '')}${st.status === 'selesai' && st.n ? html` <span class="small">${st.n}</span>` : ''}${st.secs && st.status !== 'jalan' ? html` <span class="small">${st.secs}d</span>` : ''}</a>`)}</div>` : ''}</div>`;
+  });
+  return live
+    ? html`<div class="card cyan" style="gap:12px"><div class="row sb"><span class="k cyan">JARVIS sedang bekerja</span><span class="small">±1–2 menit</span></div>${body}
+        ${error ? html`<span class="small" style="color:var(--red-t)">${error}</span>` : ''}</div>`
+    : html`<details class="card"><summary class="small">Cara kerja: ${steps.filter((st) => st.stage === 'kumpul').length} pengumpul → analis → jadi kamu</summary>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:10px">${body}</div></details>`;
+}
+
+function position(po) {
+  if (!po) return '';
+  return html`<div class="card" style="gap:8px"><span class="k violet">Dibanding posisimu</span><p class="sub" style="margin:0">${po.ringkas}</p>
+    ${po.kuat?.length ? html`<div style="display:flex;flex-direction:column;gap:3px">${po.kuat.map((x) => html`<span class="small"><span style="color:var(--green)">${icon('check', 12)}</span> ${x}</span>`)}</div>` : ''}
+    ${po.rentan?.length ? html`<div style="display:flex;flex-direction:column;gap:3px">${po.rentan.map((x) => html`<span class="small"><span style="color:var(--amber)">${icon('alert', 12)}</span> ${x}</span>`)}</div>` : ''}</div>`;
+}
+
 function chance(p) {
   return html`<div class="card green" style="gap:6px"><div class="row sb top" style="gap:8px"><b style="font-size:14px">${p.aksi}</b>
       <span class="tag ${SURE[p.yakin] || 'muted'}" style="white-space:nowrap">yakin ${p.yakin}</span></div>
@@ -117,14 +147,25 @@ export default {
   tab: 'beranda',
   async render(root) {
     root.innerHTML = String(html`${header('Cek berita')}<div class="scr">${loading()}</div>`);
-    const { brief, running: run } = await get('/api/v1/app/brief');
+    const { brief, running: run, progress: prog } = await get('/api/v1/app/brief');
     current = brief;
+    let timer = null;
+    const follow = () => on('brief', (ev) => {   // the workers, live: redraw just the progress card; the whole page once they are done
+      if (!ev.running) { clearTimeout(timer); timer = setTimeout(render, 400); return; }
+      const box = root.querySelector('#pipe');
+      if (box) box.innerHTML = String(pipeline(ev.steps || [], { live: true }));
+      else { clearTimeout(timer); timer = setTimeout(render, 300); }   // started elsewhere (the morning schedule, another device)
+    });
+    const live = prog?.running ? html`<div id="pipe">${pipeline(prog.steps || [], { live: true })}</div>`
+      : prog?.error ? html`<div class="card amber" style="gap:6px"><span class="small">${/model|HTTP|gateway|token/i.test(prog.error) ? 'Analisis terakhir gagal: otak AI tidak bisa dihubungi.' : `Analisis terakhir gagal: ${prog.error.slice(0, 120)}`}
+          ${brief ? ' Yang tampil di bawah adalah analisis sebelumnya.' : ''} Ketuk ⟳ untuk mencoba lagi.</span>
+          <details><summary class="small">Detail teknis</summary><code class="small" style="word-break:break-all">${prog.error}</code></details></div>` : '';
     const old = brief && !brief.data?.situasi && !brief.data?.tema;   // a list-style brief from before: make a fresh analysis
     if (!brief || old) {
-      root.innerHTML = String(html`${header('Cek berita')}<div class="scr">${running(run)}<div class="card"><p>Belum ada analisis berita hari ini. JARVIS membuatnya otomatis tiap pagi
-        (atur jamnya di Kontrol): situasi saat ini, sebab-akibatnya, skenario 1–3 bulan, dan rencana seandainya JARVIS jadi kamu.</p>
-        <button class="btn primary" data-act="now">Analisis sekarang</button></div></div>`);
-      return;
+      root.innerHTML = String(html`${header('Cek berita')}<div class="scr">${live}${running(run)}${prog?.running ? '' : html`<div class="card"><p>Belum ada analisis berita hari ini. JARVIS membuatnya otomatis tiap pagi
+        (atur jamnya di Kontrol): beberapa worker mengumpulkan data, satu menganalisa, satu lagi menjadi kamu dan menyusun rencana 1–3 bulan.</p>
+        <button class="btn primary" data-act="now">Analisis sekarang</button></div>`}</div>`);
+      return follow();
     }
     const d = brief.data;
     const day = new Date(`${brief.day}T00:00:00`);
@@ -133,11 +174,13 @@ export default {
     if (planTab == null || planTab >= plans.length) planTab = Math.max(0, plans.findIndex((p) => p.gaya === 'seimbang'));
     root.innerHTML = String(html`${header('Cek berita', { sub: `${day.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })} · ${d.count || 0} berita dari ${brief.sources.length} sumber`, right: html`<button class="ib box" data-act="now" aria-label="Analisis ulang">${icon('repeat', 18)}</button>` })}
       <div class="scr">
+        ${live}
         <div class="card ${mood[0]}" style="gap:8px"><div class="row sb"><span class="k ${mood[0]}">Intinya hari ini</span><span class="tag ${mood[0]}">${mood[1]}</span></div>
           ${d.judul ? html`<b style="font-size:17px;line-height:1.35">${d.judul}</b>` : ''}
           ${d.intinya?.length ? html`<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">${d.intinya.map((x) => html`<li style="font-size:14px">${x}</li>`)}</ol>`
             : html`<p class="sub" style="margin:0">${d.situasi}</p>`}</div>
         ${running(run, d.evaluasi_rencana)}
+        ${position(d.posisi)}
         ${feeling(d.sentimen, d.mood, d.trends)}
         ${d.intinya?.length && d.situasi ? html`<details class="card"><summary class="small">Situasi lengkapnya</summary><p class="sub" style="margin:8px 0 0">${d.situasi}</p></details>` : ''}
         ${d.markets?.length ? html`<div class="sec"><span>Indikator pasar</span><span class="small">teknikal ala TradingView</span></div>
@@ -149,13 +192,16 @@ export default {
         ${plans.length ? html`<div class="sec"><span>Kalau aku jadi kamu</span></div>
           <div class="chips">${plans.map((p, i) => html`<button class="chip ${i === planTab ? 'on' : ''}" data-act="tab" data-i="${i}">${(STYLE[p.gaya] || STYLE.seimbang)[1]}${p.dipilih ? ' ✓' : ''}</button>`)}</div>
           ${plan(plans[planTab], planTab)}
-          <span class="small" style="padding:0 4px">Rencana dibuat seolah JARVIS jadi kamu, dari berita & datamu hari ini — kamu yang memutuskan. Investasi tetap lewat persetujuanmu dan batas di menu Investasi.</span>` : ''}
+          <span class="small" style="padding:0 4px">Rencana dibuat seolah JARVIS jadi kamu, dari berita & datamu hari ini — kamu yang memutuskan. Investasi tetap lewat persetujuanmu dan batas di menu Investasi.</span>`
+          : d.persona_error ? html`<div class="card amber"><span class="small">Worker “jadi kamu” belum memberi rencana (${d.persona_error}). Ketuk ⟳ untuk mencoba lagi.</span></div>` : ''}
         ${d.peluang?.length ? html`<details class="card"><summary class="small">Peluang cepat (${d.peluang.length})</summary><div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">${d.peluang.map(chance)}</div></details>` : ''}
         ${d.waspada?.length ? html`<div class="card red" style="gap:6px"><span class="k red">Waspadai</span>${d.waspada.map((r) => html`<span class="small">• ${r.isi}${src(r)}</span>`)}</div>` : ''}
         ${d.weather ? html`<p class="small" style="padding:0 4px">${icon('rain', 14)} ${d.weather}</p>` : ''}
+        ${d.pipeline?.length ? pipeline(d.pipeline) : ''}
         <span class="small" style="padding:0 4px">Dianalisis oleh ${laneChip(d.lane)} lewat alur master · sumber: ${brief.sources.join(', ')}</span>
         <div class="btns"><button class="btn primary lg" data-act="read">${icon('speaker', 18)} Bacakan</button><button class="btn lg" data-act="hush">Diam</button><a class="btn lg" href="#/obrolan">Tanya lanjut</a></div>
       </div>`);
+    return follow();
   },
   actions: {
     read() { speak(spoken(current.data)); },
@@ -177,6 +223,6 @@ export default {
       toast(`${out.added} tugas masuk ke Catatan — rencana “${p.nama}” mulai berjalan.`);
       render();
     },
-    async now() { toast('Menganalisis berita & pasar… (±1–2 menit)'); await post('/api/v1/app/brief/now'); render(); },
+    async now() { await post('/api/v1/app/brief/now'); toast('Worker mulai bekerja — progresnya tampil di atas.'); render(); },
   },
 };

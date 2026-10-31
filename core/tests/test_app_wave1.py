@@ -215,10 +215,10 @@ async def test_the_brief_is_written_through_the_master_flow(pool, monkeypatch):
             sent.append(ev)
     hub.tap(tap)
     d = await brief.compose()
-    assert asked == ["berat"] and d["tema"][0]["alasan"][0]["link"] == "https://n/1" and d["markets"][0]["change"] == 1.0 and d["weather"]
+    assert asked == ["berat", "berat"] and d["tema"][0]["alasan"][0]["link"] == "https://n/1" and d["markets"][0]["change"] == 1.0 and d["weather"]
     assert d["peluang"][0]["kaitan"] == "bisnis" and d["suasana"] == "waspada"
     assert sent and sent[-1]["route"] == "#/brief" and sent[-1]["title"] == "Cek berita siap" and (await brief.today())["data"]["ucapan"] == "Selamat pagi."
-    assert await pool.fetchval("SELECT lane FROM flow_runs WHERE feature = 'brief'") == "berat"     # an analysis: the heavy brain
+    assert await pool.fetchval("SELECT lane FROM flow_runs WHERE feature = 'brief' AND action = 'analisa'") == "berat"     # an analysis: the heavy brain
 
 
 @needs_db

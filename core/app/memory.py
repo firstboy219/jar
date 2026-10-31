@@ -6,6 +6,7 @@ never sent to a cloud provider just to be indexed.
 
 import asyncio
 import os
+import threading
 import uuid
 from functools import lru_cache
 
@@ -26,10 +27,20 @@ class MemoryError_(RuntimeError):
     pass
 
 
+_load_lock = threading.Lock()
+
+
 @lru_cache(maxsize=1)
-def _embedder():
+def _load():
     from fastembed import TextEmbedding
     return TextEmbedding(settings.embed_model, cache_dir=os.getenv("FASTEMBED_CACHE_PATH"))
+
+
+def _embedder():
+    """The model, loaded once: lru_cache alone let several threads that asked at the same moment (Cek berita's parallel workers) each load
+    their own copy, fighting over the CPU for ~20 s."""
+    with _load_lock:
+        return _load()
 
 
 def _embed_sync(texts: list[str]) -> list[list[float]]:

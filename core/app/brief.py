@@ -12,12 +12,24 @@ Sharper (owner 2026-10-31: "lebih dipertajam … tp tetap mudah dibaca dan AI me
 bulan kedepan yg bisa saya pilih, plan yg saya pilih akan masuk ke list task di menu catatan"): three points first, each theme as a chain
 of cause and effect, 2–3 scenarios for the coming months with the sign of each, and three plans written as if the brain were him (safe,
 balanced, bold; 1–3 months; weekly steps). The plan he picks becomes tasks in Catatan, due week by week; the next analyses see how far it
-is and say whether to carry on or adjust."""
+is and say whether to carry on or adjust.
+
+Worked by several workers (owner 2026-10-31: "membagi jadi beberapa worker … pengumpulan dibagi jadi multi worker, lalu … 1 worker untuk
+menganalisa, lalu … 1 worker bertindak menjadi saya mengumpulkan data tentang saya lalu dicompare"), each its own run in the master flow:
+  1. collectors, in parallel, one per source (news, markets & technicals, Google News, Reddit, Google Trends, Fear & Greed, the agenda,
+     the weather) — skills, no AI; one that fails is left out
+  2. the analyst (heavy brain): public data only → situation, themes with their chains, indicators and reasons, sentiment, scenarios
+  3. the worker that is him: gathers what JARVIS knows of him (memory, money, holdings with their technicals, businesses, job search, the
+     plan he follows; a skill), then (heavy brain, as "aku") compares it with the analysis → his position (strong / vulnerable), what each
+     theme means for him, three plans, quick opportunities, how his running plan stands
+The page follows the steps live and keeps them with the brief."""
 
 import asyncio
 import html as htmlmod
+import json
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -143,27 +155,109 @@ def mix(lists: list[list[dict]]) -> list[dict]:
     return out
 
 
-async def gather() -> dict:
-    """News, markets, weather — and what people search and say, the week's agenda, the technicals of what he holds (signals.py). No AI."""
-    from . import signals, weather
-    now = datetime.now(timezone.utc)
+# ---------- stage 1: the collectors — one worker per source, all at once (owner 2026-10-31: "pengumpulan dibagi jadi multi worker") ----------
+
+async def _topic_queries() -> list[str]:
+    from . import signals
     s = await appsettings.get("brief")
     try:
         held = await signals.holdings()
     except Exception:
         held = []
-    queries = list(dict.fromkeys([*(s.get("topics") or [])[:3], *(n.split(" (")[0] for n, _ in held[:3]), *DEFAULT_TOPICS]))[:6]
+    return list(dict.fromkeys([*(s.get("topics") or [])[:3], *(n.split(" (")[0] for n, _ in held[:3]), *DEFAULT_TOPICS]))[:6]
+
+
+async def _c_news(now: datetime) -> dict:
     async with _client() as c:
         feeds = {k: await asyncio.gather(*(_feed(c, src, u, now) for src, u in v)) for k, v in FEEDS.items()}
-        quotes, mine, trends, topics, social, mood, agenda = await asyncio.gather(
-            asyncio.gather(*(_quote(c, l, sym) for l, sym in MARKETS)), asyncio.gather(*(_quote(c, n, t) for n, t in held)),
-            signals.trends(c), signals.topics(c, queries, now) if queries else asyncio.sleep(0, []), signals.social(c, now), signals.mood(c),
-            signals.agenda(c, now))
-    news = {k: mix(v) for k, v in feeds.items()}
-    if topics:
-        news["topik"] = topics
-    if social:
-        news["sosial"] = social
+    return {k: mix(v) for k, v in feeds.items()}
+
+
+async def _c_markets(now: datetime) -> list:
+    async with _client() as c:
+        return [q for q in await asyncio.gather(*(_quote(c, l, sym) for l, sym in MARKETS)) if q]
+
+
+async def _c_topics(now: datetime) -> list:
+    from . import signals
+    async with _client() as c:
+        return await signals.topics(c, await _topic_queries(), now)
+
+
+async def _c_social(now: datetime) -> list:
+    from . import signals
+    async with _client() as c:
+        return await signals.social(c, now)
+
+
+async def _c_trends(now: datetime) -> list:
+    from . import signals
+    async with _client() as c:
+        return await signals.trends(c)
+
+
+async def _c_mood(now: datetime) -> dict:
+    from . import signals
+    async with _client() as c:
+        return await signals.mood(c)
+
+
+async def _c_agenda(now: datetime) -> list:
+    from . import signals
+    async with _client() as c:
+        return await signals.agenda(c, now)
+
+
+async def _c_weather(now: datetime) -> str:
+    from . import weather
+    return await weather.today_text() or ""
+
+
+COLLECTORS = [("berita", "Berita dari media", _c_news), ("pasar", "Harga & teknikal pasar", _c_markets), ("topik", "Google News topikmu", _c_topics),
+              ("sosial", "Obrolan Reddit", _c_social), ("tren", "Google Trends", _c_trends), ("sentimen", "Fear & Greed & CoinGecko", _c_mood),
+              ("agenda", "Kalender ekonomi", _c_agenda), ("cuaca", "Cuaca", _c_weather)]
+_state: dict = {"running": False, "steps": [], "started": None, "error": None}
+
+
+def _size(v) -> int:
+    return sum(len(x) for x in v.values()) if isinstance(v, dict) and all(isinstance(x, list) for x in v.values()) else len(v) if isinstance(v, (list, dict)) else int(bool(v))
+
+
+async def _step(stage: str, key: str, label: str, r: dict | None, t0: float, n: int = 0) -> dict:
+    """One worker's line in the pipeline: shown live while it runs and kept with the brief."""
+    st = {"stage": stage, "key": key, "label": label, "status": "jalan" if r is None else ("selesai" if r["status"] == "done" else "gagal"),
+          "run_id": (r or {}).get("run_id"), "lane": (r or {}).get("lane"), "secs": round(time.monotonic() - t0, 1), "n": n,
+          "error": str((r or {}).get("error") or "")[:160]}
+    _state["steps"] = [x for x in _state["steps"] if x["key"] != key] + [st]
+    await hub.broadcast({"type": "brief", "running": _state["running"], "steps": _state["steps"]})
+    return st
+
+
+async def gather(trigger: str = "schedule") -> dict:
+    """Every source by its own worker through the master flow (a skill: no AI), in parallel; one that fails is left out."""
+    now = datetime.now(timezone.utc)
+
+    async def one(key: str, label: str, fn) -> tuple[str, object]:
+        t0 = time.monotonic()
+        await _step("kumpul", key, label, None, t0)
+        r = await master.run(master.Job("brief", f"kumpul-{key}", f"cek berita: kumpulkan {label.lower()}", trigger=trigger, skill=lambda: fn(now)))
+        val = r.get("result") if r["status"] == "done" else None
+        await _step("kumpul", key, label, r, t0, _size(val))
+        return key, val
+    got = dict(await asyncio.gather(*(one(*c) for c in COLLECTORS)))
+    news = dict(got.get("berita") or {})
+    if got.get("topik"):
+        news["topik"] = got["topik"]
+    if got.get("sosial"):
+        news["sosial"] = got["sosial"]
+    return {"news": news, "markets": got.get("pasar") or [], "trends": got.get("tren") or [], "mood": got.get("sentimen") or {},
+            "agenda": got.get("agenda") or [], "weather": got.get("cuaca") or ""}
+
+
+async def about_me() -> dict:
+    """What JARVIS knows of him: memory, money, holdings (with their technicals), businesses, job search, the plan he follows. No AI."""
+    from . import memory, signals
+    facts = [m["text"] for m in await memory.list_("personal", limit=30) if not m.get("stale")][:15]
     about = []
     for name, fn in CONTEXT.items():
         try:
@@ -171,8 +265,14 @@ async def gather() -> dict:
                 about.append(f"- {name}: {t}")
         except Exception:
             pass
-    return {"news": news, "markets": [q for q in quotes if q], "holdings": [q for q in mine if q], "trends": trends, "mood": mood,
-            "agenda": agenda, "weather": await weather.today_text(), "about": about}
+    try:
+        held = await signals.holdings()
+    except Exception:
+        held = []
+    async with _client() as c:
+        holdings = [q for q in await asyncio.gather(*(_quote(c, n, t) for n, t in held)) if q]
+    s = await appsettings.get("brief")
+    return {"facts": facts, "about": about, "holdings": holdings, "running": await progress(), "topics": s.get("topics") or []}
 
 
 KINDS = ("emas", "saham_as", "kripto", "reksa_dana", "tabungan", "bisnis", "karier", "belanja", "lainnya")
@@ -226,54 +326,96 @@ SENTIMENTS = ("sangat takut", "takut", "netral", "optimis", "euforia")
 PLAN_KEY = "brief:plan"
 
 
-def prompt(g: dict, owner_facts: list[str], topics: list[str], running: str = "") -> list[dict]:
-    sys = ("Kamu analis pribadi JARVIS untuk pemilik: karyawan & pengusaha di Indonesia (Bogor–Jakarta) yang berinvestasi (emas, saham AS, kripto, "
-           "reksa dana lewat Pluang) dan punya bisnis online. Tugasmu BUKAN merangkum berita satu per satu, tetapi MENYIMPULKAN SITUASI SAAT INI dari "
-           "semua berita dan angka pasar, menjelaskan sebab-akibatnya dengan indikator, memperkirakan 1–3 bulan ke depan, lalu MEMPOSISIKAN DIRIMU "
-           "SEBAGAI PEMILIK: kalau kamu jadi dia — dengan gaji, pengeluaran, dana darurat, portofolio, bisnis, dan pencarian kerjanya — apa yang akan "
-           "kamu lakukan 1–3 bulan ke depan.\n"
-           "ATURAN ISI: pakai HANYA berita dan angka yang diberikan — jangan menambah fakta atau angka. Tiap alasan menunjuk nomor berita sumbernya. "
-           "Indikator memakai angka dari DATA PASAR atau yang tertulis di berita. Jumlah uang di rencana hanya dari data keuangannya (atau persen dari "
-           "gajinya). Peluang & rencana = hal yang bisa ia putuskan, dengan risikonya; bukan perintah beli/jual. Dana darurat dan tagihan didahulukan "
-           "bila belum aman. Jangan menyarankan berutang untuk investasi. Investasi tetap ia putuskan sendiri lewat persetujuan & batas di menu "
-           "Investasi. Waktunya terbatas (ia bekerja kantoran): langkah harus muat di malam/akhir pekan.\n"
-           "SUMBER: berita (bagian INDONESIA/EKONOMI/PASAR/DUNIA/TOPIK) adalah fakta yang dilaporkan; SOSIAL (Reddit) dan GOOGLE TRENDS adalah "
-           "opini & perhatian publik, bukan fakta — pakai untuk membaca sentimen, dan ingat sentimen ekstrem sering menandai pembalikan. Rating "
-           "teknikal (metode TradingView dari harga harian) adalah sinyal arah jangka pendek, bukan kepastian. AGENDA EKONOMI dipakai untuk tanda "
-           "skenario dan waktu langkah rencana. ASET MILIKNYA = yang ia pegang sekarang.\n"
-           "ATURAN BAHASA: Bahasa Indonesia sehari-hari yang tajam tapi mudah dibaca: kalimat pendek, istilah ekonomi dijelaskan dalam kurung sekali "
-           "saja, tanpa basa-basi. Di bagian rencana, bicara sebagai dirinya ('aku' = pemilik): 'Dengan kondisiku sekarang, aku akan…'.\n"
-           "Kembalikan JSON:\n"
+LANGUAGE = ("Bahasa Indonesia sehari-hari yang tajam tapi mudah dibaca: kalimat pendek, istilah ekonomi dijelaskan dalam kurung sekali saja, "
+            "tanpa basa-basi.")
+
+
+def analysis_prompt(g: dict) -> list[dict]:
+    """Stage 2 — the analyst: public data only (news, markets, what people search and say, the agenda). Nothing about him."""
+    sys = ("Kamu ANALIS JARVIS. Tugasmu BUKAN merangkum berita satu per satu, tetapi MENYIMPULKAN SITUASI SAAT INI dari semua berita, angka pasar, "
+           "sentimen, dan agenda: sebab-akibatnya dengan indikator, dan perkiraan 1–3 bulan ke depan. Kamu tidak tahu apa pun tentang pemilik — "
+           "worker berikutnya yang membandingkan hasilmu dengan keadaannya; jadi tulis dampak secara umum (bagi rumah tangga, karyawan, investor "
+           "emas/saham/kripto, pedagang online di Indonesia).\n"
+           "ATURAN: pakai HANYA data yang diberikan — jangan menambah fakta atau angka. Tiap alasan menunjuk nomor berita sumbernya. Indikator "
+           "memakai angka dari DATA PASAR atau yang tertulis di berita. Berita (INDONESIA/EKONOMI/PASAR/DUNIA/TOPIK) adalah fakta yang dilaporkan; "
+           "SOSIAL (Reddit) dan GOOGLE TRENDS adalah opini & perhatian publik, bukan fakta — pakai untuk membaca sentimen; sentimen ekstrem sering "
+           "menandai pembalikan. Rating teknikal (metode TradingView dari harga harian) = sinyal arah jangka pendek, bukan kepastian. AGENDA EKONOMI "
+           "dipakai untuk tanda skenario.\n" + LANGUAGE + "\nKembalikan JSON:\n"
            '{"judul": "satu kalimat inti situasi hari ini",\n'
-           ' "intinya": ["3 poin, masing-masing maks 20 kata: yang paling perlu ia tahu hari ini"],\n'
+           ' "intinya": ["3 poin, masing-masing maks 20 kata: yang paling perlu diketahui hari ini"],\n'
            ' "situasi": "3–5 kalimat: keadaan ekonomi & dunia sekarang dan arahnya",\n'
            ' "suasana": "positif|campuran|waspada",\n'
            ' "sentimen": {"label": "sangat takut|takut|netral|optimis|euforia", "ringkas": "1–2 kalimat: suasana hati pasar & publik", '
            '"sinyal": [{"sumber": "Google Trends|Reddit|Fear & Greed|CoinGecko|Teknikal|Berita", "isi": "1 kalimat dengan angkanya"}] (2–4)},\n'
-           ' "tema": [{"judul": "…", "kesimpulan": "1–2 kalimat", "rantai": ["sebab", "akibat", "akibat berikutnya", "dampak ke pemilik"] (3–5 mata rantai, '
+           ' "tema": [{"judul": "…", "kesimpulan": "1–2 kalimat", "rantai": ["sebab", "akibat", "akibat berikutnya", "dampak umum"] (3–5 mata rantai, '
            'masing-masing maks 8 kata), "indikator": [{"nama": "…", "nilai": "angka/arah persis dari data", "arti": "singkat"}], '
-           '"alasan": [{"isi": "1 kalimat", "nomor": "EKONOMI 3"}], "dampak": "apa artinya bagi pemilik"}] (2–4 tema),\n'
+           '"alasan": [{"isi": "1 kalimat", "nomor": "EKONOMI 3"}]}] (2–4 tema),\n'
            ' "skenario": [{"nama": "…", "kemungkinan": "besar|sedang|kecil", "isi": "apa yang terjadi 1–3 bulan ke depan, 1–2 kalimat", '
            '"tanda": "angka/kejadian yang menandakan skenario ini sedang terjadi"}] (2–3),\n'
-           ' "rencana": [{"nama": "judul singkat", "gaya": "aman|seimbang|berani", "bulan": 1|2|3, '
-           '"kenapa": "2–3 kalimat sebagai pemilik (\'aku\'), merujuk tema/skenario di atas", "target": "hasil terukur di akhir rencana", '
-           '"langkah": [{"minggu": 1, "apa": "tindakan konkret yang selesai dalam seminggu, diawali kata kerja", "kaitan": "' + "|".join(KINDS) + '"}] '
-           '(4–8 langkah, urut minggu, minggu maks bulan×4), "risiko": "…", "berhenti_jika": "tanda untuk berhenti atau menyesuaikan"}] '
-           '(TEPAT 3 rencana: satu aman, satu seimbang, satu berani — PILIHAN yang berdiri sendiri, BUKAN tahapan berurutan: '
-           'masing-masing lengkap dan dimulai minggu 1),\n'
-           ' "evaluasi_rencana": "bila ada RENCANA BERJALAN: 1–2 kalimat sebagai pemilik — lanjutkan, percepat, atau sesuaikan, dan kenapa; selain itu kosong",\n'
-           ' "peluang": [{"aksi": "yang bisa ia lakukan segera", "kenapa": "berdasar tema/indikator mana", "kaitan": "' + "|".join(KINDS) + '", '
-           '"horizon": "hari ini|minggu ini|bulan ini", "risiko": "…", "yakin": "rendah|sedang|tinggi"}] (2–4),\n'
-           ' "waspada": [{"isi": "…", "nomor": "DUNIA 2"}] (0–3),\n'
-           ' "ucapan": "3–4 kalimat untuk DIBACAKAN: situasinya, alasan utamanya, dan rencana yang paling kamu sarankan"}\n'
+           ' "waspada": [{"isi": "…", "nomor": "DUNIA 2"}] (0–3)}\n'
            '"nomor" = bagian dan nomor berita persis seperti di daftar; jangan menulis nomor berita (mis. "DUNIA 3") di kalimat lain.')
-    user = ("TENTANG PEMILIK & KEUANGANNYA:\n" + "\n".join(owner_facts[:15] + g["about"]) + (f"\nTopik yang ia ikuti: {', '.join(topics)}" if topics else "")
-            + (f"\n\nRENCANA BERJALAN (pilihannya dari Cek berita sebelumnya):\n{running}" if running else "")
-            + f"\n\nCUACA: {g['weather'] or '-'}\n\nDATA PASAR (terakhir; teknikal metode TradingView dari harga harian):\n" + ("\n".join(market_lines(g.get("markets") or [])) or "-")
-            + ("\n\nASET MILIKNYA (teknikal):\n" + "\n".join(market_lines(g["holdings"])) if g.get("holdings") else "")
+    user = (f"CUACA: {g.get('weather') or '-'}\n\nDATA PASAR (terakhir; teknikal metode TradingView dari harga harian):\n"
+            + ("\n".join(market_lines(g.get("markets") or [])) or "-")
             + ("\n\n" + signal_lines(g) if signal_lines(g) else "")
             + "\n\nBERITA & MEDIA SOSIAL (24 jam terakhir):\n" + "\n".join(news_lines(g)))
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
+
+
+def _analysis_text(a: dict) -> str:
+    """The analyst's result as the next worker reads it (no links, no news numbers). Pure."""
+    keep = {k: a.get(k) for k in ("judul", "intinya", "situasi", "suasana", "sentimen", "skenario")}
+    keep["tema"] = [{k: t.get(k) for k in ("judul", "kesimpulan", "rantai", "indikator")} for t in a.get("tema") or []]
+    keep["waspada"] = [w.get("isi") for w in a.get("waspada") or []]
+    return json.dumps(keep, ensure_ascii=False)
+
+
+def persona_prompt(analysis: dict, me: dict, g: dict) -> list[dict]:
+    """Stage 3 — the worker that is him: what it knows about him, compared with the analyst's result → his position, the impact of each
+    theme on him, three plans, the quick opportunities, how his running plan stands."""
+    sys = ("Kamu adalah PEMILIK sendiri ('aku'): karyawan & pengusaha di Indonesia (Bogor–Jakarta) yang berinvestasi (emas, saham AS, kripto, reksa "
+           "dana lewat Pluang) dan punya bisnis online. Seorang analis sudah menyimpulkan situasi hari ini (ANALISIS). Tugasmu: kumpulkan apa yang "
+           "kamu tahu tentang dirimu (DATA TENTANG AKU), BANDINGKAN dengan analisis itu — di mana aku kuat, di mana aku rentan, apa arti tiap tema "
+           "bagiku — lalu putuskan apa yang akan aku lakukan 1–3 bulan ke depan.\n"
+           "ATURAN: pakai HANYA ANALISIS, data pasar, dan DATA TENTANG AKU — jangan menambah fakta atau angka. Jumlah uang hanya dari data "
+           "keuanganku (atau persen dari gajiku). Dana darurat dan tagihan didahulukan bila belum aman. Jangan berutang untuk investasi. Investasi "
+           "tetap kuputuskan sendiri lewat persetujuan & batas di menu Investasi — rencana bukan perintah beli/jual. Waktuku terbatas (kerja kantoran): "
+           "langkah harus muat di malam/akhir pekan. Bila ada RENCANA BERJALAN, nilai dulu: lanjutkan, percepat, atau sesuaikan.\n"
+           + LANGUAGE + " Selalu bicara sebagai diriku ('aku').\nKembalikan JSON:\n"
+           '{"posisi": {"ringkas": "2–3 kalimat: posisiku sekarang dibanding situasi ini", "kuat": ["…"] (1–3), "rentan": ["…"] (1–3)},\n'
+           ' "dampak": [{"tema": "judul tema PERSIS seperti di ANALISIS", "bagiku": "1–2 kalimat: artinya bagiku", "arah": "untung|rugi|campuran"}] (satu per tema),\n'
+           ' "rencana": [{"nama": "judul singkat", "gaya": "aman|seimbang|berani", "bulan": 1|2|3, '
+           '"kenapa": "2–3 kalimat sebagai aku, merujuk tema/skenario dan posisiku", "target": "hasil terukur di akhir rencana", '
+           '"langkah": [{"minggu": 1, "apa": "tindakan konkret yang selesai dalam seminggu, diawali kata kerja", "kaitan": "' + "|".join(KINDS) + '"}] '
+           '(4–8 langkah, urut minggu, minggu maks bulan×4), "risiko": "…", "berhenti_jika": "tanda untuk berhenti atau menyesuaikan"}] '
+           '(TEPAT 3 rencana: satu aman, satu seimbang, satu berani — PILIHAN yang berdiri sendiri, BUKAN tahapan berurutan: masing-masing lengkap '
+           'dan dimulai minggu 1),\n'
+           ' "evaluasi_rencana": "bila ada RENCANA BERJALAN: 1–2 kalimat — lanjutkan, percepat, atau sesuaikan, dan kenapa; selain itu kosong",\n'
+           ' "peluang": [{"aksi": "yang bisa kulakukan segera", "kenapa": "berdasar tema/indikator mana", "kaitan": "' + "|".join(KINDS) + '", '
+           '"horizon": "hari ini|minggu ini|bulan ini", "risiko": "…", "yakin": "rendah|sedang|tinggi"}] (2–4),\n'
+           ' "ucapan": "3–4 kalimat untuk DIBACAKAN kepadaku: situasinya, artinya bagiku, dan rencana yang paling masuk akal"}')
+    agenda = signal_lines({"agenda": g.get("agenda") or []})
+    user = ("ANALISIS (dari worker analis):\n" + _analysis_text(analysis)
+            + "\n\nDATA PASAR:\n" + ("\n".join(market_lines(g.get("markets") or [])) or "-")
+            + (f"\n\n{agenda}" if agenda else "")
+            + "\n\nDATA TENTANG AKU:\n" + ("\n".join(me.get("facts") or []) or "-") + ("\n" + "\n".join(me["about"]) if me.get("about") else "")
+            + (f"\nTopik yang kuikuti: {', '.join(me['topics'])}" if me.get("topics") else "")
+            + ("\n\nASET MILIKKU (teknikal):\n" + "\n".join(market_lines(me["holdings"])) if me.get("holdings") else "")
+            + (f"\n\nRENCANA BERJALAN (pilihanku dari Cek berita sebelumnya):\n{running_text(me['running'])}" if me.get("running") else ""))
+    return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
+
+
+def merge(a: dict, p: dict) -> dict:
+    """The analyst's result with the persona's: each theme gets what it means for him (matched by title, else by order). Pure."""
+    out = {**a, **{k: p.get(k) for k in ("rencana", "peluang", "evaluasi_rencana", "posisi") if p.get(k)}}
+    out["ucapan"] = p.get("ucapan") or a.get("ucapan") or ""
+    hits = [d for d in (p.get("dampak") or []) if isinstance(d, dict)]
+    by_title = {str(d.get("tema", "")).strip().lower(): d for d in hits}
+    tema = []
+    for i, t in enumerate([t for t in (a.get("tema") or []) if isinstance(t, dict)]):
+        d = by_title.get(str(t.get("judul", "")).strip().lower()) or (hits[i] if i < len(hits) else {})
+        tema.append({**t, "dampak": d.get("bagiku") or t.get("dampak") or "", "arah": d.get("arah")})
+    out["tema"] = tema
+    return out
 
 
 def _find(news: dict, ref: str):
@@ -313,6 +455,7 @@ def clean_analysis(data: dict, news: dict) -> dict:
         if not isinstance(x, dict) or not x.get("judul"):
             continue
         out["tema"].append({"judul": t(x["judul"], 120), "kesimpulan": t(x.get("kesimpulan"), 400), "dampak": t(x.get("dampak"), 400),
+                            "arah": x.get("arah") if x.get("arah") in ("untung", "rugi", "campuran") else None,
                             "indikator": [{"nama": t(i.get("nama"), 60), "nilai": t(i.get("nilai"), 60), "arti": t(i.get("arti"), 160)}
                                           for i in (x.get("indikator") or [])[:5] if isinstance(i, dict) and i.get("nama")],
                             "alasan": [r for r in (_reason(r, news) for r in (x.get("alasan") or [])[:5]) if r]})
@@ -330,6 +473,9 @@ def clean_analysis(data: dict, news: dict) -> dict:
                        for x in (data.get("skenario") or [])[:3] if isinstance(x, dict) and x.get("nama")]
     out["rencana"] = [p for p in (clean_plan(x) for x in (data.get("rencana") or [])[:3]) if p]
     out["evaluasi_rencana"] = t(data.get("evaluasi_rencana"), 400)
+    po = data.get("posisi") if isinstance(data.get("posisi"), dict) else {}
+    out["posisi"] = {"ringkas": t(po.get("ringkas"), 500), "kuat": [t(x, 160) for x in (po.get("kuat") or [])[:3] if isinstance(x, str) and x.strip()],
+                     "rentan": [t(x, 160) for x in (po.get("rentan") or [])[:3] if isinstance(x, str) and x.strip()]} if po.get("ringkas") else None
     se = data.get("sentimen") if isinstance(data.get("sentimen"), dict) else {}
     out["sentimen"] = {"label": se.get("label") if se.get("label") in SENTIMENTS else "netral", "ringkas": t(se.get("ringkas"), 300),
                        "sinyal": [{"sumber": t(x.get("sumber"), 30), "isi": t(x.get("isi"), 200)} for x in (se.get("sinyal") or [])[:4]
@@ -374,31 +520,64 @@ def plan_tasks(plan: dict, start: date, keep: list[int] | None = None) -> list[d
              "priority": 2 if st["minggu"] == 1 else None} for st in steps]
 
 
-async def compose(trigger: str = "schedule") -> dict:
-    from . import memory
-    s = await appsettings.get("brief")
-    g = await gather()
-    facts = [m["text"] for m in await memory.list_("personal", limit=30) if not m.get("stale")]
-    run = await progress()
-    r = await master.run(master.Job("brief", "compose", "cek berita: simpulkan situasi, sebab-akibat, skenario, dan rencana 1–3 bulan sebagai pemilik",
-                                    trigger=trigger, messages=prompt(g, facts, s.get("topics") or [], running_text(run)), json_out=True, heavy=True,
-                                    no_free=True, max_tokens=6000))
-    if r["status"] != "done":
-        raise RuntimeError(r.get("error") or "cek berita gagal")
-    data = clean_analysis(r["result"] if isinstance(r["result"], dict) else {}, g["news"])
+async def compose(trigger: str = "schedule", reserved: bool = False) -> dict:
+    """Owner 2026-10-31: collectors (one worker per source, in parallel) → one analyst → one worker that is him, which gathers what is known
+    about him and compares it with the analysis. Each step is its own run in the master flow; the steps are shown live and kept.
+    reserved: the caller already took the run (the app's button, which answers before the workers finish)."""
+    if _state["running"] and not reserved:
+        raise RuntimeError("cek berita sedang dibuat — tunggu sebentar")
+    _state.update(running=True, steps=[], started=datetime.now(timezone.utc).isoformat(), error=None)
+    try:
+        return await _compose(trigger)
+    except Exception as e:
+        _state["error"] = str(e)[:300]
+        raise
+    finally:
+        _state["running"] = False
+        await hub.broadcast({"type": "brief", "running": False, "steps": _state["steps"], "error": _state["error"]})
+
+
+async def _compose(trigger: str) -> dict:
+    g = {"news": {}, "markets": [], "trends": [], "mood": {}, "agenda": [], "weather": "", **await gather(trigger)}
+    if not any(g["news"].values()) and not g["markets"]:
+        raise RuntimeError("tidak ada berita maupun data pasar yang terkumpul — coba lagi nanti")
+
+    t0 = time.monotonic()
+    await _step("analisa", "analis", "Analis: simpulkan situasi", None, t0)
+    ra = await master.run(master.Job("brief", "analisa", "cek berita: simpulkan situasi, sebab-akibat, sentimen, dan skenario dari data publik",
+                                     trigger=trigger, messages=analysis_prompt(g), json_out=True, heavy=True, no_free=True, max_tokens=4000))
+    await _step("analisa", "analis", "Analis: simpulkan situasi", ra, t0)
+    if ra["status"] != "done":
+        raise RuntimeError(ra.get("error") or "analisis gagal")
+    analysis = ra["result"] if isinstance(ra["result"], dict) else {}
+
+    t0 = time.monotonic()
+    await _step("jadi-kamu", "tentang-aku", "Jadi kamu: kumpulkan data tentangmu", None, t0)
+    rm = await master.run(master.Job("brief", "kumpul-tentang-aku", "cek berita: kumpulkan data tentang pemilik", trigger=trigger, skill=about_me))
+    me = rm.get("result") if rm["status"] == "done" else {}
+    await _step("jadi-kamu", "tentang-aku", "Jadi kamu: kumpulkan data tentangmu", rm, t0, _size((me or {}).get("about")) + _size((me or {}).get("facts")))
+    t0 = time.monotonic()
+    await _step("jadi-kamu", "bandingkan", "Jadi kamu: bandingkan & susun rencana", None, t0)
+    rp = await master.run(master.Job("brief", "jadi-pemilik", "cek berita: sebagai pemilik, bandingkan analisis dengan keadaannya dan susun rencana",
+                                     trigger=trigger, messages=persona_prompt(analysis, me or {}, g), json_out=True, heavy=True, no_free=True,
+                                     max_tokens=4500))
+    await _step("jadi-kamu", "bandingkan", "Jadi kamu: bandingkan & susun rencana", rp, t0)
+    persona = rp["result"] if rp["status"] == "done" and isinstance(rp["result"], dict) else {}   # without it the analysis still stands
+
+    data = clean_analysis(merge(analysis, persona), g["news"])
     if not data["situasi"] and not data["tema"]:
         raise RuntimeError("analisisnya kosong — coba lagi")
-    g = {"holdings": [], "trends": [], "mood": {}, "agenda": [], "markets": [], **g}
-    data |= {"markets": g["markets"], "holdings": g["holdings"], "trends": g["trends"][:10], "mood": g["mood"], "agenda": g["agenda"],
-             "weather": g["weather"], "lane": r.get("lane"), "count": sum(len(v) for v in g["news"].values()),
-             "social": len(g["news"].get("sosial") or [])}
+    data |= {"markets": g["markets"], "holdings": (me or {}).get("holdings") or [], "trends": g["trends"][:10], "mood": g["mood"], "agenda": g["agenda"],
+             "weather": g["weather"], "lane": ra.get("lane"), "count": sum(len(v) for v in g["news"].values()),
+             "social": len(g["news"].get("sosial") or []), "pipeline": _state["steps"],
+             "persona_error": "" if persona else str(rp.get("error") or "worker 'jadi kamu' tidak memberi hasil")[:200]}
     day = datetime.now(WIB).date()
     srcs = sorted({x["source"].split(" · ")[0] for v in g["news"].values() for x in v}) + [n for n, ok in (
         ("Google Trends", g["trends"]), ("Fear & Greed", g["mood"].get("crypto_fng")), ("CoinGecko", g["mood"].get("coins")),
         ("Forex Factory", g["agenda"]), ("Yahoo Finance (teknikal ala TradingView)", g["markets"])) if ok]
     await db.pool().execute("""INSERT INTO briefs (day, data, sources, run_id) VALUES ($1, $2, $3, $4)
                                ON CONFLICT (day) DO UPDATE SET data = EXCLUDED.data, sources = EXCLUDED.sources, run_id = EXCLUDED.run_id, created_at = now()""",
-                            day, data, srcs, r["run_id"])
+                            day, data, srcs, ra["run_id"])
     await hub.broadcast({"type": "notify", "title": "Cek berita siap", "text": (data["judul"] or data["situasi"])[:200], "kind": "info", "route": "#/brief"})
     return data
 
@@ -491,7 +670,8 @@ async def _ready() -> dict:
 
 @router.get(API)
 async def api_brief(device: dict = Depends(owner)):
-    return {"brief": await today(), "settings": await appsettings.get("brief"), "running": await progress()}
+    return {"brief": await today(), "settings": await appsettings.get("brief"), "running": await progress(),
+            "progress": {k: _state[k] for k in ("running", "steps", "started", "error")}}
 
 
 class PlanIn(BaseModel):
@@ -512,4 +692,15 @@ async def api_brief_plan(body: PlanIn, device: dict = Depends(owner)):
 
 @router.post(API + "/now")
 async def api_brief_now(device: dict = Depends(owner)):
-    return {"brief": {"data": await compose("owner"), "day": datetime.now(WIB).date().isoformat()}}
+    """Starts the workers and answers at once; the page follows them live (events of type 'brief')."""
+    if not _state["running"]:
+        _state["running"] = True   # taken now, so a second tap does not start a second run
+        asyncio.create_task(_now())
+    return {"started": True, "progress": {k: _state[k] for k in ("running", "steps", "started", "error")}}
+
+
+async def _now() -> None:
+    try:
+        await compose("owner", reserved=True)
+    except Exception as e:
+        log.warning("cek berita (owner) failed: %s", e)

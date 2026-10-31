@@ -42,8 +42,10 @@ def test_plans_and_scenarios_are_kept_to_their_shape():
     run = {"nama": "A", "gaya": "aman", "bulan": 2, "day": "2026-11-02", "target": "t", "berhenti_jika": "b", "done": 1, "total": 3,
            "next": {"text": "Cicil emas", "due": "2026-11-22"}}
     assert "selesai 1/3" in brief.running_text(run) and "Cicil emas" in brief.running_text(run) and brief.running_text(None) == ""
-    msgs = brief.prompt({"news": {}, "markets": [], "weather": "", "about": ["- keuangan: gaji Rp10 jt/bulan"]}, [], [], brief.running_text(run))
-    assert "RENCANA BERJALAN" in msgs[1]["content"] and "MEMPOSISIKAN DIRIMU" in msgs[0]["content"] and '"rencana"' in msgs[0]["content"]
+    msgs = brief.persona_prompt({"judul": "J", "tema": [{"judul": "Minyak", "rantai": ["a", "b"]}]},
+                                {"facts": [], "about": ["- keuangan: gaji Rp10 jt/bulan"], "running": run, "holdings": [], "topics": []}, {"markets": []})
+    assert "RENCANA BERJALAN" in msgs[1]["content"] and "gaji Rp10 jt" in msgs[1]["content"] and '"rencana"' in msgs[0]["content"]
+    assert "PEMILIK sendiri" in msgs[0]["content"] and '"Minyak"' in msgs[1]["content"]
 
 
 @needs_db
@@ -73,7 +75,7 @@ async def test_the_picked_plan_becomes_tasks_and_the_next_analysis_sees_it(pool,
     flow = await pool.fetchrow("SELECT lane, status FROM flow_runs WHERE feature = 'brief' AND action = 'pilih-rencana' ORDER BY id LIMIT 1")
     assert dict(flow) == {"lane": "skill", "status": "done"}                                                # through the master flow, no AI
 
-    async def gather():
+    async def gather(*a):
         return {"news": {"ekonomi": [{"title": "BI tahan bunga", "summary": "", "source": "Antara", "link": "https://n/1"}]}, "markets": [], "weather": "",
                 "about": []}
     monkeypatch.setattr(brief, "gather", gather)
@@ -81,8 +83,10 @@ async def test_the_picked_plan_becomes_tasks_and_the_next_analysis_sees_it(pool,
 
     async def fake(category, body, **kw):
         seen.append(body["messages"][1]["content"])
-        return {"choices": [{"message": {"content": json.dumps({"judul": "Bunga ditahan", "situasi": "Stabil.", "intinya": ["BI menahan bunga"],
-                                                                "rencana": [PLAN], "evaluasi_rencana": "Lanjutkan, cicil emasnya minggu depan."})}}]}
+        if "DATA TENTANG AKU" not in seen[-1]:   # the analyst
+            return {"choices": [{"message": {"content": json.dumps({"judul": "Bunga ditahan", "situasi": "Stabil.", "intinya": ["BI menahan bunga"]})}}]}
+        return {"choices": [{"message": {"content": json.dumps({"rencana": [PLAN], "evaluasi_rencana": "Lanjutkan, cicil emasnya minggu depan."})}}]}
     monkeypatch.setattr(gateway, "complete", fake)
     d = await brief.compose("owner")
-    assert "RENCANA BERJALAN" in seen[0] and "selesai 1/2" in seen[0] and d["evaluasi_rencana"].startswith("Lanjutkan") and d["rencana"][0]["langkah"]
+    assert "RENCANA BERJALAN" in seen[1] and "selesai 1/2" in seen[1] and "RENCANA BERJALAN" not in seen[0]
+    assert d["evaluasi_rencana"].startswith("Lanjutkan") and d["rencana"][0]["langkah"]

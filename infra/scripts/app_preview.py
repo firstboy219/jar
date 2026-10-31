@@ -140,7 +140,7 @@ async def seed_brief(p):
                        {"at": "2026-11-06T07:20:00+00:00", "country": "IDR", "title": "BI Rate", "forecast": "6,25%", "previous": "6,00%", "actual": ""}],
             "tema": [{"judul": "Dolar menguat", "kesimpulan": "Bunga AS bertahan tinggi lebih lama.", "rantai": ["Inflasi AS di atas perkiraan", "The Fed menahan bunga", "Dolar menguat", "Rupiah & saham RI tertekan"],
                       "indikator": [{"nama": "Indeks dolar (DXY)", "nilai": "106,2 ↑", "arti": "dolar kuat"}], "alasan": [{"isi": "Inflasi AS 3,1%", "sumber": "CNBC Indonesia", "link": "https://x"}],
-                      "dampak": "Saham AS-mu naik dalam rupiah, tapi belanja impor & langganan dolar lebih mahal."}],
+                      "dampak": "Saham AS-ku naik dalam rupiah, tapi langganan dolarku lebih mahal.", "arah": "campuran"}],
             "skenario": [{"nama": "Dolar tetap kuat", "kemungkinan": "besar", "isi": "Rupiah bertahan di Rp16.300–16.600 sampai akhir tahun.", "tanda": "DXY tetap di atas 105"},
                          {"nama": "The Fed melunak", "kemungkinan": "kecil", "isi": "Rupiah menguat, saham teknologi pulih.", "tanda": "inflasi AS turun di bawah 2,8%"}],
             "rencana": [plan("Tebalkan dana darurat dulu", "aman", 1, "Dengan kondisiku sekarang, aku akan mengamankan 6 bulan pengeluaran sebelum menambah investasi.", "dana darurat 6 bulan",
@@ -152,6 +152,15 @@ async def seed_brief(p):
                         plan("Kejar saham AS saat koreksi", "berani", 3, "Dengan kondisiku sekarang, aku akan menambah saham teknologi AS bertahap saat turun.", "beli bertahap 3×",
                              [(1, "Tentukan 3 saham AS & batas harga", "saham_as"), (4, "Beli tahap 1 bila turun 5%", "saham_as"), (12, "Tinjau hasil", "saham_as")])],
             "evaluasi_rencana": "Lanjutkan — emas yang naik justru membuat cicilan minggu depan lebih penting dicek harganya dulu.",
+            "posisi": {"ringkas": "Gajiku stabil dan aku sudah pegang emas, tapi dana daruratku baru 0,3 bulan dan ada tagihan Rp5,1 jt belum dibayar.",
+                       "kuat": ["Gaji bulanan tetap Rp18 jt", "Sudah punya emas — ikut naik saat dolar menguat"], "rentan": ["Dana darurat 0,3 bulan", "Langganan berbayar dolar makin mahal"]},
+            "pipeline": [{"stage": "kumpul", "key": k, "label": l, "status": "selesai", "run_id": 1, "secs": t, "n": n} for k, l, t, n in [
+                ("berita", "Berita dari media", 6.9, 152), ("pasar", "Harga & teknikal pasar", 4.6, 11), ("topik", "Google News topikmu", 3.9, 12),
+                ("sosial", "Obrolan Reddit", 3.9, 15), ("tren", "Google Trends", 4.8, 10), ("sentimen", "Fear & Greed & CoinGecko", 4.1, 2),
+                ("agenda", "Kalender ekonomi", 3.7, 2), ("cuaca", "Cuaca", 5.0, 1)]]
+                + [{"stage": "analisa", "key": "analis", "label": "Analis: simpulkan situasi", "status": "selesai", "run_id": 2, "secs": 48.2, "n": 0},
+                   {"stage": "jadi-kamu", "key": "tentang-aku", "label": "Jadi kamu: kumpulkan data tentangmu", "status": "selesai", "run_id": 3, "secs": 1.2, "n": 9},
+                   {"stage": "jadi-kamu", "key": "bandingkan", "label": "Jadi kamu: bandingkan & susun rencana", "status": "selesai", "run_id": 4, "secs": 39.5, "n": 0}],
             "peluang": [{"aksi": "Naikkan harga 3 produk dengan margin tipis", "kenapa": "biaya admin naik", "kaitan": "bisnis", "horizon": "minggu ini", "risiko": "penjualan turun sedikit", "yakin": "sedang"}],
             "waspada": [{"isi": "Penipuan investasi emas digital marak", "sumber": "Antara", "link": "https://x"}], "weather": "Bogor hujan sore, 24°C."}
     await p.execute("INSERT INTO briefs (day, data, sources) VALUES (current_date, $1, $2)", data, ["Antara", "CNBC Indonesia", "BBC"])

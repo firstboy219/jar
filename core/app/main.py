@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
         await memory.ensure_collection()
     except Exception as e:  # Qdrant down must not keep chat from starting
         log.warning("memory collection not ready: %s", e)
+    warm = asyncio.create_task(asyncio.to_thread(memory._embedder))   # the embedding model, loaded once in the background, not by the first job
     try:
         log.info("capabilities: %s", await capabilities.sync(assistant.TOOLS))
     except Exception as e:  # the registry is a convenience: JARVIS starts without it
@@ -150,7 +151,7 @@ async def lifespan(app: FastAPI):
     aware = asyncio.create_task(awareness.run_forever())
     selfcheck = asyncio.create_task(selfcheck_daily())
     yield
-    for t in (ticker, purger, aware, selfcheck, cron, meeting_worker, error_writer, improver, hands, devteam_watch, project_ticker, app_clock):
+    for t in (warm, ticker, purger, aware, selfcheck, cron, meeting_worker, error_writer, improver, hands, devteam_watch, project_ticker, app_clock):
         t.cancel()
     await db.close()
 

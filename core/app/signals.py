@@ -24,6 +24,7 @@ HT = "{https://trends.google.com/trending/rss}"
 NEWS_URL = "https://news.google.com/rss/search"
 REDDIT = [("Reddit Indonesia", "https://www.reddit.com/r/indonesia+finansial+sahamindonesia/hot.rss?limit=25"),
           ("Reddit investor global", "https://www.reddit.com/r/wallstreetbets+stocks+investing+CryptoCurrency/hot.rss?limit=25")]
+REDDIT_PAUSE = 3.0   # seconds between the two requests: Reddit asks for a slow pace
 FNG_URL = "https://api.alternative.me/fng/?limit=8"
 COINS_URL = "https://api.coingecko.com/api/v3/search/trending"
 CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
@@ -212,11 +213,11 @@ async def topics(c: httpx.AsyncClient, queries: list[str], now: datetime, per: i
     return [x for lst in found for x in lst]
 
 
-async def social(c: httpx.AsyncClient, now: datetime, pause: float = 3.0) -> list[dict]:
+async def social(c: httpx.AsyncClient, now: datetime) -> list[dict]:
     out = []
     for i, (name, url) in enumerate(REDDIT):
         if i:
-            await asyncio.sleep(pause)   # Reddit asks for a slow pace; one request at a time
+            await asyncio.sleep(REDDIT_PAUSE)   # one request at a time
         try:
             r = await c.get(url)
         except httpx.HTTPError:
