@@ -60,7 +60,8 @@ export default {
           <div class="row sb"><span class="ttl">${p.name}</span><span class="mono" style="font-size:13px">${rupiah(p.spent, true)}${p.amount ? ` / ${rupiah(p.amount, true)}` : ''}</span></div>
           ${p.amount ? html`<div class="bar"><i class="${p.level === 'ok' ? 'green' : 'amber'}" style="width:${Math.min(100, p.pct)}%"></i></div><span class="small">${p.pct}% · ${p.categories.join(', ')}${p.last ? ` · periode lalu ${rupiah(p.last, true)}` : ''}</span>` : html`<span class="small">${p.unplanned ? 'pengeluaran yang belum masuk pos mana pun' : ''}</span>`}</div>`)}`
           : html`<div class="card"><p class="sub">Belum ada pos anggaran. Minta JARVIS menyusun alokasi dari pengeluaranmu.</p></div>`}
-        ${!s.plan ? html`<button class="btn block" data-act="plan">${icon('bolt', 16)} Susun alokasi gaji (otak berat)</button>` : ''}
+        <div class="btns">${s.pots.length ? html`<button class="btn" data-act="editpots">${icon('brush', 16)} Ubah alokasi</button>` : html`<button class="btn" data-act="editpots">${icon('plus', 16)} Buat alokasi sendiri</button>`}
+          ${!s.plan ? html`<button class="btn" data-act="plan">${icon('bolt', 16)} Susun dengan JARVIS</button>` : ''}</div>
         ${cats.length ? html`<div class="card"><span class="k">Per kategori</span>${cats.map(([k, v]) => html`<div class="row" style="font-size:13px"><span style="width:110px;color:var(--tx2)">${k}</span>
           <div class="bar grow" style="height:8px"><i style="width:${Math.round(100 * v / cats[0][1])}%"></i></div><span class="mono" style="min-width:70px;text-align:right">${rupiah(v, true)}</span></div>`)}</div>` : ''}
         <div class="row sb"><span class="sec">Transaksi</span><button class="btn sm" data-act="receipt">${icon('camera', 14)} Struk dari foto/galeri</button></div>
@@ -91,6 +92,36 @@ export default {
       const ok = r.receipts.filter((x) => x.id), dup = r.receipts.filter((x) => x.duplicate), bad = r.receipts.filter((x) => x.error);
       toast([ok.length && `${ok.length} dicatat`, dup.length && `${dup.length} sudah tercatat`, bad.length && `${bad.length} tidak terbaca: ${bad[0].error}`].filter(Boolean).join(' · '), !!bad.length && !ok.length);
       render();
+    },
+    async editpots() {   // his allocation by hand: rename, change amounts, which categories each pot covers, add or remove pots
+      const pots = (cur.settings.pots || []).map((p) => ({ name: p.name, amount: p.amount, categories: [...(p.categories || [])] }));
+      const row = (p, i) => html`<div class="card" data-row="${i}" style="gap:8px;background:var(--bg2)">
+        <div class="row" style="gap:8px"><input class="inp grow" name="name" value="${p.name}" placeholder="Nama pos (mis. Makan)" maxlength="40" style="min-width:0">
+          <input class="inp mono" name="amount" type="number" min="0" step="50000" value="${p.amount || ''}" placeholder="Rp" style="width:120px;text-align:right">
+          <button type="button" class="ib sm" data-del="${i}" aria-label="Hapus pos">${icon('close', 14)}</button></div>
+        <div class="chips" style="flex-wrap:wrap">${cur.categories.map((c) => html`<label class="chip" style="cursor:pointer"><input type="checkbox" name="cat" value="${c}" ${p.categories.includes(c) ? 'checked' : ''} style="margin-right:4px">${c}</label>`)}</div></div>`;
+      const body = () => html`<span class="k cyan">Ubah alokasi gaji</span>
+        <div id="potrows" style="display:flex;flex-direction:column;gap:10px;max-height:55vh;overflow:auto">${pots.map(row)}</div>
+        <div class="row sb"><button type="button" class="btn sm" data-addpot="1">${icon('plus', 14)} Tambah pos</button><span class="mono small" id="pottotal"></span></div>
+        <div class="btns"><button type="button" class="btn" data-close="">Batal</button><button type="button" class="btn primary" data-savepots="1">Simpan alokasi</button></div>`;
+      const read = (wrap) => [...wrap.querySelectorAll('[data-row]')].map((r) => ({ name: r.querySelector('[name=name]').value.trim(),
+        amount: Number(r.querySelector('[name=amount]').value || 0), categories: [...r.querySelectorAll('[name=cat]:checked')].map((x) => x.value) }));
+      const total = (wrap) => { const t = read(wrap).reduce((a, p) => a + p.amount, 0); wrap.querySelector('#pottotal').textContent = `Total ${rupiah(t)} / ${rupiah(cur.salary)}${t > cur.salary ? ' — melebihi gaji' : ''}`; };
+      await sheet(String(html`<div style="display:flex;flex-direction:column;gap:12px" id="potsheet">${body()}</div>`), { onOpen(wrap, close) {
+        const box = wrap.querySelector('#potsheet');
+        const redraw = () => { const keep = read(wrap); pots.splice(0, pots.length, ...keep); box.innerHTML = String(body()); total(wrap); };
+        total(wrap);
+        wrap.addEventListener('input', () => total(wrap));
+        wrap.addEventListener('click', async (e) => {
+          if (e.target.closest('[data-addpot]')) { redraw(); pots.push({ name: '', amount: 0, categories: [] }); box.innerHTML = String(body()); total(wrap); }
+          const d = e.target.closest('[data-del]');
+          if (d) { const keep = read(wrap); keep.splice(Number(d.dataset.del), 1); pots.splice(0, pots.length, ...keep); box.innerHTML = String(body()); total(wrap); }
+          if (e.target.closest('[data-savepots]')) {
+            const out = read(wrap).filter((p) => p.name);
+            try { await put('/api/v1/app/money/pots', { pots: out }); toast('Alokasi disimpan'); close(null); render(); } catch (err) { toast(err.message || 'Gagal menyimpan', true); }
+          }
+        });
+      } });
     },
     async plan() { toast('Otak berat menyusun alokasi…'); await post('/api/v1/app/money/plan'); render(); },
     async apply(b) {

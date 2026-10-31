@@ -105,3 +105,20 @@ async def test_the_apply_stage_opens_jobstreet_once_per_job_with_what_he_answere
     assert "item 1/2" in goals[0] and "ITEM INI: IT Manager · Pharos · 20-24 jt" in goals[0] and "27 juta" in goals[0]
     assert await pool.fetchval("SELECT count(*) FROM phone_runs WHERE app = 'jobstreet' AND scheduled") == 2
     assert await projects.item_goals(p, 3, role, "") == []                                      # nothing found before: nothing to apply to
+
+
+@needs_db
+async def test_the_allocation_can_be_edited_by_hand(pool, monkeypatch):
+    from app import appsettings, devices, main
+    await pool.execute("TRUNCATE settings_kv, money_tx RESTART IDENTITY CASCADE")
+    await appsettings.put("money", {"salary": 10_000_000, "payday": 25, "pots": [{"name": "Makan", "amount": 3_000_000, "categories": ["makan"]}]}, "owner")
+    _, token = await devices.create("HP", "test", scope="owner")
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        pots = [{"name": "Makan & kopi", "amount": "2.500.000", "categories": ["makan", "kopi"]}, {"name": "Investasi", "amount": 1_500_000, "categories": ["investasi"]},
+                {"name": "", "amount": 5}, {"name": "Rusak", "amount": -1}]
+        r = (await c.put("/api/v1/app/money/pots", json={"pots": pots}, headers=h)).json()
+        assert [(p["name"], p["amount"], p["categories"]) for p in r["settings"]["pots"]] == [("Makan & kopi", 2_500_000, ["makan", "kopi"]), ("Investasi", 1_500_000, ["investasi"])]
+        dup = await c.put("/api/v1/app/money/pots", json={"pots": [{"name": "A", "amount": 1}, {"name": "a", "amount": 2}]}, headers=h)
+        assert dup.status_code == 409 and "kembar" in dup.json()["detail"]
+    assert [p["name"] for p in (await appsettings.get("money"))["pots"]] == ["Makan & kopi", "Investasi"]

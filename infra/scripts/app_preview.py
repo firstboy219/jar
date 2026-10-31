@@ -44,15 +44,15 @@ async def seed() -> str:
         await p.execute("""INSERT INTO meetings (title, confidential, consent, status, chunks, started_at, live) VALUES ('Weekly Tim Produk', false, true, 'recording', 7, now() - interval '7 minutes 12 seconds',
             '{"transcript": [{"n": 4, "text": "Oke, untuk rilis versi dua kita sepakat hari Jumat ya, QA selesai Kamis sore."}, {"n": 5, "text": "Mas Ilham tolong kirim timeline revisi ke Dimas besok pagi."}, {"n": 6, "text": "Ayu siapkan materi demo untuk klien minggu depan."}],
               "keputusan": ["Rilis versi 2 hari Jumat; QA selesai Kamis sore"], "tugas": [{"siapa": "Ilham", "apa": "kirim timeline revisi ke Dimas", "kapan": "besok pagi", "pemilik": true}, {"siapa": "Ayu", "apa": "siapkan materi demo klien", "kapan": "minggu depan", "pemilik": false}], "topik": "rilis v2"}')""")
-    if {"bisnis", "tren", "peluang", "sumber"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+    if {"bisnis", "tren", "peluang", "sumber"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_bisnis(p)
-    if {"gaji", "invest", "kopi"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+    if {"gaji", "invest", "kopi"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_money(p)
-    if {"musik", "video", "berkas", "dongeng", "ukur", "bimbing"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+    if {"musik", "video", "berkas", "dongeng", "ukur", "bimbing"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_media(p)
-    if {"alur", "bengkel"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+    if {"alur", "bengkel"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_flow(p)
-    if {"karier"} & {r.split("?")[0].split("/")[0] for r in ROUTES}:
+    if {"karier"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_jobs(p)
     await db.close()
     return token

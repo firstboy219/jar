@@ -544,6 +544,29 @@ async def api_plan(device: dict = Depends(owner)):
         raise HTTPException(409, str(e))
 
 
+class PotsIn(BaseModel):
+    pots: list[dict] = Field(max_length=15)
+
+
+async def save_pots(pots: list[dict], who: str) -> dict:
+    """His own allocation, edited by hand (owner 2026-10-31: "fitur alokasi saat ini tidak bisa diedit"): names, amounts, categories."""
+    final = clean_pots(pots)
+    names = [p["name"].strip().lower() for p in final]
+    if len(set(names)) != len(names):
+        raise MoneyError("nama pos tidak boleh kembar")
+    await appsettings.put("money", {"pots": [{"name": p["name"].strip(), "amount": p["amount"], "categories": p["categories"]} for p in final]}, who)
+    await audit.record(who, "money.pots_edited", "money:pots", pots=len(final), total=sum(p["amount"] for p in final))
+    return await summary()
+
+
+@router.put(API + "/pots")
+async def api_pots(body: PotsIn, device: dict = Depends(owner)):
+    try:
+        return await save_pots(body.pots, actor(device))
+    except MoneyError as e:
+        raise HTTPException(409, str(e))
+
+
 @router.post(API + "/plan/{plan_id}/apply")
 async def api_apply(plan_id: int, body: ApplyIn, device: dict = Depends(owner)):
     try:
