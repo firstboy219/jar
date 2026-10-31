@@ -16,6 +16,8 @@ function setup(s) {
     <label class="field">Tujuan keuangan (opsional)<input name="goals" value="${s.goals}" placeholder="mis. dana darurat 6× gaji, DP rumah 2028"></label>
     <div class="g2"><label class="field">Dana darurat sekarang<input name="emergency_saved" type="number" min="0" step="100000" value="${s.emergency_saved || 0}"></label>
       <label class="field">Target (× pengeluaran bulanan)<input name="emergency_months" type="number" min="1" max="24" value="${s.emergency_months}"></label></div>
+    <label class="field">Cara hitung zakat<select name="zakat_method"><option value="neto" ${s.zakat_method !== 'bruto' ? 'selected' : ''}>Neto — gaji dikurangi tagihan & cicilan utang</option>
+      <option value="bruto" ${s.zakat_method === 'bruto' ? 'selected' : ''}>Bruto — 2,5% gaji kotor (cara BAZNAS)</option></select></label>
     <button class="btn primary" data-act="savesettings">Simpan</button>
     <span class="small">Pengeluaran dicatat otomatis dari notifikasi GoPay & bank di HP (izin baca notifikasi). Notifikasi berisi OTP/PIN tidak pernah dibaca.</span></form>`;
 }
@@ -29,6 +31,20 @@ function plan(p) {
     ${(p.hemat || []).map((h) => html`<span class="small">• ${h}</span>`)}
     ${p.catatan ? html`<span class="small t-amber2">${p.catatan}</span>` : ''}
     <button class="btn primary" data-act="apply" data-id="${p.id}">Pakai alokasi ini</button></div>`;
+}
+
+// zakat penghasilan: the owner's rule (neto: salary minus bills and debt instalments; or bruto), the nisab, and where the rule comes from
+function zakat(z, pots) {
+  if (!z || !z.salary) return '';
+  const pot = pots.find((p) => (p.categories || []).includes('zakat & sedekah'));
+  const off = z.due && (!pot || Math.round(pot.amount) < z.amount);
+  return html`<div class="card ${z.due ? 'green' : ''}" style="gap:6px"><div class="row sb"><span class="k green">Zakat penghasilan</span><b class="mono">${z.due ? rupiah(z.amount) : 'belum wajib'}</b></div>
+    <span class="small">${z.method === 'neto' ? html`2,5% × (gaji ${rupiah(z.salary, true)} − tagihan & cicilan utang ${rupiah(z.deducted, true)}) = 2,5% × ${rupiah(z.base, true)}`
+      : html`2,5% × gaji kotor ${rupiah(z.salary, true)}`}</span>
+    <span class="small">Nisab ${rupiah(z.nisab)}/bulan (85 g emas)${z.due ? '' : ' — penghasilan bersih di bawah nisab: dihitung tahunan, sedekah tetap baik'}.</span>
+    ${pot ? html`<span class="small">Pos "${pot.name}": ${rupiah(pot.amount, true)}${off ? ' — kurang dari zakatnya' : ''}</span>` : ''}
+    ${off ? html`<button class="btn sm green" data-act="zakatpot">Samakan pos zakat (${rupiah(z.amount, true)})</button>` : ''}
+    <details><summary class="small">Sumber aturan</summary>${z.sources.map((x) => html`<a class="small t-cyan" href="${x.url}" target="_blank" rel="noopener" style="display:block">· ${x.label}</a>`)}</details></div>`;
 }
 
 function emergency(e) {
@@ -56,6 +72,7 @@ export default {
           <div class="bar" style="height:10px"><i class="${pct > 90 ? 'amber' : ''}" style="width:${pct}%"></i></div>
           <div class="row sb small"><span>sisa ${rupiah(s.left, true)}</span><span>laju: ${rupiah(s.pace, true)} sampai gajian${s.pace > s.salary ? ' — melebihi gaji' : ''}</span></div></div>
         ${emergency(s.emergency)}
+        ${zakat(s.zakat, s.settings.pots || [])}
         ${s.pots.length ? html`<span class="sec">Pos anggaran</span>${s.pots.map((p) => html`<div class="card ${p.level === 'over' ? 'red' : p.level === 'warn' ? 'amber' : ''}">
           <div class="row sb"><span class="ttl">${p.name}</span><span class="mono" style="font-size:13px">${rupiah(p.spent, true)}${p.amount ? ` / ${rupiah(p.amount, true)}` : ''}</span></div>
           ${p.amount ? html`<div class="bar"><i class="${p.level === 'ok' ? 'green' : 'amber'}" style="width:${Math.min(100, p.pct)}%"></i></div><span class="small">${p.pct}% · ${p.categories.join(', ')}${p.last ? ` · periode lalu ${rupiah(p.last, true)}` : ''}</span>` : html`<span class="small">${p.unplanned ? 'pengeluaran yang belum masuk pos mana pun' : ''}</span>`}</div>`)}`
@@ -80,6 +97,7 @@ export default {
       const v = Object.fromEntries(new FormData(f).entries());
       const em = Number(v.emergency_saved || 0);
       await put('/api/v1/app/settings/money', { salary: Number(v.salary), payday: Number(v.payday), goals: v.goals || '', emergency_months: Number(v.emergency_months || 6),
+        zakat_method: v.zakat_method === 'bruto' ? 'bruto' : 'neto',
         ...(em !== Number(cur?.settings?.emergency_saved || 0) ? { emergency_saved: em, emergency_at: new Date().toISOString().slice(0, 10) } : {}) });
       toast('Tersimpan'); render();
     },
@@ -92,6 +110,12 @@ export default {
       const ok = r.receipts.filter((x) => x.id), dup = r.receipts.filter((x) => x.duplicate), bad = r.receipts.filter((x) => x.error);
       toast([ok.length && `${ok.length} dicatat`, dup.length && `${dup.length} sudah tercatat`, bad.length && `${bad.length} tidak terbaca: ${bad[0].error}`].filter(Boolean).join(' · '), !!bad.length && !ok.length);
       render();
+    },
+    async zakatpot() {   // the zakat pot set to the zakat his rule gives (made when there is none)
+      const pots = (cur.settings.pots || []).map((p) => ({ name: p.name, amount: p.amount, categories: [...(p.categories || [])] }));
+      const pot = pots.find((p) => p.categories.includes('zakat & sedekah'));
+      if (pot) pot.amount = cur.zakat.amount; else pots.unshift({ name: 'Zakat & sedekah', amount: cur.zakat.amount, categories: ['zakat & sedekah'] });
+      await put('/api/v1/app/money/pots', { pots }); toast('Pos zakat disamakan'); render();
     },
     async editpots() {   // his allocation by hand: rename, change amounts, which categories each pot covers, add or remove pots
       const pots = (cur.settings.pots || []).map((p) => ({ name: p.name, amount: p.amount, categories: [...(p.categories || [])] }));

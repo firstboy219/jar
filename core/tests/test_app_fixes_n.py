@@ -143,3 +143,19 @@ async def test_a_transaction_can_be_edited(pool, monkeypatch):
         assert (await c.put(f"/api/v1/app/money/tx/{tid}", json={"at": "2099-01-01T00:00"}, headers=h)).status_code == 422
         assert (await c.put(f"/api/v1/app/money/tx/{tid}", json={}, headers=h)).status_code == 422
         assert (await c.put("/api/v1/app/money/tx/999999", json={"note": "x"}, headers=h)).status_code == 404
+
+
+def test_zakat_is_counted_after_bills_and_debt_against_the_nisab():
+    from app import money
+    pots = [{"name": "Tagihan", "amount": 1_800_000, "categories": ["tagihan"]}, {"name": "Cicilan", "amount": 1_200_000, "categories": ["cicilan & utang"]},
+            {"name": "Makan", "amount": 3_000_000, "categories": ["makan"]}]
+    z = money.zakat_of(15_000_000, pots)
+    assert (z["deducted"], z["base"], z["due"], z["amount"]) == (3_000_000, 12_000_000, True, 300_000)
+    assert money.zakat_of(15_000_000, pots, "bruto")["amount"] == 375_000
+    low = money.zakat_of(9_000_000, pots)                                                   # 6 jt after bills & debt: under Rp7.640.144
+    assert not low["due"] and low["amount"] == 0 and low["nisab"] == 7_640_144
+    assert money.categorize("Kredivo") == "cicilan & utang" and money.categorize("PLN token listrik") == "tagihan"
+    planned = money.with_zakat([{"name": "Makan", "amount": 3_000_000, "categories": ["makan"]}], {"salary": 15_000_000})
+    assert planned[0] == {"name": "Zakat & sedekah", "amount": 375_000, "categories": ["zakat & sedekah"], "alasan": "zakat penghasilan 2,5% (neto)"}
+    kept = money.with_zakat([{"name": "Zakat", "amount": 500_000, "categories": ["zakat & sedekah"]}], {"salary": 15_000_000})
+    assert kept[0]["amount"] == 500_000                                                      # more than the zakat: his sedekah stays

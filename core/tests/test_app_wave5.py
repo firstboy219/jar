@@ -81,7 +81,7 @@ def test_the_new_phone_apps_are_approved_with_their_payment_screens():
 @needs_db
 async def test_spending_is_recorded_from_notifications_and_pots_warn_once(pool, monkeypatch):
     from app import hub, money
-    await pool.execute("TRUNCATE money_tx, money_plans, notifications, flow_runs, settings_kv RESTART IDENTITY CASCADE")
+    await pool.execute("TRUNCATE money_tx, money_plans, notifications, inbox_items, flow_runs, settings_kv RESTART IDENTITY CASCADE")
     await pool.execute("""INSERT INTO settings_kv (key, value) VALUES ('app:money', '{"salary": 10000000, "payday": 25, "pots": [{"name": "Makan & kopi", "amount": 100000, "categories": ["makan", "kopi"]}]}')""")
     now = datetime.now().astimezone()
     await pool.execute("""INSERT INTO notifications (app, package, title, text, posted_at, sensitive) VALUES
@@ -130,7 +130,8 @@ async def test_the_allocation_is_proposed_by_the_heavy_brain_and_applied(pool, m
                                                                         {"name": "Tabungan", "amount": 2000000, "categories": []}, {"amount": 5}], "hemat": ["Kurangi GoFood"]})
     monkeypatch.setattr(gateway, "complete", fake)
     p = await money.propose()
-    assert [x["name"] for x in p["pos"]] == ["Tagihan", "Tabungan"] and p["pos"][0]["amount"] == 1_500_000 and p["lane"] == "berat"
+    assert [x["name"] for x in p["pos"]] == ["Zakat & sedekah", "Tagihan", "Tabungan"] and p["pos"][1]["amount"] == 1_500_000 and p["lane"] == "berat"
+    assert p["pos"][0]["amount"] == 212_500                         # his rule: 2,5% × (10 jt − tagihan 1,5 jt), above the nisab — added when the plan forgot it
     assert calls[-1][0] == "berat" and calls[-1][1] is True and "Gaji: Rp10.000.000" in calls[-1][2] and "tagihan" in calls[-1][2]
     s = await money.apply_plan(p["id"], [{"name": "Tagihan", "amount": 1_700_000, "categories": ["tagihan"]}], "test")
     assert s["pots"][0]["amount"] == 1_700_000 and s["pots"][0]["spent"] == 600_000

@@ -1576,6 +1576,12 @@ menentukan berat/ringan/non-AI)".
   there or already applied to, applies with the saved CV, answers screening questions from the owner's earlier answers or profile and
   asks him (tanya_pemilik) what it does not know; his answers are kept per app and given to the next runs. The search stage stays as it
   was. The chat's project tool can now set a role's app, "after the previous one" and per item.
+- **Zakat penghasilan by a cited rule** (owner 2026-10-31: "Untuk zakat ambil sumber rulenya dari inet … yg dihitung diluar dari tagihan atau
+  hutang"): 2,5% once income reaches the nisab of 85 g of gold (Permenag 31/2019 Pasal 26; Fatwa MUI 3/2003), Rp7.640.144 a month in 2026
+  (SK Ketua BAZNAS No. 15/2026). BAZNAS counts gross income; scholars also allow the net after basic needs and pressing debt — the owner's
+  choice, the default: salary minus his "tagihan" and "cicilan & utang" pots (a new spending category split off from tagihan). Below the
+  nisab it is not due that month. The Gaji page shows the sum, the nisab and the sources, offers to set the zakat pot to it, and lets him
+  switch to the gross method; a proposed allocation always carries a zakat pot at least that large.
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

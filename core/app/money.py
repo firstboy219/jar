@@ -38,7 +38,8 @@ CATEGORIES = {   # rules, in order: the first that matches the merchant/text
     "makan": r"gofood|grabfood|shopeefood|resto|warung|makan|bakso|mcd|mcdonald|kfc|burger|pizza|sate|nasi|ayam|solaria|hokben|bakery|roti",
     "transport": r"goride|gocar|go-?ride|go-?car|grab(?!food)|krl|kai |commuter|transjakarta|mrt|lrt|tol\b|e-?toll|parkir|bensin|pertamina|shell|bp ak",
     "belanja": r"tokopedia|shopee(?!food|pay)|lazada|tiktok|indomaret|alfamart|superindo|blibli|hypermart|lotte|transmart|ikea|ace hardware",
-    "tagihan": r"pln|listrik|token|pdam|air minum|indihome|internet|pulsa|paket data|bpjs|telkomsel|xl|indosat|smartfren|cicilan|asuransi|first media|biznet",
+    "cicilan & utang": r"cicilan|angsuran|kredivo|akulaku|paylater|pay later|spaylater|kpr|pinjaman|pinjol|kartu kredit|leasing|home credit|adira|\bfif\b|\bbaf\b|easycash|kredit pintar|bayar utang|pelunasan",
+    "tagihan": r"pln|listrik|token|pdam|air minum|indihome|internet|pulsa|paket data|bpjs|telkomsel|xl|indosat|smartfren|asuransi|first media|biznet",
     "anak & keluarga": r"sekolah|spp|susu|popok|pampers|mainan|daycare|les ",
     "kesehatan": r"apotek|apotik|klinik|dokter|rumah sakit|halodoc|alodokter|kimia farma|guardian|watsons",
     "hiburan": r"cgv|xxi|cinema|bioskop|netflix|spotify|youtube premium|disney|vidio|game|steam|playstation",
@@ -46,6 +47,30 @@ CATEGORIES = {   # rules, in order: the first that matches the merchant/text
 IN_WORDS = re.compile(r"\b(masuk|diterima|menerima|kredit|cashback|refund|pengembalian dana|gaji|transfer dari|dana masuk)\b", re.I)
 OUT_WORDS = re.compile(r"\b(bayar|pembayaran|dibayar|debit|pembelian|membeli|kirim|transfer ke|tarik tunai|terpotong|transaksi berhasil|belanja)\b", re.I)
 AMOUNT = re.compile(r"Rp\.?\s?([\d.,]+)", re.I)
+
+
+# Zakat penghasilan (owner 2026-10-31: "Untuk zakat ambil sumber rulenya dari inet … yg dihitung diluar dari tagihan atau hutang"):
+# 2,5% of income once it reaches the nisab of 85 g of gold (Permenag 31/2019 Pasal 26; Fatwa MUI 3/2003). The nisab in rupiah for 2026:
+# Rp91.681.728 a year = Rp7.640.144 a month (SK Ketua BAZNAS No. 15 Tahun 2026). BAZNAS counts the gross income; scholars also allow the
+# net, after basic needs and pressing debt instalments — the owner's choice ("neto"): salary minus his bills and debt instalments.
+ZAKAT_RATE = 0.025
+ZAKAT_NISAB_MONTH = 7_640_144
+ZAKAT_DEDUCT = ("tagihan", "cicilan & utang")
+ZAKAT_SOURCES = [
+    {"label": "SK Ketua BAZNAS No. 15/2026 — nisab Rp7.640.144/bulan", "url": "https://www.inews.id/news/nasional/baznas-batas-wajib-zakat-penghasilan-2026-sebesar-rp76-juta-per-bulan/2"},
+    {"label": "Permenag 31/2019 & Fatwa MUI 3/2003 — 85 g emas, 2,5%", "url": "https://www.hukumonline.com/klinik/a/ketentuan-zakat-profesi-di-indonesia-lt699e5e0531cd1/"},
+    {"label": "Bruto atau neto (dikurangi kebutuhan pokok & cicilan utang)", "url": "https://kantorku.id/blog/zakat-penghasilan-dari-gaji-kotor-atau-gaji-bersih"},
+]
+
+
+def zakat_of(salary: float, pots: list[dict], method: str = "neto", nisab: float = ZAKAT_NISAB_MONTH) -> dict:
+    """This month's zakat on his salary. "neto": salary minus the pots for bills and debt instalments; "bruto": the whole salary. Below the
+    nisab it is not due this month (Fatwa MUI 3/2003: the year's income is then reckoned together). Pure."""
+    deducted = sum(float(p.get("amount") or 0) for p in pots or [] if any(c in ZAKAT_DEDUCT for c in p.get("categories") or [])) if method == "neto" else 0.0
+    base = max(0.0, float(salary or 0) - deducted)
+    due = base >= nisab
+    return {"method": "bruto" if method == "bruto" else "neto", "salary": float(salary or 0), "deducted": deducted, "base": base, "nisab": float(nisab),
+            "due": due, "amount": round(base * ZAKAT_RATE) if due else 0, "rate": ZAKAT_RATE, "sources": ZAKAT_SOURCES}
 
 
 class MoneyError(ValueError):
@@ -285,6 +310,7 @@ async def summary(today: date | None = None) -> dict:
             "salary": salary, "spent": total, "income": income, "left": salary - total if salary else None,
             "pace": round(total / gone * days) if gone else 0, "by_category": dict(sorted(spent.items(), key=lambda x: -x[1])),
             "pots": with_last(pot_status(s["pots"], spent, int(s["alert_pct"])), last), "recent": recent, "settings": s,
+            "zakat": zakat_of(s["salary"], s["pots"], s.get("zakat_method") or "neto", float(s.get("zakat_nisab_month") or ZAKAT_NISAB_MONTH)),
             "last_period": {"start": ls, "end": le, "spent": sum(last.values())}, "emergency": await _emergency(s, start),
             "plan": {"id": plan["id"], "period_start": plan["period_start"], "created_at": plan["created_at"], **plan_data} if plan else None,
             "categories": list(CATEGORIES) + ["lainnya"]}
@@ -332,13 +358,18 @@ async def propose(trigger: str = "owner") -> dict:
                                      + ", ".join(f"{k} {rp_short(v)}" for k, v in cur["by_category"].items()) + "\n3 periode sebelumnya:\n" + ("\n".join(hist) or "belum ada data")
                                      + f"\nPos sekarang: {[{'name': p['name'], 'amount': p['amount'], 'bulan_lalu': round(p['last'])} for p in cur['pots'] if not p.get('unplanned')]}"
                                      + f"\nDana darurat: {rp_short(cur['emergency']['saved'])} dari target {rp_short(cur['emergency']['target'])} "
-                                     f"({cur['emergency']['months']}× pengeluaran bulanan ≈ {rp_short(cur['emergency']['monthly'])}); bila belum penuh, sisihkan pos 'Dana darurat' (kategori tabungan).")}]
+                                     f"({cur['emergency']['months']}× pengeluaran bulanan ≈ {rp_short(cur['emergency']['monthly'])}); bila belum penuh, sisihkan pos 'Dana darurat' (kategori tabungan)."
+                                     + "\nZAKAT (aturan pemilik, wajib diikuti): 2,5% × (gaji − pos tagihan − pos cicilan & utang) bila hasilnya ≥ nisab "
+                                     f"Rp{int(s.get('zakat_nisab_month') or ZAKAT_NISAB_MONTH):,}".replace(",", ".") + "/bulan (SK BAZNAS 15/2026). Hitung dari pos tagihan & "
+                                     "cicilan dalam alokasimu sendiri; pos 'Zakat & sedekah' (kategori zakat & sedekah) minimal sebesar zakat itu. Pisahkan cicilan/utang ke "
+                                     "pos berkategori 'cicilan & utang'.")}]
     r = await master.run(master.Job("uang", "alokasi", "susun alokasi gaji periode berikutnya", trigger=trigger, messages=msgs, heavy=True, json_out=True, no_free=True, max_tokens=1600))
     if r["status"] != "done" or not isinstance(r["result"], dict):
         raise MoneyError(r.get("error") or "alokasi gagal disusun")
     pots = clean_pots(r["result"].get("pos"))
     if not pots:
         raise MoneyError("alokasi tidak berisi pos")
+    pots = with_zakat(pots, s)
     data = {"ringkasan": str(r["result"].get("ringkasan") or "")[:400], "pos": pots, "hemat": [str(x)[:200] for x in r["result"].get("hemat") or []][:5],
             "catatan": str(r["result"].get("catatan") or "")[:300], "total": sum(p["amount"] for p in pots), "salary": s["salary"], "lane": r.get("lane")}
     await db.pool().execute("UPDATE money_plans SET status = 'dismissed' WHERE status = 'proposed'")
@@ -346,6 +377,20 @@ async def propose(trigger: str = "owner") -> dict:
     if trigger != "owner":
         await hub.broadcast({"type": "notify", "title": "Alokasi gaji bulan depan siap", "text": data["ringkasan"][:160], "kind": "info", "route": "#/gaji"})
     return {"id": pid, **data}
+
+
+def with_zakat(pots: list[dict], s: dict) -> list[dict]:
+    """The zakat pot at least the zakat his rule gives for these pots (added when the plan has none). Pure."""
+    z = zakat_of(s["salary"], pots, s.get("zakat_method") or "neto", float(s.get("zakat_nisab_month") or ZAKAT_NISAB_MONTH))
+    if not z["due"]:
+        return pots
+    out = [dict(p) for p in pots]
+    pot = next((p for p in out if "zakat & sedekah" in (p.get("categories") or [])), None)
+    if pot:
+        pot["amount"] = max(int(pot["amount"]), z["amount"])
+    else:
+        out.insert(0, {"name": "Zakat & sedekah", "amount": z["amount"], "categories": ["zakat & sedekah"], "alasan": "zakat penghasilan 2,5% (neto)"})
+    return out
 
 
 def clean_pots(pots) -> list[dict]:
