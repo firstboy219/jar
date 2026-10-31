@@ -26,6 +26,10 @@ def test_plans_and_scenarios_are_kept_to_their_shape():
         "nama": "x", "gaya": "seimbang", "bulan": 3, "kenapa": "", "target": "", "risiko": "", "berhenti_jika": "",
         "langkah": [{"minggu": 1, "apa": "a", "kaitan": "lainnya"}]}
     assert brief.clean_plan({"nama": "tanpa langkah", "langkah": []}) is None
+    later = brief.clean_plan({"nama": "Tahap dua", "bulan": 3, "kenapa": "Emas di harga terendah setahun (DUNIA 16, TOPIK 7) — momen mencicil.",
+                              "langkah": [{"minggu": 5, "apa": "Cicil emas (PASAR 2)"}, {"minggu": 7, "apa": "Tambah emas bila RSI > 40"}]})
+    assert [s["minggu"] for s in later["langkah"]] == [1, 3]                                   # a plan of its own starts now, not after another
+    assert later["kenapa"] == "Emas di harga terendah setahun — momen mencicil." and later["langkah"][0]["apa"] == "Cicil emas"
     out = brief.clean_analysis({"judul": "J", "situasi": "S", "intinya": ["satu", "", "dua", 3, "tiga", "empat"],
                                 "tema": [{"judul": "Minyak", "rantai": ["minyak naik", "inflasi", "", "BI tahan bunga", "cicilan mahal", "x", "y"]}],
                                 "skenario": [{"nama": "Rupiah melemah", "kemungkinan": "pasti", "tanda": "DXY > 105"}],

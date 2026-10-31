@@ -38,11 +38,17 @@ API = "/api/v1/app/brief"
 FEEDS = {
     "indonesia": [("Antara", "https://www.antaranews.com/rss/terkini.xml"), ("CNN Indonesia", "https://www.cnnindonesia.com/nasional/rss"),
                   ("Tempo", "https://rss.tempo.co/nasional")],
-    "ekonomi": [("CNBC Indonesia", "https://www.cnbcindonesia.com/news/rss"), ("Antara Ekonomi", "https://www.antaranews.com/rss/ekonomi.xml")],
-    "dunia": [("BBC", "https://feeds.bbci.co.uk/news/world/rss.xml"), ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml")],
+    "ekonomi": [("CNBC Indonesia", "https://www.cnbcindonesia.com/news/rss"), ("Antara Ekonomi", "https://www.antaranews.com/rss/ekonomi.xml"),
+                ("Katadata", "https://katadata.co.id/rss"), ("Detik Finance", "https://finance.detik.com/rss")],
+    "pasar": [("CNBC Indonesia Market", "https://www.cnbcindonesia.com/market/rss"), ("Kontan Investasi", "https://investasi.kontan.co.id/rss"),
+              ("Kontan Keuangan", "https://keuangan.kontan.co.id/rss"), ("IDX Channel", "https://www.idxchannel.com/rss")],
+    "dunia": [("BBC", "https://feeds.bbci.co.uk/news/world/rss.xml"), ("Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"),
+              ("CNBC", "https://www.cnbc.com/id/100003114/device/rss/rss.html"), ("MarketWatch", "https://feeds.content.dowjones.io/public/rss/mw_topstories")],
 }
 MARKETS = [("IHSG", "^JKSE"), ("Rupiah/USD", "IDR=X"), ("Emas", "GC=F"), ("S&P 500", "^GSPC"), ("Nasdaq", "^IXIC"), ("Bitcoin", "BTC-USD"),
-           ("Minyak Brent", "BZ=F"), ("Imbal hasil obligasi AS 10th", "^TNX"), ("Indeks dolar (DXY)", "DX-Y.NYB")]
+           ("Ethereum", "ETH-USD"), ("Minyak Brent", "BZ=F"), ("Imbal hasil obligasi AS 10th", "^TNX"), ("Indeks dolar (DXY)", "DX-Y.NYB"),
+           ("VIX (indeks ketakutan)", "^VIX")]
+DEFAULT_TOPICS = ("harga emas", "IHSG", "suku bunga Bank Indonesia")   # Google News when he follows / holds little
 PER_FEED = 12
 MAX_AGE_H = 30
 
@@ -113,24 +119,51 @@ async def _feed(c: httpx.AsyncClient, source: str, url: str, now: datetime) -> l
 
 
 async def _quote(c: httpx.AsyncClient, label: str, sym: str) -> dict | None:
-    try:
-        r = await c.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}", params={"range": "5d", "interval": "1d"})
-        res = r.json()["chart"]["result"][0]
-        closes = res["indicators"]["quote"][0]["close"]
-        last = next((v for v in reversed(closes) if isinstance(v, (int, float))), None)
-        return {"label": label, "symbol": sym, "last": round(last, 2) if last else None, "change": change_pct(closes)}
-    except Exception:
+    """The last price, its change over 5 trading days (1 day when that is all there is) and the technical rating from a year of closes."""
+    from . import signals
+    closes = await signals.history(c, sym)
+    last = next((v for v in reversed(closes) if isinstance(v, (int, float))), None)
+    if last is None:
         return None
+    vals = [v for v in closes if isinstance(v, (int, float))]
+    five = round(100 * (vals[-1] - vals[-6]) / vals[-6], 2) if len(vals) > 5 and vals[-6] else None
+    return {"label": label, "symbol": sym, "last": round(last, 2), "change": five if five is not None else change_pct(closes),
+            "change_1d": change_pct(closes), "tech": signals.technicals(closes)}
+
+
+def mix(lists: list[list[dict]]) -> list[dict]:
+    """Several sources' items taken in turn (each source shows up, not just the busiest), the same headline once. Pure."""
+    out, seen = [], set()
+    for row in zip(*[lst + [None] * (max(map(len, lists), default=0) - len(lst)) for lst in lists]):
+        for x in row:
+            key = re.sub(r"\W+", "", (x or {}).get("title", "").lower())[:60]
+            if x and key not in seen:
+                seen.add(key)
+                out.append(x)
+    return out
 
 
 async def gather() -> dict:
-    """News, markets and weather — the fixed part of the brief (no AI)."""
-    from . import weather
+    """News, markets, weather — and what people search and say, the week's agenda, the technicals of what he holds (signals.py). No AI."""
+    from . import signals, weather
     now = datetime.now(timezone.utc)
+    s = await appsettings.get("brief")
+    try:
+        held = await signals.holdings()
+    except Exception:
+        held = []
+    queries = list(dict.fromkeys([*(s.get("topics") or [])[:3], *(n.split(" (")[0] for n, _ in held[:3]), *DEFAULT_TOPICS]))[:6]
     async with _client() as c:
-        feeds = {k: await asyncio.gather(*(_feed(c, s, u, now) for s, u in v)) for k, v in FEEDS.items()}
-        quotes = [q for q in await asyncio.gather(*(_quote(c, l, s) for l, s in MARKETS)) if q]
-    news = {k: [x for lst in v for x in lst] for k, v in feeds.items()}
+        feeds = {k: await asyncio.gather(*(_feed(c, src, u, now) for src, u in v)) for k, v in FEEDS.items()}
+        quotes, mine, trends, topics, social, mood, agenda = await asyncio.gather(
+            asyncio.gather(*(_quote(c, l, sym) for l, sym in MARKETS)), asyncio.gather(*(_quote(c, n, t) for n, t in held)),
+            signals.trends(c), signals.topics(c, queries, now) if queries else asyncio.sleep(0, []), signals.social(c, now), signals.mood(c),
+            signals.agenda(c, now))
+    news = {k: mix(v) for k, v in feeds.items()}
+    if topics:
+        news["topik"] = topics
+    if social:
+        news["sosial"] = social
     about = []
     for name, fn in CONTEXT.items():
         try:
@@ -138,7 +171,8 @@ async def gather() -> dict:
                 about.append(f"- {name}: {t}")
         except Exception:
             pass
-    return {"news": news, "markets": quotes, "weather": await weather.today_text(), "about": about}
+    return {"news": news, "markets": [q for q in quotes if q], "holdings": [q for q in mine if q], "trends": trends, "mood": mood,
+            "agenda": agenda, "weather": await weather.today_text(), "about": about}
 
 
 KINDS = ("emas", "saham_as", "kripto", "reksa_dana", "tabungan", "bisnis", "karier", "belanja", "lainnya")
@@ -148,16 +182,47 @@ def news_lines(g: dict) -> list[str]:
     lines = []
     for k, items in g["news"].items():
         lines.append(f"[{k.upper()}]")
-        lines += [f"{i}. {x['title']} — {x['summary'][:220]} ({x['source']})" for i, x in enumerate(items[:18], 1)]
+        lines += [f"{i}. {x['title']}" + (f" — {x['summary'][:220]}" if x["summary"] else "") + f" ({x['source']})" for i, x in enumerate(items[:18], 1)]
     return lines
 
 
-def market_lines(g: dict) -> list[str]:
-    return [f"{q['label']}: {q['last']} ({q['change']:+.2f}% 5 hari)" if q.get("change") is not None else f"{q['label']}: {q['last']}"
-            for q in g["markets"] if q.get("last") is not None]
+def market_lines(qs: list[dict]) -> list[str]:
+    from .signals import tech_words
+    out = []
+    for q in qs:
+        if q.get("last") is None:
+            continue
+        ch = [f"{w} {q[k]:+.2f}%" for k, w in (("change_1d", "1 hari"), ("change", "5 hari")) if q.get(k) is not None]
+        tech = tech_words(q.get("tech"))
+        out.append(f"{q['label']}: {q['last']}" + (f" ({', '.join(ch)})" if ch else "") + (f"; {tech}" if tech else ""))
+    return out
+
+
+def signal_lines(g: dict) -> str:
+    """Sentiment, search trends and the agenda as text for the brain. Pure."""
+    parts = []
+    m = g.get("mood") or {}
+    if f := m.get("crypto_fng"):
+        parts.append(f"Fear & Greed kripto: {f['value']} ({f['label']})" + (f"; seminggu lalu {f['week_ago']} ({f['label_week_ago']})" if "week_ago" in f else ""))
+    if m.get("coins"):
+        parts.append("Koin paling dicari di CoinGecko: " + ", ".join(m["coins"]))
+    out = ("SENTIMEN:\n" + "\n".join(parts)) if parts else ""
+    if g.get("trends"):
+        out += "\n\nGOOGLE TRENDS INDONESIA (pencarian yang melonjak hari ini):\n" + "\n".join(
+            f"{i}. {t['q']}" + (f" ({t['traffic']} pencarian)" if t["traffic"] else "") + (f" — {'; '.join(t['news'])}" if t["news"] else "")
+            for i, t in enumerate(g["trends"], 1))
+    if g.get("agenda"):
+        def when(iso: str) -> str:
+            d = datetime.fromisoformat(iso).astimezone(WIB)
+            return f"{['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'][d.weekday()]} {d.day}/{d.month} {d:%H.%M}"
+        out += "\n\nAGENDA EKONOMI BERDAMPAK TINGGI (WIB):\n" + "\n".join(
+            f"- {when(a['at'])} {a['country']} {a['title']}" + "".join(f"; {w} {a[k]}" for k, w in (("actual", "hasil"), ("forecast", "perkiraan"), ("previous", "sebelumnya")) if a[k])
+            for a in g["agenda"])
+    return out.strip()
 
 
 STYLES = ("aman", "seimbang", "berani")
+SENTIMENTS = ("sangat takut", "takut", "netral", "optimis", "euforia")
 PLAN_KEY = "brief:plan"
 
 
@@ -172,6 +237,10 @@ def prompt(g: dict, owner_facts: list[str], topics: list[str], running: str = ""
            "gajinya). Peluang & rencana = hal yang bisa ia putuskan, dengan risikonya; bukan perintah beli/jual. Dana darurat dan tagihan didahulukan "
            "bila belum aman. Jangan menyarankan berutang untuk investasi. Investasi tetap ia putuskan sendiri lewat persetujuan & batas di menu "
            "Investasi. Waktunya terbatas (ia bekerja kantoran): langkah harus muat di malam/akhir pekan.\n"
+           "SUMBER: berita (bagian INDONESIA/EKONOMI/PASAR/DUNIA/TOPIK) adalah fakta yang dilaporkan; SOSIAL (Reddit) dan GOOGLE TRENDS adalah "
+           "opini & perhatian publik, bukan fakta — pakai untuk membaca sentimen, dan ingat sentimen ekstrem sering menandai pembalikan. Rating "
+           "teknikal (metode TradingView dari harga harian) adalah sinyal arah jangka pendek, bukan kepastian. AGENDA EKONOMI dipakai untuk tanda "
+           "skenario dan waktu langkah rencana. ASET MILIKNYA = yang ia pegang sekarang.\n"
            "ATURAN BAHASA: Bahasa Indonesia sehari-hari yang tajam tapi mudah dibaca: kalimat pendek, istilah ekonomi dijelaskan dalam kurung sekali "
            "saja, tanpa basa-basi. Di bagian rencana, bicara sebagai dirinya ('aku' = pemilik): 'Dengan kondisiku sekarang, aku akan…'.\n"
            "Kembalikan JSON:\n"
@@ -179,6 +248,8 @@ def prompt(g: dict, owner_facts: list[str], topics: list[str], running: str = ""
            ' "intinya": ["3 poin, masing-masing maks 20 kata: yang paling perlu ia tahu hari ini"],\n'
            ' "situasi": "3–5 kalimat: keadaan ekonomi & dunia sekarang dan arahnya",\n'
            ' "suasana": "positif|campuran|waspada",\n'
+           ' "sentimen": {"label": "sangat takut|takut|netral|optimis|euforia", "ringkas": "1–2 kalimat: suasana hati pasar & publik", '
+           '"sinyal": [{"sumber": "Google Trends|Reddit|Fear & Greed|CoinGecko|Teknikal|Berita", "isi": "1 kalimat dengan angkanya"}] (2–4)},\n'
            ' "tema": [{"judul": "…", "kesimpulan": "1–2 kalimat", "rantai": ["sebab", "akibat", "akibat berikutnya", "dampak ke pemilik"] (3–5 mata rantai, '
            'masing-masing maks 8 kata), "indikator": [{"nama": "…", "nilai": "angka/arah persis dari data", "arti": "singkat"}], '
            '"alasan": [{"isi": "1 kalimat", "nomor": "EKONOMI 3"}], "dampak": "apa artinya bagi pemilik"}] (2–4 tema),\n'
@@ -188,17 +259,20 @@ def prompt(g: dict, owner_facts: list[str], topics: list[str], running: str = ""
            '"kenapa": "2–3 kalimat sebagai pemilik (\'aku\'), merujuk tema/skenario di atas", "target": "hasil terukur di akhir rencana", '
            '"langkah": [{"minggu": 1, "apa": "tindakan konkret yang selesai dalam seminggu, diawali kata kerja", "kaitan": "' + "|".join(KINDS) + '"}] '
            '(4–8 langkah, urut minggu, minggu maks bulan×4), "risiko": "…", "berhenti_jika": "tanda untuk berhenti atau menyesuaikan"}] '
-           '(TEPAT 3 rencana: satu aman, satu seimbang, satu berani),\n'
+           '(TEPAT 3 rencana: satu aman, satu seimbang, satu berani — PILIHAN yang berdiri sendiri, BUKAN tahapan berurutan: '
+           'masing-masing lengkap dan dimulai minggu 1),\n'
            ' "evaluasi_rencana": "bila ada RENCANA BERJALAN: 1–2 kalimat sebagai pemilik — lanjutkan, percepat, atau sesuaikan, dan kenapa; selain itu kosong",\n'
            ' "peluang": [{"aksi": "yang bisa ia lakukan segera", "kenapa": "berdasar tema/indikator mana", "kaitan": "' + "|".join(KINDS) + '", '
            '"horizon": "hari ini|minggu ini|bulan ini", "risiko": "…", "yakin": "rendah|sedang|tinggi"}] (2–4),\n'
            ' "waspada": [{"isi": "…", "nomor": "DUNIA 2"}] (0–3),\n'
            ' "ucapan": "3–4 kalimat untuk DIBACAKAN: situasinya, alasan utamanya, dan rencana yang paling kamu sarankan"}\n'
-           '"nomor" = bagian dan nomor berita persis seperti di daftar.')
+           '"nomor" = bagian dan nomor berita persis seperti di daftar; jangan menulis nomor berita (mis. "DUNIA 3") di kalimat lain.')
     user = ("TENTANG PEMILIK & KEUANGANNYA:\n" + "\n".join(owner_facts[:15] + g["about"]) + (f"\nTopik yang ia ikuti: {', '.join(topics)}" if topics else "")
             + (f"\n\nRENCANA BERJALAN (pilihannya dari Cek berita sebelumnya):\n{running}" if running else "")
-            + f"\n\nCUACA: {g['weather'] or '-'}\n\nDATA PASAR (terakhir):\n" + ("\n".join(market_lines(g)) or "-")
-            + "\n\nBERITA (24 jam terakhir):\n" + "\n".join(news_lines(g)))
+            + f"\n\nCUACA: {g['weather'] or '-'}\n\nDATA PASAR (terakhir; teknikal metode TradingView dari harga harian):\n" + ("\n".join(market_lines(g.get("markets") or [])) or "-")
+            + ("\n\nASET MILIKNYA (teknikal):\n" + "\n".join(market_lines(g["holdings"])) if g.get("holdings") else "")
+            + ("\n\n" + signal_lines(g) if signal_lines(g) else "")
+            + "\n\nBERITA & MEDIA SOSIAL (24 jam terakhir):\n" + "\n".join(news_lines(g)))
     return [{"role": "system", "content": sys}, {"role": "user", "content": user}]
 
 
@@ -220,9 +294,18 @@ def _reason(x, news: dict) -> dict | None:
     return {"isi": str(x["isi"])[:400], "sumber": src["source"] if src else "", "link": src["link"] if src else ""}
 
 
+_SECTIONS = r"(?:INDONESIA|EKONOMI|PASAR|DUNIA|TOPIK|SOSIAL)\s+\d+"
+_REFS = re.compile(rf"\s*[\(\[]\s*{_SECTIONS}(?:\s*[,;/&]\s*(?:dan\s+)?{_SECTIONS})*\s*[\)\]]|\s*\b{_SECTIONS}\b", re.I)
+
+
+def _t(v, n: int) -> str:
+    """Readable text: one line, no news numbers ('(TOPIK 7, DUNIA 16)') — those belong in 'nomor'. Pure."""
+    return _REFS.sub("", " ".join(str(v or "").split())).strip()[:n]
+
+
 def clean_analysis(data: dict, news: dict) -> dict:
     """The brain's analysis kept to its shape, every reason linked to the news it came from ('nomor'). Pure."""
-    t = lambda v, n: " ".join(str(v or "").split())[:n]   # noqa: E731
+    t = _t
     out = {"judul": t(data.get("judul"), 200), "situasi": t(data.get("situasi"), 1200), "ucapan": t(data.get("ucapan"), 800),
            "suasana": data.get("suasana") if data.get("suasana") in ("positif", "campuran", "waspada") else "campuran"}
     out["tema"] = []
@@ -247,14 +330,19 @@ def clean_analysis(data: dict, news: dict) -> dict:
                        for x in (data.get("skenario") or [])[:3] if isinstance(x, dict) and x.get("nama")]
     out["rencana"] = [p for p in (clean_plan(x) for x in (data.get("rencana") or [])[:3]) if p]
     out["evaluasi_rencana"] = t(data.get("evaluasi_rencana"), 400)
+    se = data.get("sentimen") if isinstance(data.get("sentimen"), dict) else {}
+    out["sentimen"] = {"label": se.get("label") if se.get("label") in SENTIMENTS else "netral", "ringkas": t(se.get("ringkas"), 300),
+                       "sinyal": [{"sumber": t(x.get("sumber"), 30), "isi": t(x.get("isi"), 200)} for x in (se.get("sinyal") or [])[:4]
+                                  if isinstance(x, dict) and x.get("isi")]} if se.get("ringkas") or se.get("sinyal") else None
     return out
 
 
 def clean_plan(x) -> dict | None:
-    """One 'if I were you' plan: 1–3 months, 1–8 weekly steps inside it, in week order. Pure."""
+    """One 'if I were you' plan: 1–3 months, 1–8 weekly steps inside it, in week order, starting in week 1 (each plan is a choice of its
+    own, not a later phase of another). Pure."""
     if not isinstance(x, dict) or not x.get("nama"):
         return None
-    t = lambda v, n: " ".join(str(v or "").split())[:n]   # noqa: E731
+    t = _t
     try:
         months = min(3, max(1, int(x.get("bulan") or 1)))
     except (TypeError, ValueError):
@@ -271,6 +359,9 @@ def clean_plan(x) -> dict | None:
                       "kaitan": st.get("kaitan") if st.get("kaitan") in KINDS else "lainnya"})
     if not steps:
         return None
+    shift = min(st["minggu"] for st in steps) - 1
+    for st in steps:
+        st["minggu"] -= shift
     return {"nama": t(x["nama"], 80), "gaya": x.get("gaya") if x.get("gaya") in STYLES else "seimbang", "bulan": months,
             "kenapa": t(x.get("kenapa"), 500), "target": t(x.get("target"), 200), "risiko": t(x.get("risiko"), 200),
             "berhenti_jika": t(x.get("berhenti_jika"), 200), "langkah": sorted(steps, key=lambda st: st["minggu"])}
@@ -297,9 +388,14 @@ async def compose(trigger: str = "schedule") -> dict:
     data = clean_analysis(r["result"] if isinstance(r["result"], dict) else {}, g["news"])
     if not data["situasi"] and not data["tema"]:
         raise RuntimeError("analisisnya kosong — coba lagi")
-    data |= {"markets": g["markets"], "weather": g["weather"], "lane": r.get("lane"), "count": sum(len(v) for v in g["news"].values())}
+    g = {"holdings": [], "trends": [], "mood": {}, "agenda": [], "markets": [], **g}
+    data |= {"markets": g["markets"], "holdings": g["holdings"], "trends": g["trends"][:10], "mood": g["mood"], "agenda": g["agenda"],
+             "weather": g["weather"], "lane": r.get("lane"), "count": sum(len(v) for v in g["news"].values()),
+             "social": len(g["news"].get("sosial") or [])}
     day = datetime.now(WIB).date()
-    srcs = sorted({x["source"] for v in g["news"].values() for x in v})
+    srcs = sorted({x["source"].split(" · ")[0] for v in g["news"].values() for x in v}) + [n for n, ok in (
+        ("Google Trends", g["trends"]), ("Fear & Greed", g["mood"].get("crypto_fng")), ("CoinGecko", g["mood"].get("coins")),
+        ("Forex Factory", g["agenda"]), ("Yahoo Finance (teknikal ala TradingView)", g["markets"])) if ok]
     await db.pool().execute("""INSERT INTO briefs (day, data, sources, run_id) VALUES ($1, $2, $3, $4)
                                ON CONFLICT (day) DO UPDATE SET data = EXCLUDED.data, sources = EXCLUDED.sources, run_id = EXCLUDED.run_id, created_at = now()""",
                             day, data, srcs, r["run_id"])

@@ -11,6 +11,10 @@ const KIND = { emas: 'Emas', saham_as: 'Saham AS', kripto: 'Kripto', reksa_dana:
 const SURE = { tinggi: 'green', sedang: 'amber', rendah: 'muted' };
 const LIKELY = { besar: 'red', sedang: 'amber', kecil: 'muted' };
 const STYLE = { aman: ['green', 'Aman'], seimbang: ['cyan', 'Seimbang'], berani: ['violet', 'Berani'] };
+const FEEL = { 'sangat takut': 'red', takut: 'amber', netral: 'muted', optimis: 'green', euforia: 'violet' };
+const TECH = { 'beli kuat': 'green', beli: 'green', netral: 'muted', jual: 'red', 'jual kuat': 'red' };
+const ECON = /harga|emas|saham|ihsg|rupiah|dolar|bansos|pajak|bbm|pertalite|gaji|bunga|kredit|pinjol|bitcoin|kripto|crypto|investasi|bank|ekonomi|inflasi|phk|lowongan|cpns|tarif|listrik|um[rp]|thr|bpjs|ojk|\bbi\b|pluang|reksa|obligasi|properti|kpr|cicilan/i;
+const pct = (v) => (v == null ? '' : `${v > 0 ? '+' : ''}${String(v).replace('.', ',')}%`);
 
 const src = (r) => (r.link ? html` <a href="${r.link}" target="_blank" rel="noopener" class="small t-cyan">· ${r.sumber}</a>` : '');
 const dayOf = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
@@ -64,6 +68,39 @@ function running(r, note) {
     ${note ? html`<span class="sub" style="font-style:italic">“${note}”</span>` : ''}</a>`;
 }
 
+/** What people feel and search: the brain's read of the sentiment, the Fear & Greed number, Google Trends (economic searches first). Pure. */
+export function trendsShown(trends, n = 6) {
+  const econ = (t) => ECON.test(`${t.q} ${(t.news || []).join(' ')}`);
+  return [...trends.filter(econ), ...trends.filter((t) => !econ(t))].slice(0, n);
+}
+
+function feeling(se, mood, trends) {
+  const f = mood?.crypto_fng;
+  if (!se && !f && !trends?.length) return '';
+  return html`<div class="card" style="gap:8px"><div class="row sb"><span class="k">Sentimen publik & pasar</span>${se ? html`<span class="tag ${FEEL[se.label] || 'muted'}">${se.label}</span>` : ''}</div>
+    ${se?.ringkas ? html`<p class="sub" style="margin:0">${se.ringkas}</p>` : ''}
+    ${se?.sinyal?.length ? html`<div style="display:flex;flex-direction:column;gap:4px">${se.sinyal.map((x) => html`<span class="small">• <b>${x.sumber}</b>: ${x.isi}</span>`)}</div>` : ''}
+    ${f ? html`<div style="display:flex;flex-direction:column;gap:4px"><div class="row sb small"><span>Fear & Greed kripto</span><span class="mono">${f.value}/100 · ${f.label}${f.week_ago != null ? ` (minggu lalu ${f.week_ago})` : ''}</span></div>
+      <div class="bar thin"><i class="${f.value < 45 ? 'amber' : f.value > 55 ? 'green' : ''}" style="width:${f.value}%"></i></div></div>` : ''}
+    ${trends?.length ? html`<span class="small">Dicari orang Indonesia hari ini (Google Trends):</span>
+      <div class="chips" style="flex-wrap:wrap">${trendsShown(trends).map((t) => html`<span class="chip" style="cursor:default">${t.q}${t.traffic ? html` <span class="small">${t.traffic}</span>` : ''}</span>`)}</div>` : ''}</div>`;
+}
+
+function kpi(m) {
+  return html`<div class="kpi" style="padding:8px"><span style="font-size:10px">${m.label}</span>
+    <b style="font-size:13px">${m.last != null ? Number(m.last).toLocaleString('id-ID', { maximumFractionDigits: 2 }) : '–'}</b>
+    <span class="small" style="color:var(--${m.change == null ? 'tx2' : m.change >= 0 ? 'green' : 'red'})">${m.change == null ? '' : `${pct(m.change)} 5h`}</span>
+    ${m.tech ? html`<span class="small" style="color:var(--${TECH[m.tech.label] === 'muted' ? 'tx2' : `${TECH[m.tech.label]}-t`})">${m.tech.label}${m.tech.rsi != null ? ` · RSI ${Math.round(m.tech.rsi)}` : ''}</span>` : ''}</div>`;
+}
+
+function agenda(list) {
+  if (!list?.length) return '';
+  const when = (iso) => new Date(iso).toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return html`<details class="card"><summary class="small">Agenda ekonomi minggu ini (${list.length})</summary><div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+    ${list.map((a) => html`<div class="row top" style="gap:8px;font-size:13px"><span class="mono small" style="flex:0 0 112px">${when(a.at)}</span>
+      <span class="grow"><b>${a.country}</b> ${a.title}${a.actual ? html` <span class="small">· hasil ${a.actual}</span>` : a.forecast ? html` <span class="small">· perkiraan ${a.forecast}</span>` : ''}</span></div>`)}</div></details>`;
+}
+
 function chance(p) {
   return html`<div class="card green" style="gap:6px"><div class="row sb top" style="gap:8px"><b style="font-size:14px">${p.aksi}</b>
       <span class="tag ${SURE[p.yakin] || 'muted'}" style="white-space:nowrap">yakin ${p.yakin}</span></div>
@@ -101,11 +138,12 @@ export default {
           ${d.intinya?.length ? html`<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">${d.intinya.map((x) => html`<li style="font-size:14px">${x}</li>`)}</ol>`
             : html`<p class="sub" style="margin:0">${d.situasi}</p>`}</div>
         ${running(run, d.evaluasi_rencana)}
+        ${feeling(d.sentimen, d.mood, d.trends)}
         ${d.intinya?.length && d.situasi ? html`<details class="card"><summary class="small">Situasi lengkapnya</summary><p class="sub" style="margin:8px 0 0">${d.situasi}</p></details>` : ''}
-        ${d.markets?.length ? html`<div class="sec"><span>Indikator pasar</span></div>
-          <div class="g3">${d.markets.map((m) => html`<div class="kpi" style="padding:8px"><span style="font-size:10px">${m.label}</span>
-            <b style="font-size:13px">${m.last != null ? Number(m.last).toLocaleString('id-ID', { maximumFractionDigits: 2 }) : '–'}</b>
-            <span class="small" style="color:var(--${m.change == null ? 'tx2' : m.change >= 0 ? 'green' : 'red'})">${m.change == null ? '' : `${m.change > 0 ? '+' : ''}${String(m.change).replace('.', ',')}% 5h`}</span></div>`)}</div>` : ''}
+        ${d.markets?.length ? html`<div class="sec"><span>Indikator pasar</span><span class="small">teknikal ala TradingView</span></div>
+          <div class="g3">${d.markets.map(kpi)}</div>` : ''}
+        ${d.holdings?.length ? html`<div class="sec"><span>Aset milikmu</span></div><div class="g3">${d.holdings.map(kpi)}</div>` : ''}
+        ${agenda(d.agenda)}
         ${d.tema?.length ? html`<div class="sec"><span>Kenapa begitu</span></div>${d.tema.map(theme)}` : ''}
         ${d.skenario?.length ? html`<div class="sec"><span>1–3 bulan ke depan</span></div>${d.skenario.map(scenario)}` : ''}
         ${plans.length ? html`<div class="sec"><span>Kalau aku jadi kamu</span></div>

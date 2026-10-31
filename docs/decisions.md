@@ -1617,6 +1617,16 @@ menentukan berat/ringan/non-AI)".
   he keeps) becomes Catatan tasks due at the end of their week, linked back to Cek berita, through the master flow (a skill); it is the
   running plan, and each next analysis is told how far it is and says whether to carry on, speed up or adjust. Quick opportunities stay,
   folded away. The heavy brain gets 6000 tokens for it.
+- **More to read for Cek berita** (owner 2026-10-31: "Tambah sumber data beritanya … termasuk data dari sentimen sosial media, google trend,
+  tradingview, dll"; signals.py): more newsrooms (Katadata, Detik Finance; a market section: CNBC Indonesia Market, Kontan, IDX Channel; CNBC
+  and MarketWatch abroad), taken in turn so every source shows; Google News for his topics and holdings (defaults: gold, IHSG, BI rate);
+  Google Trends Indonesia; Reddit (Indonesian and global investing subreddits, two combined RSS requests a day, stopping on 429); the
+  Crypto Fear & Greed Index and CoinGecko's most searched coins; this week's high-impact calendar (Forex Factory); and a technical rating
+  by TradingView's method (SMA/EMA 10–200 and RSI, MACD, stochastic, momentum, averaged; ±0.1/±0.5) computed from a year of Yahoo prices
+  for the markets (now with VIX and Ethereum) and his holdings. The brain is told news is reported fact, social posts and searches are
+  opinion and attention (extremes often mark a turn), technicals are short-term signals; it adds a sentiment read with its evidence. Not
+  read: StockTwits and Bisnis.com (bot check, not circumvented), X (no free API), TradingView itself (no public API). The three plans are
+  alternatives each starting in week 1; news numbers stay out of the prose.
 - **Pengelola penyimpanan** (owner 2026-10-31: "manager storage sehingga saya tahu mana saja yg bisa dihapus atau dizip"): the host measures
   (infra/scripts/storage.py, root, via jarvis-storage.path; every 6 hours on core's request and on "Ukur ulang") and the app shows every
   space user by group: what is safe to remove and what that costs (Docker build cache, orphaned volumes, dangling images, APKs older than
