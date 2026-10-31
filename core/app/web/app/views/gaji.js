@@ -107,6 +107,52 @@ export default {
       toast([ok.length && `${ok.length} dicatat`, dup.length && `${dup.length} sudah tercatat`, bad.length && `${bad.length} tidak terbaca: ${bad[0].error}`].filter(Boolean).join(' · '), !!bad.length && !ok.length);
       render();
     },
+    async edittx(b, e) {   // every field of a transaction: amount, for/from, in/out, date & time, category, note, realised — or delete it
+      if (e?.target?.closest('[data-act="cat"],[data-act="realize"]')) return;   // the chips have their own quick actions
+      const t = cur.recent.find((x) => String(x.id) === b.dataset.id);
+      if (!t) return;
+      const local = new Date(new Date(t.at).getTime() + 7 * 3600e3).toISOString().slice(0, 16);   // WIB for the field
+      const v = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:10px"><span class="ttl">Ubah transaksi</span>
+        <label class="field">Nominal<input name="amount" type="number" min="1" step="1" value="${Math.round(t.amount)}" required></label>
+        <label class="field">Untuk / dari<input name="merchant" value="${t.merchant}" required maxlength="60"></label>
+        <div class="g2"><label class="field">Jenis<select name="direction"><option value="out" ${t.direction === 'out' ? 'selected' : ''}>Pengeluaran</option><option value="in" ${t.direction === 'in' ? 'selected' : ''}>Pemasukan</option></select></label>
+          <label class="field">Kategori<select name="category">${cur.categories.map((c) => html`<option ${c === t.category ? 'selected' : ''}>${c}</option>`)}</select></label></div>
+        <label class="field">Tanggal & jam (WIB)<input name="at" type="datetime-local" value="${local}" required></label>
+        <label class="field">Catatan<input name="note" value="${t.note || ''}" maxlength="300" placeholder="opsional"></label>
+        <label class="row" style="gap:8px;font-size:14px"><input type="checkbox" name="realized" ${t.realized ? 'checked' : ''} style="width:20px;height:20px;flex:0 0 20px"> Sudah direalisasi</label>
+        <span class="small">Sumber: ${t.app || SRC[t.source] || t.source}</span>
+        <div class="btns"><button type="button" class="btn danger" data-close="__del" style="flex:0 0 90px">Hapus</button><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Simpan</button></div></form>`));
+      if (!v) return;
+      if (v === '__del') { await del(`/api/v1/app/money/tx/${t.id}`); toast('Transaksi dihapus'); render(); return; }
+      try {
+        await put(`/api/v1/app/money/tx/${t.id}`, { amount: Number(v.amount), merchant: v.merchant, direction: v.direction, category: v.category, at: v.at, note: v.note || '', realized: !!v.realized });
+        toast('Transaksi diperbarui'); render();
+      } catch (err) { toast(err.message || 'Gagal menyimpan', true); }
+    },
+    txfilter(b) { txf = b.dataset.f; render(); },
+    async realize(b, e) {   // right in the list: realised ↔ not yet (counted in spending only once realised)
+      e?.stopPropagation?.();
+      const v = b.dataset.v === '1';
+      await put(`/api/v1/app/money/tx/${b.dataset.id}`, { realized: v });
+      toast(v ? 'Sudah direalisasi' : 'Ditandai belum direalisasi'); render();
+    },
+    async asset(b) {   // an emergency-fund asset: add or change (or remove)
+      const e = cur.emergency, a = b.dataset.id ? e.assets.find((x) => String(x.id) === b.dataset.id) : null;
+      const v = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:10px"><span class="ttl">${a ? 'Ubah aset dana darurat' : 'Tambah aset dana darurat'}</span>
+        <label class="field">Nama<input name="name" value="${a?.name || ''}" required maxlength="60" placeholder="mis. Tabungan BCA darurat, RDPU Bibit, Emas Antam"></label>
+        <div class="g2"><label class="field">Jenis<select name="kind">${Object.entries(e.kinds).map(([k, x]) => html`<option value="${k}" ${(a?.kind || 'tabungan') === k ? 'selected' : ''}>${x.label}</option>`)}</select></label>
+          <label class="field">Likuiditas<select name="liquidity"><option value="">ikut jenisnya</option>${Object.entries(e.liquidity).map(([k, x]) => html`<option value="${k}" ${a && a.liquidity === k && a.liquidity !== e.kinds[a.kind]?.liquidity ? 'selected' : ''}>${x}</option>`)}</select></label></div>
+        <label class="field">Nilai sekarang (Rp)<input name="amount" type="number" min="0" step="1000" value="${a ? Math.round(a.amount) : ''}" required></label>
+        <label class="field">Catatan<input name="note" value="${a?.note || ''}" maxlength="200" placeholder="opsional, mis. jatuh tempo Mar 2027"></label>
+        <span class="small">Likuid: siap dipakai (tunai, tabungan, e-wallet) · Semi-likuid: dicairkan dalam beberapa hari (reksa dana pasar uang, emas, saham) · Tidak likuid: terkunci sampai jatuh tempo (deposito).</span>
+        <div class="btns">${a ? html`<button type="button" class="btn danger" data-close="__del" style="flex:0 0 90px">Hapus</button>` : ''}<button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Simpan</button></div></form>`));
+      if (!v) return;
+      if (v === '__del') { await del(`/api/v1/app/money/emergency/${a.id}`); toast('Aset dihapus'); render(); return; }
+      const body = { name: v.name, kind: v.kind, liquidity: v.liquidity || null, amount: Number(v.amount || 0), note: v.note || '' };
+      try { if (a) await put(`/api/v1/app/money/emergency/${a.id}`, body); else await post('/api/v1/app/money/emergency', body); toast('Dana darurat diperbarui'); render(); }
+      catch (err) { toast(err.message || 'Gagal menyimpan', true); }
+    },
+    async pluangem() { await put('/api/v1/app/settings/money', { emergency_pluang: !cur.emergency.pluang }); render(); },
     async cat(b, e) {
       e?.stopPropagation?.();
       const v = await sheet(String(html`<span class="ttl">Kategori</span><div class="chips" style="flex-wrap:wrap">${cur.categories.map((c) => html`<button class="chip ${c === b.dataset.c ? 'on' : ''}" data-close="${c}">${c}</button>`)}</div>
