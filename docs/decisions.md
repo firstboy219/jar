@@ -1592,6 +1592,29 @@ menentukan berat/ringan/non-AI)".
   they mature or cost a penalty), the default by kind and changeable per asset; optionally his Pluang holdings (gold, shares, funds — not
   crypto) from the last reading; shown as today's total, by liquidity, and how many months it covers in all and usable right away. What
   he had typed as "Dana darurat sekarang" became his first asset (migration 059).
+- **Every approval can be given in the app, behind the phone's lock** (owner 2026-10-31: "Saat ini aplikasi hanya bisa menolak persetujuan
+  ganti jadi bisa menyetujui via aplikasi tapi harus verifikasi PIN hp"): approving any item in the app — code changes, code designs and
+  skill publishing included, which ADR-047 had kept for the admin page — first needs the phone's PIN / fingerprint signing a one-time code
+  (or, on an app before 0.28, the admin password); the app then decides with channel "phone_lock", which with "admin" may approve those
+  kinds. Chat, voice and the console still cannot (channel "device"); refusing needs no PIN.
+- **Music as a collection, like Spotify** (owner 2026-10-31: "fungsi klik kategori adalah untuk scan list musik, kemudian saya pilih lalu kamu
+  masukkan ke list storage berikut file hasil download nya … siapkan management lagunya seperti Spotify"): a mood or a search makes a
+  list of up to 20 real songs (the light brain names songs that fit his words, each found on YouTube; a plain search fills the rest); the
+  ones he ticks go into his collection (`music_library`) and are downloaded one by one in the background (every 2 minutes and right after
+  a pick, through the master flow) to MP3 in the media store; from Musik → Koleksi he plays all, shuffles, likes, puts songs in playlists,
+  retries or deletes them (the file too), and they play from the phone's own store with the next/previous of the collection. YouTube
+  refuses the server ("confirm you're not a bot"), so a song is fetched by his converter if set, else yt-dlp with his YouTube cookies (a
+  cookies.txt pasted once, kept encrypted in the vault; a spare account is advised), else the same song on SoundCloud (its cleaned title,
+  kept only when most of the title's words match — the artist's name alone is not the song); one found nowhere waits as "gagal" and is
+  retried when cookies arrive.
+- **Pengelola penyimpanan** (owner 2026-10-31: "manager storage sehingga saya tahu mana saja yg bisa dihapus atau dizip"): the host measures
+  (infra/scripts/storage.py, root, via jarvis-storage.path; every 6 hours on core's request and on "Ukur ulang") and the app shows every
+  space user by group: what is safe to remove and what that costs (Docker build cache, orphaned volumes, dangling images, APKs older than
+  the newest 3, the Gradle cache, pip/uv/npm caches, apt, journald above 200 MB), what is zipped instead (Hermes workspace folders untouched
+  for 14 days → workspace/_arsip, Hermes logs older than 7 days → gzip), and what stays and why (database, Whisper models, media,
+  documents, Hermes' packages). Cleaning runs only the host's own whitelisted ids, after the phone's lock, through the master flow;
+  he is told how much came free, and once a day when less than 12% of the disk is free. Test and preview runs now remove their
+  containers' volumes (532 orphans, ~30 GB, had piled up). The admin page lists only releases whose APK file is still there.
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.

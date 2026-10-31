@@ -115,6 +115,13 @@ and screenshot tests — run by `build-apk.sh`.
 - Upgrade: bump the pinned tag in `docker-compose.yml`, `docker compose pull && docker compose up -d`
 - Rollback: revert the tag and `docker compose up -d`
 
+## Storage manager
+The app's **Penyimpanan** page shows what fills the disk and what may be removed or zipped. The host part is
+`infra/scripts/storage.py` (root), started by `jarvis-storage.path` when jarvis-core drops `data/ops/storage.request`;
+it runs only its own whitelisted cleanups (Docker cache/orphaned volumes/dangling images, old APKs, Gradle, pip/uv/npm,
+apt, journald; zips old Hermes workspace folders and logs), never a path from the request.
+Install: `sudo cp infra/systemd/jarvis-storage.* /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable --now jarvis-storage.path`.
+
 ## Backup & restore
 `jarvis-backup.timer` runs `infra/scripts/backup.sh` daily at 03:00 WIB and keeps 7 copies in
 `infra/backups/<UTC timestamp>/` (root-only; contains `.env` secrets):

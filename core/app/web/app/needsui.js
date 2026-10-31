@@ -22,7 +22,7 @@ export function itemCard(it, compact = false) {
             <button class="btn" data-act="needDone" data-id="${it.id}" style="flex:0 0 ${it.task_id ? '140px' : 'auto'}">Sudah, lanjutkan</button></div>
           <span class="small">Selesaikan di layar misinya (Ambil alih), lalu ketuk “Sudah, lanjutkan”. Tidak perlu mengetik apa pun.</span>`
         : html`<div class="btns"><button class="btn violet" data-act="needAnswer" data-id="${it.id}">Jawab</button>${it.task_id ? html`<a class="btn" href="#/misi/${it.task_id}" style="flex:0 0 120px">Buka misi</a>` : ''}</div>`)
-      : html`<div class="btns"><button class="btn ${tone}" data-act="needApprove" data-kind="${it.kind}" data-id="${it.id}" ${it.admin_only ? 'disabled' : ''}>${it.admin_only ? 'Hanya di admin web' : it.cta}</button>
+      : html`<div class="btns"><button class="btn ${tone}" data-act="needApprove" data-kind="${it.kind}" data-id="${it.id}">${it.password ? icon('lock', 14) : ''} ${it.cta}</button>
           <button class="btn" data-act="needReject" data-kind="${it.kind}" data-id="${it.id}" style="flex:0 0 96px">Tolak</button></div>`;
   const r = it.route || {};
   return html`<div class="card ${tone}">
@@ -40,16 +40,16 @@ export function itemCard(it, compact = false) {
 // a web task waiting for him (ADR-087 batch I): the page itself on his phone, a pick, an answer, or the filled form to review
 const mmss = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '');
 
-/** Songs to tick (owner 2026-10-31): the ticked ones become MP3s, the first plays as soon as it is ready. */
+/** Songs to tick (owner 2026-10-31): the ticked ones are downloaded into his collection and played from there. */
 function songsCard(it, compact) {
   return html`<form class="card cyan" data-songs="${it.id}" style="gap:10px">
     <div class="row top"><span class="ico cyan">${icon('music', 20)}</span><div class="grow"><div class="ttl">${it.title}</div><div class="sub">${it.sub}</div></div></div>
-    <div style="display:flex;flex-direction:column;gap:6px">${it.options.slice(0, compact ? 5 : 10).map((o, i) => html`<label class="row" style="gap:10px;cursor:pointer;padding:4px 0">
+    <div style="display:flex;flex-direction:column;gap:6px">${it.options.slice(0, compact ? 6 : 20).map((o, i) => html`<label class="row" style="gap:10px;cursor:pointer;padding:4px 0">
       <input type="checkbox" name="o" value="${i}" ${i === 0 ? 'checked' : ''} style="width:20px;height:20px;flex:0 0 20px">
       <img src="${o.cover}" alt="" loading="lazy" referrerpolicy="no-referrer" style="width:64px;height:36px;object-fit:cover;border-radius:6px;flex:0 0 64px">
       <span class="grow" style="min-width:0"><span style="display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.title}</span>
         <span class="small">${o.channel}${o.duration_s ? ` · ${mmss(o.duration_s)}` : ''}</span></span></label>`)}</div>
-    <div class="btns"><button class="btn cyan" data-act="songsGo" data-id="${it.id}">${icon('music', 14)} Jadikan MP3 &amp; putar</button>
+    <div class="btns"><button class="btn cyan" data-act="songsGo" data-id="${it.id}">${icon('music', 14)} Simpan ke koleksi</button>
       <button class="btn" data-act="needReject" data-kind="lagu" data-id="${it.id}" style="flex:0 0 96px">Batal</button></div></form>`;
 }
 
@@ -182,7 +182,8 @@ export const needActions = {
     b.disabled = true;
     try {
       const r = await post(`/api/v1/app/music/picks/${b.dataset.id}`, { choose });
-      toast(r.converter ? `${r.count} lagu sedang dijadikan MP3 — yang pertama langsung diputar.` : `${r.count} lagu: diputar lewat YouTube (converter MP3 belum dinyalakan).`);
+      toast(r.cookies || r.converter ? `${r.count} lagu masuk koleksi — diunduh satu per satu, nanti diputar dari Musik → Koleksi.`
+        : `${r.count} lagu masuk koleksi — dicari di SoundCloud dulu; yang tidak ada butuh cookies YouTube (Musik → Koleksi → Pengunduh).`);
     } catch (err) { toast(err.message || 'Gagal memproses', true); b.disabled = false; return; }
     render();
   },
@@ -206,15 +207,14 @@ export const needActions = {
   async needApprove(b) {
     const it = byKey.get(key(b.dataset.kind, b.dataset.id));
     const body = { approve: true };
-    let pw = null;
-    if (it?.password) { pw = await askPassword(it.title); if (!pw) return; body.password = pw.password; }
-    try {
-      await post(`/api/v1/app/needs/${b.dataset.kind}/${b.dataset.id}`, body);
-    } catch (e) {
-      if (pw?.bio && e.status === 422) host()?.rememberPassword?.('');   // the kept password is out of date: type it again next time
-      throw e;
+    const url = `/api/v1/app/needs/${b.dataset.kind}/${b.dataset.id}`;
+    if (it?.password) {   // the phone's lock (PIN / fingerprint); a reinstalled app registers again once inside withPassword
+      const done = await withPassword(it.title, (password) => post(url, { ...body, password }),
+        { kicker: it.kind === 'approval' ? 'Persetujuan' : 'Izin operasi HP' });
+      if (!done) return;
+    } else {
+      await post(url, body);
     }
-    if (pw?.remember) host()?.rememberPassword?.(pw.password);
     toast('Disetujui. JARVIS mulai mengerjakan.');
     render();
   },

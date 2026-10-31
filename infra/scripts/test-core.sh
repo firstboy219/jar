@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "${CORE_DIR:-$(dirname "$0")/../../core}"
 NET=jarvis-test-$$
-cleanup() { docker rm -f "$NET-db" "$NET-qdrant" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
+# -v: the Postgres/Qdrant images declare volumes; without it every run left ~60 MB behind (532 orphans, 29 GB, 2026-10-31)
+cleanup() { docker rm -f -v "$NET-db" "$NET-qdrant" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 # the 3D canvas viewer's pure modules (gestures, galaxy geometry) — ES modules tested with node when it is installed

@@ -54,6 +54,8 @@ async def seed() -> str:
         await seed_flow(p)
     if {"karier"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
         await seed_jobs(p)
+    if {"penyimpanan"} & {r.split("!")[0].split("?")[0].split("/")[0] for r in ROUTES}:
+        seed_storage()
     await db.close()
     return token
 
@@ -112,6 +114,30 @@ async def seed_flow(p):
     await p.execute("INSERT INTO flow_samples (run_id, feature, action, messages) SELECT id, feature, action, '[{\"role\": \"user\", \"content\": \"x\"}]' FROM flow_runs WHERE feature = 'inbox' AND action = 'draf' LIMIT 6")
 
 
+def seed_storage():
+    """What the host's measurement (infra/scripts/storage.py) looks like, as written to /data/ops/storage.json."""
+    import json
+    import time
+    from pathlib import Path
+    G = 1024 ** 3
+    items = [("docker-cache", "Cache build Docker", "Docker", 23.0, "hapus", "Aman. Build/deploy berikutnya sedikit lebih lama."),
+             ("docker-volumes", "Volume Docker yatim", "Docker", 30.4, "hapus", "Aman. Sisa database sementara dari test & pratinjau."),
+             ("docker-images-used", "Image Docker yang dipakai", "Docker", 15.4, None, "Program JARVIS yang sedang berjalan."),
+             ("apk-old", "APK versi lama", "Aplikasi Android", 1.6, "hapus", "Aman. 3 versi terbaru tetap ada."),
+             ("gradle", "Cache Gradle (build APK)", "Aplikasi Android", 3.2, "hapus", "Aman. Build APK berikutnya ±5–10 menit lebih lama."),
+             ("pip", "Cache unduhan pip Hermes", "Hermes", 3.5, "hapus", "Aman. Paket yang terpasang tetap."),
+             ("workspace-zip", "Folder kerja Hermes lama → zip", "Hermes", 0.3, "zip", "Dizip ke workspace/_arsip."),
+             ("hermes-lib", "Paket Python Hermes", "Hermes", 6.1, None, "Dipakai Hermes untuk alat-alatnya."),
+             ("whisper", "Model Whisper (telinga)", "Data JARVIS", 2.3, None, "Dipakai untuk mendengar suara & rapat."),
+             ("media", "Lagu & suara", "Data JARVIS", 0.16, None, "Kelola di Musik → Koleksi."),
+             ("postgres", "Database", "Data JARVIS", 0.12, None, "Seluruh data JARVIS.")]
+    data = {"at": time.time() - 1500, "disk": {"total": 309 * G, "used": 216 * G, "free": 93 * G},
+            "items": [{"id": i, "label": lb, "group": g, "bytes": int(b * G), "action": a, "note": n} for i, lb, g, b, a, n in items],
+            "last": {"at": time.time() - 86400, "request": 1, "items": [{"id": "journal", "label": "Log sistem lama (journald)", "ok": True, "freed": int(0.4 * G)}], "freed": int(0.4 * G)}}
+    Path("/data/ops").mkdir(parents=True, exist_ok=True)
+    Path("/data/ops/storage.json").write_text(json.dumps(data))
+
+
 async def seed_media(p):
     """What wave 6 screens show: music played (the usual mood), a summarised video, files made, a story, measurements, a guidance session."""
     from datetime import datetime
@@ -121,6 +147,12 @@ async def seed_media(p):
     for i, (mood, title) in enumerate([("semangat", "Bangkit — Rizky Febian"), ("semangat", "Laskar Pelangi — Nidji"), ("fokus", "Lofi Hujan Jakarta — Kopi Senja")]):
         await p.execute("INSERT INTO media_log (kind, mood, query, title, slot, weekday, at) VALUES ('music', $1, $1, $2, $3, $4, now() - make_interval(days => $5))",
                         mood, title, home.slot_of(now), now.weekday(), i)
+    for i, (title, artist, status, mins) in enumerate([("Hati-Hati di Jalan", "Tulus", "siap", 4), ("Rumah ke Rumah", "Hindia", "siap", 5),
+                                                         ("Kali Kedua", "Raisa", "siap", 4), ("Monokrom", "Tulus", "siap", 4), ("Sial", "Mahalini", "gagal", 4)]):
+        await p.execute("INSERT INTO music_library (video_id, source_url, title, artist, duration_s, media_id, status, error, size_bytes, liked, plays, ready_at) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())", f"vid{i:08d}", f"https://www.youtube.com/watch?v=vid{i:08d}", title, artist,
+                        mins * 60 + 12, f"{i:032x}" if status == "siap" else None, status,
+                        "lagunya tidak ketemu di SoundCloud; butuh cookies YouTube" if status == "gagal" else None, 4_300_000 if status == "siap" else 0, i == 0, 3 - min(i, 3))
     await p.execute("""INSERT INTO video_notes (video_id, title, channel, duration_s, lang, transcript, source, summary) VALUES ('SfLhKxznVQI', 'Resep Es Kopi Susu Gula Aren | Ide Jualan', 'KitchenDaily', 260, 'id',
         '[{"t": 0, "text": "Halo semua"}]', 'phone', '{"ringkasan": "Cara membuat es kopi susu gula aren botolan untuk jualan: takaran espresso, susu, dan gula aren, serta hitungan modal per botol (±Rp6.500).", "lane": "ringan",
         "poin": ["Espresso 30 ml per botol", "Gula aren cair 25 ml", "Susu UHT full cream 150 ml", "Botol 250 ml, tahan 3 hari di kulkas"], "untuk_siapa": "Cocok kalau mau jualan minuman dari rumah",

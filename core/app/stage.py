@@ -266,9 +266,10 @@ async def on_event(stage_id: str, event: str, detail: dict | None = None) -> Non
         if _current and _current["id"] == stage_id:
             _current = None
         return
-    if (found["payload"] or {}).get("playlist") and event in ("ended", "next", "prev"):
-        from . import playlists
-        playlists.on_stage_event(event)  # a playlist is playing: the following (or previous) song comes next
+    if event in ("ended", "next", "prev"):
+        from . import musiclibrary, playlists
+        if not musiclibrary.on_stage_event(event) and (found["payload"] or {}).get("playlist"):
+            playlists.on_stage_event(event)  # a playlist is playing: the following (or previous) song comes next
     if found.get("desk"):   # a desk card the phone no longer shows: nothing else to keep
         await audit.record("owner", "stage.event", None, panel=found["panel"], event=event[:40])
         return

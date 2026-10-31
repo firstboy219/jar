@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch for storage scans and approved cleanups (Pengelola penyimpanan)
+
+[Path]
+PathExists=/home/ubuntu/my-project/infra/data/ops/storage.request
+
+[Install]
+WantedBy=multi-user.target

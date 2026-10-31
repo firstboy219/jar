@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../../core"
 OUT="${OUT:-/tmp/jarvis-preview}"; mkdir -p "$OUT"
 NET=jarvis-preview-$$
-cleanup() { docker rm -f "$NET-db" "$NET-qdrant" "$NET-core" "$NET-chrome" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f -v "$NET-db" "$NET-qdrant" "$NET-core" "$NET-chrome" >/dev/null 2>&1 || true; docker network rm "$NET" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 [ "${SKIP_BUILD:-0}" = 1 ] || docker build -q --build-arg DEV=1 -t jarvis-core:test . >/dev/null
 docker network create "$NET" >/dev/null
@@ -18,6 +18,7 @@ docker run -d --name "$NET-core" --network "$NET" --network-alias core -e DATABA
 docker run -d --name "$NET-chrome" --network "$NET" --network-alias chrome chromedp/headless-shell:latest >/dev/null
 for i in $(seq 1 60); do docker exec "$NET-core" python -c "import httpx;httpx.get('http://localhost:8000/healthz').raise_for_status()" >/dev/null 2>&1 && break; sleep 1; done
 docker cp ../infra/scripts/app_preview.py "$NET-core":/tmp/app_preview.py
+docker exec -u 0 "$NET-core" sh -c 'mkdir -p /data/ops && chmod 777 /data/ops'   # the host's measurements live here (seeded for Penyimpanan)
 docker exec -e PYTHONPATH=/srv -e DATABASE_URL="postgresql://postgres:test@$NET-db/jarvis" -e PREVIEW_W="${PREVIEW_W:-390}" -e PREVIEW_H="${PREVIEW_H:-844}" -e PREVIEW_WAIT="${PREVIEW_WAIT:-2.5}" "$NET-core" python -u /tmp/app_preview.py "$@"
 docker cp "$NET-core":/tmp/shots/. "$OUT"/
 echo "screenshots in $OUT"

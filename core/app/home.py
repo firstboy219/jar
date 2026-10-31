@@ -67,6 +67,7 @@ FEATURES: list[dict] = [
     {"id": "ingatan", "label": "Ingatan & skill", "icon": "db", "group": "Otak JARVIS", "route": "#/ingatan", "slots": []},
     {"id": "kebiasaan", "label": "Kebiasaan", "icon": "repeat", "group": "Otak JARVIS", "route": "#/kebiasaan", "slots": []},
     {"id": "kontrol", "label": "Kontrol", "icon": "gear", "group": "Otak JARVIS", "route": "#/kontrol", "slots": []},
+    {"id": "penyimpanan", "label": "Penyimpanan", "icon": "db", "group": "Otak JARVIS", "route": "#/penyimpanan", "slots": []},
 ]
 FEATURE_IDS = {f["id"] for f in FEATURES}
 

@@ -128,7 +128,8 @@ def load_releases() -> list[dict]:
         releases = json.loads((RELEASES / "releases.json").read_text())
     except (OSError, ValueError):
         return []
-    return [r for r in releases if APK_NAME.match(r.get("file", ""))]
+    # old APK files may be removed by the storage manager (the index keeps them so versionCodes never repeat)
+    return [r for r in releases if APK_NAME.match(r.get("file", "")) and (RELEASES / r["file"]).is_file()]
 
 
 def apply_log_tail(lines: int = 8) -> str:

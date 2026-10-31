@@ -81,7 +81,7 @@ def song_query(query: str) -> tuple[str, bool]:
 async def _show_song(m: dict, source: str) -> dict:
     shown = await _show("music", {"title": m["title"], "artist": m["artist"], "url": m["url"],
                                        "cover_url": m.get("cover_url"), "license": "", "source_url": m["source_url"],
-                                       "duration_s": m.get("duration_s")},
+                                       "duration_s": m.get("duration_s"), **({"playlist": m["playlist"]} if m.get("playlist") else {})},
                              f"Memutar {m['title']} — {m['artist']}"[:200], "jarvis")
     return {"playing": m["title"], "artist": m["artist"], "source": source, "format": "MP3", "stage_id": shown["id"]}
 

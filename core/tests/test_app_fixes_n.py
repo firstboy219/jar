@@ -73,6 +73,39 @@ async def test_an_approval_is_the_phone_lock_after_one_registration(pool, monkey
     assert await pool.fetchval("SELECT last_used IS NOT NULL FROM device_keys") is True
 
 
+@needs_db
+async def test_an_approval_is_approved_in_the_app_with_the_phone_lock_even_a_code_change(pool, monkeypatch):
+    """Owner 2026-10-31: 'bisa menyetujui via aplikasi tapi harus verifikasi PIN hp' — code changes too; chat/voice still cannot."""
+    from app import appauth, approvals, devices, main, needs
+    await pool.execute("TRUNCATE device_keys, approvals RESTART IDENTITY CASCADE")
+    ran = []
+
+    async def run(detail):
+        ran.append(detail)
+        return {"ok": True}
+    monkeypatch.setitem(approvals.EXECUTORS, "code_change", run)
+
+    async def check(pw):
+        return 401
+    monkeypatch.setattr(appauth, "_check", check)
+    dev, token = await devices.create("HP pemilik", "test", scope="owner")
+    h = {"Authorization": f"Bearer {token}"}
+    pub, sign = _key()
+    await pool.execute("INSERT INTO device_keys (device_id, public_key) VALUES ($1, $2)", dev["id"], pub)
+    a = await approvals.create("code_change", "Ubah kode", {"summary": "perbaikan"}, "dev")
+    assert needs.approval_item(a)["password"] is True and "admin_only" not in needs.approval_item(a)
+    with pytest.raises(approvals.AdminOnly):
+        await approvals.decide(a["id"], True, "chat", channel="device")          # chat / voice: never
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        url = f"/api/v1/app/needs/approval/{a['id']}"
+        assert (await c.post(url, json={"approve": True}, headers=h)).status_code == 422                  # no PIN, no approval
+        nonce = (await c.post("/api/v1/app/approval/nonce", headers=h)).json()["nonce"]
+        r = await c.post(url, json={"approve": True, "password": f"hp1:{nonce}:{sign(appauth.approval_message(nonce))}"}, headers=h)
+        assert r.status_code == 200 and r.json()["approval"]["status"] == "completed" and len(ran) == 1
+        b = await approvals.create("code_change", "Ubah lagi", {}, "dev")
+        assert (await c.post(f"/api/v1/app/needs/approval/{b['id']}", json={"approve": False}, headers=h)).json()["approval"]["status"] == "rejected"
+
+
 def test_the_previous_stage_list_becomes_items():
     from app import projects
     items = projects.clean_items({"item": [

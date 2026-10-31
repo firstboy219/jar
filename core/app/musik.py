@@ -6,6 +6,7 @@ Playing is a fixed procedure through the master flow (skill: licensed tracks, or
 media_tools); the screen and the phone get it as a stage event, and the app's player plays it."""
 
 import asyncio
+import re
 import logging
 from collections import Counter
 from datetime import datetime
@@ -74,7 +75,7 @@ async def play(mood: str = "", query: str = "", trigger: str = "owner") -> dict:
 
 # ---------- a request for music → a list he ticks → MP3s (owner 2026-10-31) ----------
 
-PICK_RESULTS = 10
+PICK_RESULTS = 20
 MAX_PICK_S = 15 * 60      # a song, not a compilation
 
 
@@ -93,20 +94,72 @@ def song_options(found: list[dict]) -> list[dict]:
     return out
 
 
+def clean_suggestions(data) -> list[dict]:
+    """The light brain's song list: title + artist, deduplicated. Pure."""
+    rows = data.get("lagu") if isinstance(data, dict) else data
+    out, seen = [], set()
+    for x in rows if isinstance(rows, list) else []:
+        if not isinstance(x, dict):
+            continue
+        t, a = " ".join(str(x.get("judul") or "").split())[:100], " ".join(str(x.get("artis") or "").split())[:80]
+        if t and (t.lower(), a.lower()) not in seen:
+            seen.add((t.lower(), a.lower()))
+            out.append({"judul": t, "artis": a})
+    return out
+
+
+def best_hit(found: list[dict], title: str, artist: str) -> dict | None:
+    """The YouTube result that is this song: a song-length video whose title has the song's words (and the artist's, when given). Pure."""
+    def words(x):
+        return [w for w in re.findall(r"\w+", x.lower()) if len(w) >= 3]
+    for v in song_options(found):
+        have = f"{v['title']} {v['channel']}".lower()
+        tw, aw = words(title), words(artist)
+        if (not tw or sum(w in have for w in tw) >= max(1, len(tw) // 2 + len(tw) % 2)) and (not aw or any(w in have for w in aw)):
+            return v
+    return None
+
+
+async def _songs_for(q: str) -> list[dict]:
+    """What he asked ("lagu indo seperti Tulus, Hindia…", "semangat", "Raisa") → up to 20 real songs: the light brain names them (master
+    flow), each is then found on YouTube (a song-length video of that title and artist); a plain search fills what is left."""
+    msgs = [{"role": "system", "content": (
+        f"Kamu kurator musik. Dari permintaan pemilik, sebutkan {PICK_RESULTS + 6} LAGU NYATA yang terkenal dan cocok (judul persis + artis). "
+        "Kalau ia menyebut artis/gaya tertentu, ikuti; campur artis bila diminta 'seperti …'. Jangan mengarang lagu. "
+        'JSON: {"lagu": [{"judul": "…", "artis": "…"}]}')}, {"role": "user", "content": q}]
+    r = await master.run(master.Job("musik", "susun-lagu", f"susun daftar lagu: {q[:80]}", messages=msgs, json_out=True, max_tokens=1500))
+    names = clean_suggestions(r["result"]) if r["status"] == "done" else []
+    sem = asyncio.Semaphore(6)
+
+    async def find(n):
+        async with sem:
+            try:
+                found = await asyncio.wait_for(asyncio.to_thread(media_tools.youtube_search, f"{n['artis']} {n['judul']}", 4), 25)
+            except Exception:
+                return None
+            return best_hit(found, n["judul"], n["artis"])
+    hits = [h for h in await asyncio.gather(*(find(n) for n in names)) if h]
+    if len(hits) < PICK_RESULTS:   # the brain was unsure or YouTube had little: an ordinary search fills up
+        try:
+            hits += await asyncio.wait_for(asyncio.to_thread(media_tools.youtube_search, q, 30), 30)
+        except Exception:
+            pass
+    return song_options(hits)[:PICK_RESULTS]
+
+
 async def offer(query: str, who: str = "owner", mood: str = "") -> dict:
-    """Search YouTube for what he asked and put the results before him to tick (a skill: no AI)."""
+    """Up to 20 songs for what he asked, put before him to tick (the brain names them, YouTube has them)."""
     q = query.strip()
     if not q:
         raise MusicError("mau lagu apa?")
 
     async def run():
-        found = await asyncio.wait_for(asyncio.to_thread(media_tools.youtube_search, q, PICK_RESULTS + 6), 30)
-        opts = song_options(found)[:PICK_RESULTS]
+        opts = await _songs_for(q)
         if not opts:
             raise RuntimeError("lagunya tidak ketemu di YouTube")
         await db.pool().execute("UPDATE music_picks SET status = 'expired', updated_at = now() WHERE status = 'open'")   # one list at a time
         pid = await db.pool().fetchval("INSERT INTO music_picks (query, options, created_by) VALUES ($1, $2, $3) RETURNING id", q, opts, who)
-        await hub.broadcast({"type": "notify", "title": "Pilih lagunya", "text": f"{len(opts)} lagu untuk \"{q}\" — centang yang mau diputar.",
+        await hub.broadcast({"type": "notify", "title": "Pilih lagunya", "text": f"{len(opts)} lagu untuk \"{(mood or q)[:60]}\" — centang yang mau diputar.",
                              "kind": "info", "route": f"#/musik?pilih={pid}"})
         await hub.broadcast({"type": "needs"})
         await _log("music", mood, q, f"daftar {len(opts)} lagu")
@@ -124,7 +177,7 @@ async def open_pick() -> dict | None:
 
 
 async def choose(pick_id: int, idxs: list[int], who: str = "owner") -> dict:
-    """The ticked songs: made MP3 one by one in the background (the first played as soon as it is ready), all kept in his playlist."""
+    """The ticked songs join his collection (Koleksi) and are downloaded one by one in the background; he plays them from there."""
     row = await db.pool().fetchrow("SELECT * FROM music_picks WHERE id = $1 AND status = 'open'", pick_id)
     if not row:
         raise MusicError("daftar lagu ini sudah tidak berlaku")
@@ -132,50 +185,12 @@ async def choose(pick_id: int, idxs: list[int], who: str = "owner") -> dict:
     chosen = [opts[i] for i in dict.fromkeys(idxs) if isinstance(i, int) and 0 <= i < len(opts)]
     if not chosen:
         raise MusicError("centang minimal satu lagu")
-    await db.pool().execute("UPDATE music_picks SET status = 'working', chosen = $2, updated_at = now() WHERE id = $1", pick_id, chosen)
+    from . import musiclibrary
+    await db.pool().execute("UPDATE music_picks SET status = 'done', chosen = $2, updated_at = now() WHERE id = $1", pick_id, chosen)
     await hub.broadcast({"type": "needs"})
-    _bg.add(t := asyncio.create_task(_process(pick_id, chosen, who)))
-    t.add_done_callback(_bg.discard)
-    return {"ok": True, "count": len(chosen), "converter": bool(settings.mp3_converter_url)}
-
-
-_bg: set = set()
-
-
-async def _process(pick_id: int, chosen: list[dict], who: str) -> None:
-    from . import musiclib
-
-    async def run():
-        results, played = [], False
-        for i, song in enumerate(chosen):
-            try:
-                if settings.mp3_converter_url:
-                    m = await musiclib.convert_link(song["url"], song["title"], song["channel"])
-                    if not played:
-                        await media_tools._show_song(m, "converter")
-                        played = True
-                    results.append({"title": song["title"], "ok": True, "media": m["url"]})
-                else:
-                    if not played:   # no converter yet: the official YouTube player plays it (its terms: visible, not extracted)
-                        await media_tools._show("video", {"url": song["url"], "title": song["title"], "channel": song["channel"]},
-                                                f"Memutar {song['title']}"[:200], "jarvis")
-                        played = True
-                    results.append({"title": song["title"], "ok": True, "youtube": True})
-                await playlists.add([{"title": song["title"], "artist": song["channel"]}], None, "pilihan", who)
-            except Exception as e:
-                results.append({"title": song["title"], "ok": False, "error": str(e)[:160]})
-            await db.pool().execute("UPDATE music_picks SET results = $2, updated_at = now() WHERE id = $1", pick_id, results)
-            await hub.broadcast({"type": "notify", "title": f"Lagu {i + 1}/{len(chosen)}", "kind": "info", "route": "#/musik",
-                                 "text": (f"✓ {song['title']}" if results[-1]["ok"] else f"✗ {song['title']}: {results[-1]['error']}")[:160]})
-        ok = sum(1 for r in results if r["ok"])
-        await db.pool().execute("UPDATE music_picks SET status = 'done', updated_at = now() WHERE id = $1", pick_id)
-        await hub.broadcast({"type": "notify", "title": "Lagu pilihanmu siap", "kind": "info", "route": "#/musik",
-                             "text": f"{ok} dari {len(chosen)} lagu {'jadi MP3' if settings.mp3_converter_url else 'diputar lewat YouTube'} dan masuk playlist."})
-        return {"ok": ok, "total": len(chosen)}
-    r = await master.run(master.Job("musik", "konversi-pilihan", f"jadikan MP3 {len(chosen)} lagu pilihan", trigger="owner", skill=run))
-    if r["status"] != "done":
-        await db.pool().execute("UPDATE music_picks SET status = 'done', updated_at = now() WHERE id = $1", pick_id)
-        await hub.broadcast({"type": "notify", "title": "Lagu pilihan gagal diproses", "kind": "warn", "route": "#/musik", "text": str(r.get("error"))[:160]})
+    ids = await musiclibrary.add(chosen, who)   # into his collection: downloaded one at a time, then played from there
+    state = await musiclibrary.cookies_state()
+    return {"ok": True, "count": len(chosen), "collected": ids, "converter": state["converter"], "cookies": state["cookies"]}
 
 
 async def dismiss(pick_id: int) -> bool:
@@ -330,6 +345,9 @@ async def api_save(body: SaveIn, device: dict = Depends(owner)):
 
 @router.post(API + "/{action}")
 async def api_control(action: str, device: dict = Depends(owner)):
+    from . import musiclibrary
+    if action in ("next", "prev") and musiclibrary.on_stage_event(action):   # the collection's queue
+        return {"ok": True}
     if action == "next":
         await playlists.advance(1)
     elif action == "prev":

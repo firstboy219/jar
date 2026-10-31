@@ -9,6 +9,7 @@ TERMINAL = {"rejected", "completed", "failed", "cancelled", "expired"}
 # Changes to JARVIS' own code may only be APPROVED at the admin page (Blueprint v4 §3.3, ADR-047): the app is now
 # something JARVIS may change itself, so its buttons cannot be the control point. Rejecting is allowed anywhere.
 ADMIN_ONLY = {"code_change", "code_design", "skill_publish"}
+VERIFIED = {"admin", "phone_lock"}   # the channels that may approve ADMIN_ONLY: the admin page, or the app after the phone's lock
 # allowed status transitions
 TRANSITIONS = {
     "awaiting_approval": {"approved", "rejected", "cancelled", "expired"},
@@ -164,7 +165,8 @@ async def _set_status(conn, approval_id: int, current: str, new: str, **cols) ->
 
 async def decide(approval_id: int, approve: bool, actor: str, channel: str = "device") -> dict:
     """Approve (and execute) or reject. Row lock makes double-clicks / concurrent decisions safe.
-    channel: "admin" only for the admin page itself; everything else (app console, chat, voice) is "device"."""
+    channel: "admin" for the admin page itself; "phone_lock" for the app after the owner's own verification (the phone's PIN /
+    fingerprint signing a one-time code, or the admin password — owner 2026-10-31); everything else (console, chat, voice) is "device"."""
     await expire_old()
     async with db.pool().acquire() as conn:
         async with conn.transaction():
@@ -173,9 +175,9 @@ async def decide(approval_id: int, approve: bool, actor: str, channel: str = "de
                 raise ApprovalError(f"persetujuan #{approval_id} tidak ditemukan")
             if row["status"] != "awaiting_approval":
                 raise ApprovalError(f"persetujuan #{approval_id} sudah berstatus {row['status']}")
-            if approve and row["kind"] in ADMIN_ONLY and channel != "admin":
-                raise AdminOnly(f"persetujuan #{approval_id} ({row['kind']}) hanya bisa disetujui di halaman admin "
-                                "(jar1.cosger.online) — perubahan kode JARVIS tidak bisa disetujui dari aplikasi")
+            if approve and row["kind"] in ADMIN_ONLY and channel not in VERIFIED:
+                raise AdminOnly(f"persetujuan #{approval_id} ({row['kind']}) disetujui di aplikasi dengan PIN/sidik jari HP "
+                                "atau di halaman admin (jar1.cosger.online) — tidak lewat obrolan/suara")
             new = "approved" if approve else "rejected"
             await _set_status(conn, approval_id, row["status"], new, decided_by=actor)
             await conn.execute("UPDATE approvals SET decided_at = now() WHERE id = $1", approval_id)

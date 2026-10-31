@@ -29,6 +29,7 @@ import musik from './musik.js';
 import notfound from './notfound.js';
 import obrolan from './obrolan.js';
 import peluang from './peluang.js';
+import penyimpanan from './penyimpanan.js';
 import perjalanan from './perjalanan.js';
 import quran from './quran.js';
 import rapat from './rapat.js';
@@ -40,4 +41,4 @@ import ukur from './ukur.js';
 import video from './video.js';
 import web from './web.js';
 
-export const VIEWS = { alur, bangun, bengkel, berangkat, berkas, bimbing, bioskop, bisnis, pulang: berangkat, perjalanan, berubah: perjalanan, kebiasaan, rekap, beranda, brief, butuh, catatan, dongeng, draf, fitur, gaji, halaman, hijriah, inbox, ingatan, invest, karier, kontrol, kopi, misi, musik, notfound, obrolan, peluang, quran, rapat, sholat, sumber, tren, ukur, video, web };
+export const VIEWS = { alur, bangun, bengkel, berangkat, berkas, bimbing, bioskop, bisnis, pulang: berangkat, perjalanan, berubah: perjalanan, kebiasaan, rekap, beranda, brief, butuh, catatan, dongeng, draf, fitur, gaji, halaman, hijriah, inbox, ingatan, invest, karier, kontrol, kopi, misi, musik, notfound, obrolan, peluang, penyimpanan, quran, rapat, sholat, sumber, tren, ukur, video, web };

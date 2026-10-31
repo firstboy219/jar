@@ -89,6 +89,12 @@ async def play(name: str | None = None, index: int = 0) -> dict:
     index = max(0, min(index, len(songs) - 1))
     _playing.update(playlist_id=_name(name), index=index, name=_name(name))
     song = songs[index]
+    from . import musiclibrary
+    musiclibrary._queue.update(ids=[], i=0)   # one queue at a time
+    local = await musiclibrary.local_for(song["title"], song["artist"])
+    if local:   # already in his collection: the downloaded file, no search
+        shown = await media_tools._show_song({**local, "playlist": {"name": _name(name), "index": index, "total": len(songs)}}, "koleksi")
+        return {**shown, "playlist": _name(name), "index": index, "total": len(songs), "song": song}
     query = f"{song['artist']} {song['title']}".strip()
     r = await media_tools.play(query, playlist={"name": _name(name), "index": index, "total": len(songs),
                                                 "next": [f"{s['title']} — {s['artist']}" for s in songs[index + 1:index + 5]]})

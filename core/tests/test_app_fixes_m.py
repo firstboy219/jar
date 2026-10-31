@@ -30,55 +30,6 @@ def test_a_question_asking_him_to_act_on_a_page_gets_buttons():
 
 
 @needs_db
-async def test_a_song_request_is_a_list_and_the_ticked_ones_play(pool, monkeypatch):
-    from app import config, devices, hub, main, media_tools, musik, playlists
-    await pool.execute("TRUNCATE music_picks, flow_runs RESTART IDENTITY CASCADE")
-    told = []
-
-    async def tell(ev):
-        told.append(ev)
-        return 1
-    monkeypatch.setattr(hub, "broadcast", tell)
-    found = [{"url": f"https://www.youtube.com/watch?v=abcdefghij{i}", "title": f"Lagu {i}", "channel": "Tulus", "duration_s": 200 + i} for i in range(4)]
-    monkeypatch.setattr(media_tools, "youtube_search", lambda q, n: found)
-    shown, kept = [], []
-
-    async def show(panel, payload, caption="", actor="jarvis"):
-        shown.append((panel, payload["url"]))
-        return {"id": "s1"}
-
-    async def add(songs, name=None, source="", actor=""):
-        kept.extend(songs)
-        return {}
-    monkeypatch.setattr(media_tools, "_show", show)
-    monkeypatch.setattr(playlists, "add", add)
-    monkeypatch.setattr(config.settings, "mp3_converter_url", "")
-    _, token = await devices.create("HP", "test", scope="owner")
-    h = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
-        r = (await c.post("/api/v1/app/music/play", json={"query": "Tulus"}, headers=h)).json()
-        assert r["count"] == 4 and not shown                                                  # nothing plays before he picks
-        assert any(e.get("route") == f"#/musik?pilih={r['pick']}" for e in told)
-        items = (await c.get("/api/v1/app/needs", headers=h)).json()
-        lagu = [i for i in (items.get("items") if isinstance(items, dict) else items) if i["kind"] == "lagu"]
-        assert lagu and len(lagu[0]["options"]) == 4
-        assert (await c.get("/api/v1/app/music", headers=h)).json()["pick"]["id"] == r["pick"]
-        res = (await c.post(f"/api/v1/app/music/picks/{r['pick']}", json={"choose": [2, 0, 2]}, headers=h)).json()
-        assert res == {"ok": True, "count": 2, "converter": False}
-        for _ in range(50):
-            if await pool.fetchval("SELECT status FROM music_picks WHERE id = $1", r["pick"]) == "done":
-                break
-            await asyncio.sleep(0.05)
-        assert shown == [("video", "https://www.youtube.com/watch?v=abcdefghij2")]              # the first ticked plays (YouTube: no converter yet)
-        assert [k["title"] for k in kept] == ["Lagu 2", "Lagu 0"]                                # all ticked kept in his playlist
-        assert (await c.post(f"/api/v1/app/music/picks/{r['pick']}", json={"choose": [1]}, headers=h)).status_code == 409
-        r2 = (await c.post("/api/v1/app/music/play", json={"query": "Raisa"}, headers=h)).json()
-        assert (await c.post(f"/api/v1/app/needs/lagu/{r2['pick']}", json={"approve": False}, headers=h)).status_code == 200
-        assert await pool.fetchval("SELECT status FROM music_picks WHERE id = $1", r2["pick"]) == "dismissed"
-    assert await pool.fetchval("SELECT lane FROM flow_runs WHERE feature = 'musik' AND action = 'pilihan' LIMIT 1") == "skill"
-
-
-@needs_db
 async def test_questions_nobody_waits_for_are_closed(pool, monkeypatch):
     from app import questions
     await pool.execute("TRUNCATE owner_questions, tasks RESTART IDENTITY CASCADE")

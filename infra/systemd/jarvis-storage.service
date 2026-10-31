@@ -1,0 +1,13 @@
+[Unit]
+Description=JARVIS storage manager: measure the disk, run only the whitelisted cleanups the owner approved
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 -I /home/ubuntu/my-project/infra/scripts/storage.py
+StandardOutput=append:/home/ubuntu/my-project/infra/data/ops/storage.log
+StandardError=append:/home/ubuntu/my-project/infra/data/ops/storage.log

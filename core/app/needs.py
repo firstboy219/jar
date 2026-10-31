@@ -19,7 +19,7 @@ def approval_item(a: dict) -> dict:
         sub = ", ".join(map(str, sub))
     return {"kind": "approval", "id": a["id"], "title": a["title"], "sub": f"{APPROVAL_LABEL.get(a['kind'], a['kind'])} · {str(sub)[:120]}".strip(" ·"),
             "icon": "mail" if a["kind"].startswith("mail") else KIND_ICON["approval"], "cta": "Setujui", "risk": a.get("risk"),
-            "admin_only": a["kind"] in approvals.ADMIN_ONLY, "password": False, "detail": detail, "approval_kind": a["kind"],
+            "password": True, "detail": detail, "approval_kind": a["kind"],
             "at": a.get("created_at")}
 
 
@@ -157,13 +157,15 @@ class NeedError(RuntimeError):
     pass
 
 
-async def answer(kind: str, item_id: int, actor: str, approve: bool | None = None, option: int | None = None, text: str = "") -> dict:
-    """The owner's answer to one item. The phone kind is approved in appapi (it checks the admin password first)."""
+async def answer(kind: str, item_id: int, actor: str, approve: bool | None = None, option: int | None = None, text: str = "",
+                 channel: str = "device") -> dict:
+    """The owner's answer to one item. The phone kind is approved in appapi (it checks the admin password first); an approval
+    approved from the app comes with channel "phone_lock" once appapi checked the phone's lock."""
     if kind == "approval":
         if approve is None:
             raise NeedError("setujui atau tolak?")
         try:
-            return {"ok": True, "approval": await approvals.decide(item_id, approve, actor)}
+            return {"ok": True, "approval": await approvals.decide(item_id, approve, actor, channel=channel)}
         except approvals.ApprovalError as e:
             raise NeedError(str(e))
     if kind == "phone":

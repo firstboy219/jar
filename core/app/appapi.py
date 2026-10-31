@@ -99,8 +99,12 @@ async def app_need_answer(kind: str, item_id: int, body: AnswerIn, device: dict 
         detail = await db.pool().fetchval("SELECT detail FROM web_waits WHERE id = $1 AND kind = 'tinjau'", item_id) or {}
         if detail.get("password"):
             await require_password(device, body.password, f"web_wait:{item_id}")
+    channel = "device"
+    if kind == "approval" and body.approve:   # every approval from the app: the phone's PIN / fingerprint (owner 2026-10-31)
+        await require_password(device, body.password, f"approval:{item_id}")
+        channel = "phone_lock"
     try:
-        return jsonable(await needs.answer(kind, item_id, who, approve=body.approve, option=body.option, text=body.text))
+        return jsonable(await needs.answer(kind, item_id, who, approve=body.approve, option=body.option, text=body.text, channel=channel))
     except needs.NeedError as e:
         raise HTTPException(409, str(e))
 
