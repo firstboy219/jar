@@ -1552,7 +1552,7 @@ menentukan berat/ringan/non-AI)".
   what it has seen.
 - **The Qur'an translation in the ElevenLabs voice, kept per verse** (owner 2026-10-31, revising "membacanya jgn menggunakan AI": "ganti
   jadi dibacakan oleh elevenlab tapi setelah dibaca 1 ayat langsung disimpan audio terjemahannya"): each verse's Kemenag translation is
-  voiced once by ElevenLabs through OpenRouter (eleven-multilingual-v2, or his own ElevenLabs choice; long ones in sentence pieces),
+  voiced once by ElevenLabs through OpenRouter in JARVIS's own voice setting (model and character; eleven-v4 when that is not ElevenLabs; long ones in sentence pieces),
   through the master flow, and kept for good in /data/voice/quran (a new voice or text makes a new file); the reader fetches the next
   verse's audio while the qari recites, and falls back to the device's own voice when the cloud voice cannot be had (no key, budget).
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on

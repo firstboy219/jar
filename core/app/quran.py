@@ -244,7 +244,7 @@ async def summarize(nomor: int, ayah: int) -> dict:
 
 # ---------- the translation read aloud by ElevenLabs, kept per verse (owner 2026-10-31) ----------
 
-VOICE_MODEL = "elevenlabs/eleven-multilingual-v2"   # Indonesian read well; the owner's own ElevenLabs choice wins
+VOICE_MODEL = "elevenlabs/eleven-v4"   # only when JARVIS's own voice is not an ElevenLabs one; otherwise JARVIS's model and character
 _voice_locks: dict[str, asyncio.Lock] = {}
 
 
