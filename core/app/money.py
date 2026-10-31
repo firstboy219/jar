@@ -276,7 +276,7 @@ async def summary(today: date | None = None) -> dict:
     total = sum(spent.values())
     days, gone = (end - start).days + 1, (today - start).days + 1
     salary = float(s["salary"] or 0)
-    recent = [dict(r) for r in await db.pool().fetch("SELECT id, at, amount::float AS amount, direction, merchant, category, source, app, labeled_by FROM money_tx WHERE at >= $1 AND at < $2 ORDER BY at DESC LIMIT 40", t0, t1)]
+    recent = [dict(r) for r in await db.pool().fetch("SELECT id, at, amount::float AS amount, direction, merchant, category, source, app, labeled_by, note FROM money_tx WHERE at >= $1 AND at < $2 ORDER BY at DESC LIMIT 40", t0, t1)]
     plan = await db.pool().fetchrow("SELECT id, period_start, data, status, created_at FROM money_plans WHERE status = 'proposed' ORDER BY id DESC LIMIT 1")
     ls, le = period_of(start - timedelta(days=1), int(s["payday"]))
     last = await _spent_by_cat(ls, le)
@@ -442,8 +442,13 @@ class TxIn(BaseModel):
     note: str = Field(default="", max_length=300)
 
 
-class CatIn(BaseModel):
-    category: str = Field(min_length=1, max_length=40)
+class CatIn(BaseModel):   # any of these: what he changes on a transaction (owner 2026-10-31: "Buat transaksi bisa diedit")
+    category: str | None = Field(default=None, min_length=1, max_length=40)
+    amount: float | None = Field(default=None, gt=0, le=1e11)
+    merchant: str | None = Field(default=None, min_length=1, max_length=60)
+    direction: str | None = Field(default=None, pattern="^(in|out)$")
+    at: str | None = Field(default=None, max_length=40)   # "YYYY-MM-DDTHH:MM" in WIB
+    note: str | None = Field(default=None, max_length=300)
 
 
 class ApplyIn(BaseModel):
@@ -524,9 +529,28 @@ async def api_receipts(body: ReceiptIn, device: dict = Depends(owner)):
 
 @router.put(API + "/tx/{tx_id}")
 async def api_cat(tx_id: int, body: CatIn, device: dict = Depends(owner)):
-    if body.category not in list(CATEGORIES) + ["lainnya"]:
+    changes = body.model_dump(exclude_none=True)
+    if not changes:
+        raise HTTPException(422, "tidak ada yang diubah")
+    if "category" in changes and changes["category"] not in list(CATEGORIES) + ["lainnya"]:
         raise HTTPException(422, "kategori tidak dikenal")
-    await db.pool().execute("UPDATE money_tx SET category = $2, labeled_by = 'pemilik' WHERE id = $1", tx_id, body.category)
+    if "at" in changes:
+        try:
+            when = datetime.fromisoformat(changes["at"])
+        except ValueError:
+            raise HTTPException(422, "tanggal/jam tidak valid")
+        changes["at"] = when if when.tzinfo else when.replace(tzinfo=WIB)
+        if changes["at"] > datetime.now(WIB) + timedelta(days=1):
+            raise HTTPException(422, "tanggal di masa depan")
+    if "merchant" in changes:
+        changes["merchant"] = changes["merchant"].strip()
+    cols = list(changes)
+    sets = ", ".join(f"{c} = ${i + 2}" for i, c in enumerate(cols)) + (", labeled_by = 'pemilik'" if "category" in changes else "")
+    done = await db.pool().execute(f"UPDATE money_tx SET {sets} WHERE id = $1", tx_id, *changes.values())
+    if not done.endswith("1"):
+        raise HTTPException(404, "transaksi tidak ada")
+    await audit.record(actor(device), "money.tx_edited", f"money_tx:{tx_id}", fields=cols)
+    await check_pots()   # a changed amount or category may cross a pot's 80%
     return {"ok": True}
 
 

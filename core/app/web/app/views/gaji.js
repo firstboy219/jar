@@ -65,7 +65,7 @@ export default {
         ${cats.length ? html`<div class="card"><span class="k">Per kategori</span>${cats.map(([k, v]) => html`<div class="row" style="font-size:13px"><span style="width:110px;color:var(--tx2)">${k}</span>
           <div class="bar grow" style="height:8px"><i style="width:${Math.round(100 * v / cats[0][1])}%"></i></div><span class="mono" style="min-width:70px;text-align:right">${rupiah(v, true)}</span></div>`)}</div>` : ''}
         <div class="row sb"><span class="sec">Transaksi</span><button class="btn sm" data-act="receipt">${icon('camera', 14)} Struk dari foto/galeri</button></div>
-        ${s.recent.length ? html`<div class="list">${s.recent.map((t) => html`<div class="li"><div class="grow"><div class="row sb"><span style="font-size:14px">${t.merchant}</span>
+        ${s.recent.length ? html`<div class="list">${s.recent.map((t) => html`<div class="li click" data-act="edittx" data-id="${t.id}" role="button" aria-label="Ubah transaksi ${t.merchant}"><div class="grow"><div class="row sb"><span style="font-size:14px">${t.merchant}${t.note ? html` <span class="small">· ${t.note}</span>` : ''}</span>
           <span class="mono" style="color:var(--${t.direction === 'in' ? 'green' : 'tx'})">${t.direction === 'in' ? '+' : '−'}${rupiah(t.amount)}</span></div>
           <div class="row sb small"><span>${new Date(t.at).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${t.app || SRC[t.source]}</span>
           <button class="chip" style="height:26px;font-size:12px" data-act="cat" data-id="${t.id}" data-c="${t.category}">${t.category}${t.labeled_by === 'ai' ? ' · AI' : ''}</button></div></div></div>`)}</div>`
@@ -129,7 +129,29 @@ export default {
       await post(`/api/v1/app/money/plan/${b.dataset.id}/apply`, { pots });
       toast('Alokasi dipakai untuk periode ini'); render();
     },
-    async cat(b) {
+    async edittx(b, e) {   // every field of a transaction: amount, for/from, in/out, date & time, category, note — or delete it
+      if (e?.target?.closest('[data-act="cat"]')) return;   // the category chip has its own quick picker
+      const t = cur.recent.find((x) => String(x.id) === b.dataset.id);
+      if (!t) return;
+      const local = new Date(new Date(t.at).getTime() + 7 * 3600e3).toISOString().slice(0, 16);   // WIB for the field
+      const v = await sheet(String(html`<form style="display:flex;flex-direction:column;gap:10px"><span class="ttl">Ubah transaksi</span>
+        <label class="field">Nominal<input name="amount" type="number" min="1" step="1" value="${Math.round(t.amount)}" required></label>
+        <label class="field">Untuk / dari<input name="merchant" value="${t.merchant}" required maxlength="60"></label>
+        <div class="g2"><label class="field">Jenis<select name="direction"><option value="out" ${t.direction === 'out' ? 'selected' : ''}>Pengeluaran</option><option value="in" ${t.direction === 'in' ? 'selected' : ''}>Pemasukan</option></select></label>
+          <label class="field">Kategori<select name="category">${cur.categories.map((c) => html`<option ${c === t.category ? 'selected' : ''}>${c}</option>`)}</select></label></div>
+        <label class="field">Tanggal & jam (WIB)<input name="at" type="datetime-local" value="${local}" required></label>
+        <label class="field">Catatan<input name="note" value="${t.note || ''}" maxlength="300" placeholder="opsional"></label>
+        <span class="small">Sumber: ${t.app || SRC[t.source] || t.source}</span>
+        <div class="btns"><button type="button" class="btn danger" data-close="__del" style="flex:0 0 90px">Hapus</button><button type="button" class="btn" data-close="">Batal</button><button class="btn primary">Simpan</button></div></form>`));
+      if (!v) return;
+      if (v === '__del') { await del(`/api/v1/app/money/tx/${t.id}`); toast('Transaksi dihapus'); render(); return; }
+      try {
+        await put(`/api/v1/app/money/tx/${t.id}`, { amount: Number(v.amount), merchant: v.merchant, direction: v.direction, category: v.category, at: v.at, note: v.note || '' });
+        toast('Transaksi diperbarui'); render();
+      } catch (err) { toast(err.message || 'Gagal menyimpan', true); }
+    },
+    async cat(b, e) {
+      e?.stopPropagation?.();
       const v = await sheet(String(html`<span class="ttl">Kategori</span><div class="chips" style="flex-wrap:wrap">${cur.categories.map((c) => html`<button class="chip ${c === b.dataset.c ? 'on' : ''}" data-close="${c}">${c}</button>`)}</div>
         <button class="btn danger sm" data-close="__del">Hapus transaksi</button>`));
       if (!v) return;

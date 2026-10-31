@@ -122,3 +122,24 @@ async def test_the_allocation_can_be_edited_by_hand(pool, monkeypatch):
         dup = await c.put("/api/v1/app/money/pots", json={"pots": [{"name": "A", "amount": 1}, {"name": "a", "amount": 2}]}, headers=h)
         assert dup.status_code == 409 and "kembar" in dup.json()["detail"]
     assert [p["name"] for p in (await appsettings.get("money"))["pots"]] == ["Makan & kopi", "Investasi"]
+
+
+@needs_db
+async def test_a_transaction_can_be_edited(pool, monkeypatch):
+    from app import devices, main
+    await pool.execute("TRUNCATE money_tx RESTART IDENTITY CASCADE")
+    tid = await pool.fetchval("INSERT INTO money_tx (amount, direction, merchant, category, source) VALUES (25000, 'out', 'GoPay', 'lainnya', 'notif') RETURNING id")
+    _, token = await devices.create("HP", "test", scope="owner")
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.put(f"/api/v1/app/money/tx/{tid}", json={"amount": 32000, "merchant": " Kopi Kenangan ", "category": "kopi", "at": "2026-10-30T15:20",
+                                                           "note": "rapat", "direction": "out"}, headers=h)
+        assert r.status_code == 200
+        row = await pool.fetchrow("SELECT amount::float AS amount, merchant, category, labeled_by, note, at FROM money_tx WHERE id = $1", tid)
+        assert (row["amount"], row["merchant"], row["category"], row["labeled_by"], row["note"]) == (32000, "Kopi Kenangan", "kopi", "pemilik", "rapat")
+        assert row["at"].hour == 8 and row["at"].minute == 20                                   # 15:20 WIB
+        assert (await c.put(f"/api/v1/app/money/tx/{tid}", json={"category": "kopi"}, headers=h)).status_code == 200   # the old quick change still works
+        assert (await c.put(f"/api/v1/app/money/tx/{tid}", json={"category": "ngawur"}, headers=h)).status_code == 422
+        assert (await c.put(f"/api/v1/app/money/tx/{tid}", json={"at": "2099-01-01T00:00"}, headers=h)).status_code == 422
+        assert (await c.put(f"/api/v1/app/money/tx/{tid}", json={}, headers=h)).status_code == 422
+        assert (await c.put("/api/v1/app/money/tx/999999", json={"note": "x"}, headers=h)).status_code == 404
