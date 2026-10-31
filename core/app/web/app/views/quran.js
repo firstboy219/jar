@@ -1,11 +1,42 @@
 // Al-Qur'an (mockup 47): where the owner read up to, his khatam progress, the surahs, and a reader that plays the murottal verse by
 // verse (highlighted), repeats for memorising, and marks the last verse read. Text and translation: Kemenag (equran.id), never AI.
-// The translation can be read aloud — after each verse or on its own — always by the phone's (or the browser's) own voice, never an AI
-// voice (owner 2026-10-30). "Konteks": where and when the surah came down, what the Prophet ﷺ was going through, and the Kemenag tafsir.
-import { $, get, header, host, html, icon, loading, post, put, render, sheet, toast } from '../core.js';
+// The translation can be read aloud — after each verse or on its own — in the ElevenLabs voice, each verse made once and kept on the server
+// (owner 2026-10-31), the device's own voice standing in when that cannot be had. "Konteks": where and when the surah came down, what the
+// Prophet ﷺ was going through, and the Kemenag tafsir.
+import { $, api, get, header, host, html, icon, loading, post, put, render, sheet, toast } from '../core.js';
 
 const MODES = { arab: 'Murottal', both: 'Murottal + arti', arti: 'Arti saja' };
 let player = null, playing = -1, repeat = 1, surahNo = null, surahName = '', ayat = [], showArti = true, mode = 'arab', speakGen = 0;
+let tplayer = null, warned = false;
+const voices = new Map();   // "surah:ayah" → a promise of the translation audio's object URL (fetched ahead while the qari recites)
+
+/** The verse's translation in the ElevenLabs voice: kept on the server after its first reading, fetched with the owner's token. */
+function translationUrl(a) {
+  const key = `${surahNo}:${a.n}`;
+  if (!voices.has(key)) {
+    const p = api('GET', `/api/v1/app/quran/voice/${surahNo}/${a.n}`, undefined, { blob: true }).then((b) => URL.createObjectURL(b));
+    p.catch(() => voices.delete(key));
+    voices.set(key, p);
+  }
+  return voices.get(key);
+}
+
+/** Reads the translation (ElevenLabs; the device's own voice when it cannot be had); resolves when said. */
+async function sayTranslation(a, prefix = '') {
+  const gen = speakGen;
+  let url = null;
+  try { url = await translationUrl(a); } catch (e) {
+    if (!warned) { warned = true; toast(`Suara ElevenLabs belum bisa (${e.message || 'coba lagi'}) — dibacakan suara bawaan.`, true); }
+  }
+  if (gen !== speakGen) return false;
+  if (!url) return sayLocal(`${prefix}${spokenArti(a)}`);
+  return new Promise((resolve) => {
+    tplayer = new Audio(url);
+    tplayer.onended = () => resolve(gen === speakGen);
+    tplayer.onerror = () => resolve(false);
+    tplayer.play().catch(() => resolve(false));
+  });
+}
 
 /** The translation in the device's own voice (Android's text-to-speech in the app, the browser's speech elsewhere): resolves when said. */
 function sayLocal(text) {
@@ -30,6 +61,7 @@ function sayLocal(text) {
 
 function hush() {
   speakGen += 1;
+  tplayer?.pause(); tplayer = null;
   if (host.has('stopSpeaking')) host.call('stopSpeaking');
   try { window.speechSynthesis?.cancel(); } catch { /* none */ }
 }
@@ -61,12 +93,13 @@ async function next() {
   document.querySelectorAll('.ayah.on').forEach((e) => e.classList.remove('on'));
   const el = document.getElementById(`a${a.n}`);
   el?.classList.add('on'); el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  if (mode !== 'arab') { translationUrl(a).catch(() => {}); if (ayat[playing + 1]) translationUrl(ayat[playing + 1]).catch(() => {}); }   // ready by its turn
   if (mode !== 'arti') {
     if (!a.audio || !(await recite(a.audio))) { if (gen === speakGen) stop(); return; }
     if (gen !== speakGen) return;
   }
   if (mode !== 'arab') {
-    await sayLocal(mode === 'arti' ? `Ayat ${a.n}. ${spokenArti(a)}` : spokenArti(a));
+    await sayTranslation(a, mode === 'arti' ? `Ayat ${a.n}. ` : '');
     if (gen !== speakGen) return;
   }
   playing += 1;
@@ -110,7 +143,7 @@ async function reader(root, n, startAyah, autoplay) {
         <button class="chip" data-act="stop">${icon('stop', 14)} Berhenti</button>
         <button class="chip ${showArti ? 'cyan' : ''}" data-act="arti">${showArti ? '✓ terjemahan' : '+ terjemahan'}</button></div>
       <div class="chips" role="radiogroup" aria-label="Yang dibacakan">${Object.entries(MODES).map(([k, v]) => html`<button class="chip ${mode === k ? 'cyan' : ''}" data-act="mode" data-m="${k}" role="radio" aria-checked="${mode === k}">${icon(k === 'arab' ? 'quran' : 'speaker', 13)} ${v}</button>`)}</div>
-      <span class="small" style="margin-top:-6px">Terjemahan Kemenag dibacakan suara bawaan ${host.has('speakLocal') ? 'HP' : 'perangkat'} — bukan suara AI.</span>
+      <span class="small" style="margin-top:-6px">Terjemahan Kemenag dibacakan suara ElevenLabs — tiap ayat dibuat sekali lalu disimpan; ayat yang sama berikutnya memakai rekaman itu.</span>
       ${n !== 1 && n !== 9 ? html`<p class="ar" style="text-align:center">بِسْمِ اللّٰهِ الرَّحْمٰنِ الرَّحِيْمِ</p>` : ''}
       ${s.ayat.map((a, i) => html`<div class="card ayah" id="a${a.n}" style="gap:10px">
         <div class="row sb wrap" style="gap:6px"><span class="tag green">${n}:${a.n} · juz ${a.juz}</span>
@@ -147,7 +180,7 @@ export default {
         : html`<div class="card green"><span class="k green">Mulai</span><p class="sub">Pilih surah. Tandai ayat terakhir yang kamu baca — JARVIS mengingatnya.</p></div>`}
       <div class="card"><div class="row sb"><span class="k muted">Khatam ke-${(p.khatam || 0) + 1}</span><span class="mono">${p.pct ?? 0}%</span></div>
         <div class="bar"><i class="green" style="width:${p.pct ?? 0}%"></i></div>
-        <span class="small">${p.per_day_pages ? `Target ${p.target_date}: ±${p.per_day_pages} halaman per hari. ` : ''}${p.streak ? `${p.streak} hari berturut-turut.` : ''}</span>
+        <span class="small">${p.per_day_pages ? `Target ${p.target_date}: ±${p.per_day_pages} halaman per hari. ` : ''}${p.streak ? `${p.streak} hari berturut-turut.` : ''}${p.voice_kept ? ` ${p.voice_kept} ayat terjemahan bersuara tersimpan.` : ''}</span>
         <div class="row" style="gap:8px"><label class="field grow">Target khatam<input type="date" id="target" value="${p.target_date || ''}"></label>
           <label class="field grow">Qari<select id="qari">${Object.entries(qari).map(([k, v]) => html`<option value="${k}" ${k === p.qari ? 'selected' : ''}>${v}</option>`)}</select></label></div></div>
       <div class="sec"><span>Rutin</span></div>
@@ -183,7 +216,7 @@ export default {
     async sayArti(b) {
       stop();
       const a = ayat[Number(b.dataset.i)];
-      if (a) { document.getElementById(`a${a.n}`)?.classList.add('on'); await sayLocal(spokenArti(a)); document.getElementById(`a${a.n}`)?.classList.remove('on'); }
+      if (a) { document.getElementById(`a${a.n}`)?.classList.add('on'); await sayTranslation(a); document.getElementById(`a${a.n}`)?.classList.remove('on'); }
     },
     async ctx(b) {
       const n = Number(b.dataset.a);

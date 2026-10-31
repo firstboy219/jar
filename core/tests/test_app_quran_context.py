@@ -84,3 +84,56 @@ async def test_the_context_of_a_verse_from_the_kemenag_tafsir(pool, monkeypatch)
         assert al_falaq.status_code in (200, 503)                                                   # (no tafsir route faked for it)
     s = await pool.fetchval("SELECT value FROM settings_kv WHERE key = 'app:quran'")
     assert s is None or "read_mode" not in s or s["read_mode"] in ("arab", "both", "arti")
+
+
+def test_a_long_translation_is_read_in_pieces_one_voice_call_takes():
+    from app import quran
+    short = "Segala puji bagi Allah, Tuhan seluruh alam."
+    assert quran.voice_chunks(short) == [short]
+    long = " ".join(f"Kalimat nomor {i} yang cukup panjang untuk diuji." for i in range(60))
+    parts = quran.voice_chunks(long, 300)
+    assert all(len(p) <= 300 for p in parts) and " ".join(parts) == long and len(parts) > 5
+    run_on = "kata " * 400                                   # no sentence end at all: cut at spaces
+    assert all(len(p) <= 300 for p in quran.voice_chunks(run_on, 300))
+    a, b = quran.voice_path(1, 2, "elevenlabs/x", "george", "teks"), quran.voice_path(1, 2, "elevenlabs/x", "sarah", "teks")
+    assert a.name.startswith("001-002-") and a != b                     # another voice is another recording
+
+
+@needs_db
+async def test_a_verse_translation_is_voiced_once_then_kept(pool, monkeypatch, tmp_path):
+    from app import appauth, devices, main, quran, voice
+    await pool.execute("TRUNCATE quran_surah, flow_runs RESTART IDENTITY CASCADE")
+    monkeypatch.setattr(voice, "VOICE_DIR", tmp_path)
+
+    async def surah(nomor, qari="05"):
+        return {"latin": "Al-Fatihah", "ayat": [{"n": 1, "arti": "Dengan nama Allah Yang Maha Pengasih, Maha Penyayang."}]}
+    monkeypatch.setattr(quran, "surah", surah)
+
+    async def settings_():
+        return {"engine": "android", "model": "openai/tts", "voice": "george", "speed": 1.0}
+    monkeypatch.setattr(voice, "tts_settings", settings_)
+    calls = []
+
+    async def synth(text, model=None, voice_name=None, *, preview=False):
+        calls.append((text, model, voice_name, preview))
+        return b"ID3fake-mp3"
+    monkeypatch.setattr(voice, "synthesize", synth)
+    _, token = await devices.create("HP", "test", scope="owner")
+    h = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://t") as c:
+        r = await c.get("/api/v1/app/quran/voice/1/1", headers=h)
+        assert r.status_code == 200 and r.content == b"ID3fake-mp3" and r.headers["content-type"] == "audio/mpeg"
+        assert calls == [("Dengan nama Allah Yang Maha Pengasih, Maha Penyayang.", quran.VOICE_MODEL, "george", True)]   # ElevenLabs, not the chat voice
+        assert (await c.get("/api/v1/app/quran/voice/1/1", headers=h)).content == b"ID3fake-mp3" and len(calls) == 1   # the kept recording
+        assert (await c.get("/api/v1/app/quran/voice/1/9", headers=h)).status_code == 404
+
+        async def broke(text, model=None, voice_name=None, *, preview=False):
+            raise voice.VoiceError("anggaran AI bulan ini habis — pakai suara HP", 402)
+        monkeypatch.setattr(voice, "synthesize", broke)
+
+        async def surah2(nomor, qari="05"):
+            return {"latin": "Al-Baqarah", "ayat": [{"n": 2, "arti": "Kitab (Al-Qur'an) ini tidak ada keraguan padanya."}]}
+        monkeypatch.setattr(quran, "surah", surah2)
+        assert (await c.get("/api/v1/app/quran/voice/2/2", headers=h)).status_code == 503       # the app reads it with the device's voice
+    assert quran.voice_kept() == 1
+    assert await pool.fetchval("SELECT lane FROM flow_runs WHERE feature = 'quran' AND action = 'suara-terjemahan' ORDER BY id LIMIT 1") == "skill"

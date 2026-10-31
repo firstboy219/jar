@@ -7,6 +7,8 @@ and what he was going through then (fixed text, the standard sirah), the Kemenag
 verse word for word — and a short summary of its occasion (asbabun nuzul) drawn by the light brain from that tafsir ONLY: when the tafsir
 names no particular occasion the summary says so, it never fills the gap. The translation read aloud is the phone's own voice (app)."""
 
+import asyncio
+import hashlib
 import html as htmllib
 import logging
 import re
@@ -240,6 +242,80 @@ async def summarize(nomor: int, ayah: int) -> dict:
     return data
 
 
+# ---------- the translation read aloud by ElevenLabs, kept per verse (owner 2026-10-31) ----------
+
+VOICE_MODEL = "elevenlabs/eleven-multilingual-v2"   # Indonesian read well; the owner's own ElevenLabs choice wins
+_voice_locks: dict[str, asyncio.Lock] = {}
+
+
+def voice_chunks(text: str, limit: int = 1000) -> list[str]:
+    """A long translation split at sentence ends (then commas, then words) into pieces one voice call takes. Pure."""
+    text = " ".join(str(text or "").split())
+    out, cur = [], ""
+    for part in re.split(r"(?<=[.!?;:])\s+", text):
+        while len(part) > limit:   # one very long sentence: at a comma, else at a space
+            cut = part.rfind(", ", 0, limit)
+            cut = cut + 1 if cut > limit // 2 else (part.rfind(" ", 0, limit) if part.rfind(" ", 0, limit) > 0 else limit)
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(part[:cut].strip())
+            part = part[cut:].strip()
+        if cur and len(cur) + 1 + len(part) > limit:
+            out.append(cur)
+            cur = part
+        else:
+            cur = f"{cur} {part}".strip()
+    if cur:
+        out.append(cur)
+    return [c for c in out if c]
+
+
+def voice_path(nomor: int, ayah: int, model: str, voice_name: str, text: str):
+    """Where a verse's translation audio is kept for good (a new voice or text → a new file). Pure."""
+    from . import voice
+    key = hashlib.sha1(f"{model}|{voice_name}|{text}".encode()).hexdigest()[:12]
+    return voice.VOICE_DIR / "quran" / f"{nomor:03d}-{ayah:03d}-{key}.mp3"
+
+
+async def translation_voice(nomor: int, ayah: int):
+    """The Kemenag translation of a verse read by ElevenLabs: made once (through the master flow), then the kept recording."""
+    from . import voice
+    s = await surah(nomor)
+    a = next((x for x in s["ayat"] if x["n"] == ayah), None)
+    if not a:
+        raise ValueError("ayat tidak ada")
+    text = plain(a["arti"])
+    cfg = await voice.tts_settings()
+    model = cfg["model"] if str(cfg.get("model", "")).startswith("elevenlabs/") else VOICE_MODEL
+    path = voice_path(nomor, ayah, model, cfg["voice"], text)
+    if path.exists():
+        return path
+    lock = _voice_locks.setdefault(path.name, asyncio.Lock())
+    async with lock:
+        if path.exists():
+            return path
+
+        async def make():
+            audio = b"".join([await voice.synthesize(chunk, model, cfg["voice"], preview=True) for chunk in voice_chunks(text)])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".part")
+            tmp.write_bytes(audio)
+            tmp.replace(path)
+            return {"bytes": len(audio), "chars": len(text)}
+        r = await master.run(master.Job("quran", "suara-terjemahan", f"suara terjemahan {s['latin']}:{ayah}", skill=make))
+        if r["status"] != "done":
+            raise voice.VoiceError(r.get("error") or "suara terjemahan gagal dibuat", 503)
+    _voice_locks.pop(path.name, None)
+    return path
+
+
+def voice_kept() -> int:
+    from . import voice
+    d = voice.VOICE_DIR / "quran"
+    return len(list(d.glob("*.mp3"))) if d.exists() else 0
+
+
 async def progress() -> dict:
     s = await appsettings.get("quran")
     lst = await surah_list()
@@ -249,7 +325,8 @@ async def progress() -> dict:
         "SELECT DISTINCT (at AT TIME ZONE 'Asia/Jakarta')::date AS d FROM quran_reads WHERE at > now() - interval '120 days'")]
     today = datetime.now(WIB).date()
     khatam = await db.pool().fetchval("SELECT value FROM settings_kv WHERE key = 'quran:khatam'") or {"count": 0}
-    out = {"khatam": khatam.get("count", 0), "streak": streak(days, today), "qari": s["qari"], "qari_name": QARI.get(s["qari"]), "routines": s["routines"]}
+    out = {"khatam": khatam.get("count", 0), "streak": streak(days, today), "qari": s["qari"], "qari_name": QARI.get(s["qari"]), "routines": s["routines"],
+           "voice_kept": voice_kept()}
     if last:
         pos = position(last["surah"], last["ayah"], counts)
         meta = lst[last["surah"] - 1]
@@ -359,6 +436,23 @@ async def api_context_summary(nomor: int, ayah: int, device: dict = Depends(owne
         raise HTTPException(409, str(e))
     except httpx.HTTPError:
         raise HTTPException(503, "tafsir belum bisa diambil — coba lagi")
+
+
+@router.get(API + "/voice/{nomor}/{ayah}")
+async def api_translation_voice(nomor: int, ayah: int, device: dict = Depends(owner)):
+    """The verse's translation in the ElevenLabs voice (audio/mpeg), kept after its first reading. An error: the app reads it with the
+    device's own voice."""
+    from fastapi.responses import FileResponse
+    from . import voice
+    try:
+        path = await translation_voice(nomor, ayah)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except voice.VoiceError as e:
+        raise HTTPException(e.status, str(e))
+    except httpx.HTTPError:
+        raise HTTPException(503, "teks ayat belum bisa diambil")
+    return FileResponse(path, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=31536000"})
 
 
 @router.post(API + "/read")

@@ -1550,6 +1550,11 @@ menentukan berat/ringan/non-AI)".
   "Sudah, lanjutkan" instead of a text box, and questions nobody waits for any more (mission over; no mission and two hours old) close.
   The phone agent that goes back and forth between screens it has just seen hands over to the heavy brain and is told to finish with
   what it has seen.
+- **The Qur'an translation in the ElevenLabs voice, kept per verse** (owner 2026-10-31, revising "membacanya jgn menggunakan AI": "ganti
+  jadi dibacakan oleh elevenlab tapi setelah dibaca 1 ayat langsung disimpan audio terjemahannya"): each verse's Kemenag translation is
+  voiced once by ElevenLabs through OpenRouter (eleven-multilingual-v2, or his own ElevenLabs choice; long ones in sentence pieces),
+  through the master flow, and kept for good in /data/voice/quran (a new voice or text makes a new file); the reader fetches the next
+  verse's audio while the qari recites, and falls back to the device's own voice when the cloud voice cannot be had (no key, budget).
 - **Not built**: casting uses the YouTube app or the system's cast screen, not a Cast SDK receiver; the guide's frame needs JARVIS's accessibility service switched on
   (without it the notice still says where to look). Crowding/platform appear only when KCI's page says so; there is still no live train
   feed.
