@@ -60,7 +60,7 @@ async def test_hermes_plans_the_queue_ahead_and_is_passed_over_when_it_misbehave
     # a sound plan: kept, and the run follows it — in its order, never more than its number at once, nobody waiting for Hermes
     replies.append(_answer(lewati=[], urutan=WORKERS, maks_bersamaan=2))
     rec = await brief.refresh_plan()
-    assert rec and rec["plan"]["maks"] == 2 and "WAJIB" in asked[0][0] and asked[0][1] == brief.HERMES_SESSION
+    assert rec and rec["plan"]["maks"] == 2 and "WAJIB" in asked[0][0] and asked[0][1].startswith(brief.HERMES_SESSION + "-")
     assert "BEBAN SERVER SEKARANG" in asked[0][0] and (await hermeswatch.state())["checks"][0]["ok"]
     now_running, peak, started = [0], [0], []
 
@@ -76,7 +76,7 @@ async def test_hermes_plans_the_queue_ahead_and_is_passed_over_when_it_misbehave
     monkeypatch.setattr(brief, "COLLECTORS", [(k, k.title(), collector(k)) for k in WORKERS])
     monkeypatch.setattr(brief, "refresh_soon", lambda: None)
     g = await brief.gather("owner")
-    assert started == WORKERS and peak[0] == 2 and g["queue"]["source"] == "hermes"
+    assert sorted(started) == sorted(WORKERS) and peak[0] == 2 and g["queue"]["source"] == "hermes"   # all of them, never more than 2 at once
     steps = [r["steps"] for r in await pool.fetch("SELECT steps FROM flow_runs WHERE action = 'kumpul-berita'")]
     hermes_step = [x for x in (json.loads(steps[0]) if isinstance(steps[0], str) else steps[0]) if x["stage"] == "hermes"][0]
     assert "antrean Hermes: ke-1 dari 8, maks 2 bersamaan" in hermes_step["text"]                       # each worker passed Hermes

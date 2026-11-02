@@ -220,7 +220,7 @@ _state: dict = {"running": False, "steps": [], "started": None, "error": None, "
 REQUIRED = {"berita", "pasar"}   # the analysis stands on these: Hermes may never skip them
 PLAN_KEY_Q = "brief:antrean"
 PLAN_FRESH_S = 24 * 3600
-HERMES_SESSION = "jarvis-cekberita-antrean"
+HERMES_SESSION = "jarvis-cekberita-antrean"   # + the request's token: a session of its own each time (one shared session grew until Hermes refused it)
 _planning: dict = {"task": None}
 
 
@@ -388,7 +388,7 @@ async def refresh_plan() -> dict | None:
         t0, text = time.monotonic(), ""
 
         async def ask() -> str:
-            async for ev in hermes.stream(queue_prompt(facts, token), HERMES_SESSION, model="jarvis-ringan"):
+            async for ev in hermes.stream(queue_prompt(facts, token), f"{HERMES_SESSION}-{token}", model="jarvis-ringan"):
                 if ev["type"] == "done":
                     return ev["reply"].text
             return ""

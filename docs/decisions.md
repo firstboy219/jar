@@ -1640,8 +1640,8 @@ menentukan berat/ringan/non-AI)".
   timeouts → empty sources); it now loads once under a lock, warmed at startup.
 - **Every Cek berita worker passes Hermes; a watchdog watches Hermes** (owner 2026-10-31: "Pastikan setiap worker melewati Hermes dulu tanpa
   mengubah cara kerja cek berita … Hermes tau context dan bisa bikin alur antrian … kecuali Hermesnya sedang anomali … skip flow ke Hermesnya,
-  jadi harus ada entity yg tugasnya mengawasi hermes … munculkan loadernya … log aktifitas workernya"): the real Hermes agent (its own
-  session, so it remembers its earlier plans) plans the collectors' queue AHEAD of time — after every run, when the page is opened and the
+  jadi harus ada entity yg tugasnya mengawasi hermes … munculkan loadernya … log aktifitas workernya"): the real Hermes agent (a fresh session per
+  request: one shared session grew until Hermes refused it, 27 anomalies in a row, 2026-11-02; what it needs comes in the question) plans the collectors' queue AHEAD of time — after every run, when the page is opened and the
   plan is over 6 hours old, and hourly when over 12 — from each worker's 14-day record (runs, failures, time), the last brief's results
   and the server's load: the start order, how many at once (2–8), and which optional sources to skip with a reason. A run uses the
   latest plan without waiting for Hermes (asking it live took 10–40 s); each worker's master-flow Hermes step names its place in the
